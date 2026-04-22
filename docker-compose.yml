@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: contrack
+      POSTGRES_USER: contrack
+      POSTGRES_PASSWORD: contrack
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contrack -d contrack"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5439:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      CONTRACK_DATABASE_URL: postgresql+psycopg://contrack:contrack@postgres:5432/contrack
+      CONTRACK_REDIS_URL: redis://redis:6379/0
+      CONTRACK_CORS_ORIGINS: http://localhost:8888,http://127.0.0.1:8888
+      CONTRACK_MASTER_KEY: xzlnGkJaoJwBmT4HwvreZLVYQHtRkoVtjaJe31gnN0ci1f0lLo_x2yae0mRqAtDP
+      CONTRACK_HTTP_VERIFY_SSL: "false"
+    ports:
+      - "8009:8009"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "8888:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
