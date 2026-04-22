@@ -1,6 +1,7 @@
 import re
 from urllib.parse import urlparse
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models import SystemSetting
@@ -16,9 +17,29 @@ SYSTEM_SETTING_KEYS = [
 
 
 def ensure_system_settings(db: Session) -> None:
+    db.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS system_settings (
+                key VARCHAR(100) PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_by VARCHAR(100)
+            )
+            """
+        )
+    )
     for key in SYSTEM_SETTING_KEYS:
-        if not db.get(SystemSetting, key):
-            db.add(SystemSetting(key=key, value=None))
+        db.execute(
+            text(
+                """
+                INSERT INTO system_settings (key, value)
+                VALUES (:key, NULL)
+                ON CONFLICT (key) DO NOTHING
+                """
+            ),
+            {"key": key},
+        )
     db.commit()
 
 

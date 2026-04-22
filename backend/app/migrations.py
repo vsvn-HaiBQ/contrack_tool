@@ -53,12 +53,16 @@ def _mark_applied(engine: Engine, version: str) -> None:
 def _split_sql_script(script: str) -> list[str]:
     statements = []
     current: list[str] = []
+    inside_dollar_block = False
     for line in script.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
         current.append(line)
-        if stripped.endswith(";"):
+        dollar_count = line.count("$$")
+        if dollar_count % 2 == 1:
+            inside_dollar_block = not inside_dollar_block
+        if stripped.endswith(";") and not inside_dollar_block:
             statements.append("\n".join(current).strip())
             current = []
     if current:
