@@ -50,6 +50,10 @@ def _mark_applied(engine: Engine, version: str) -> None:
         connection.execute(text("INSERT INTO schema_migrations(version) VALUES (:version) ON CONFLICT (version) DO NOTHING"), {"version": version})
 
 
+def _existing_tables(engine: Engine) -> set[str]:
+    return set(inspect(engine).get_table_names())
+
+
 def _split_sql_script(script: str) -> list[str]:
     statements = []
     current: list[str] = []
@@ -70,22 +74,31 @@ def _split_sql_script(script: str) -> list[str]:
     return statements
 
 
+def _apply_sql_file(engine: Engine, path: Path) -> None:
+    script = path.read_text(encoding="utf-8")
+    for statement in _split_sql_script(script):
+        with engine.begin() as connection:
+            connection.execute(text(statement))
+    logger.info("Applied migration %s", path.stem)
+
+
 def apply_sql_migrations(engine: Engine) -> None:
     ensure_schema_migrations_table(engine)
+    existing_tables = _existing_tables(engine)
+    init_schema_path = _migration_dir() / "001_init_schema.sql"
+    if not INIT_SCHEMA_TABLES.issubset(existing_tables):
+        logger.info("Core schema missing tables %s, applying 001_init_schema", sorted(INIT_SCHEMA_TABLES - existing_tables))
+        _apply_sql_file(engine, init_schema_path)
+        _mark_applied(engine, "001_init_schema")
+
     applied = _applied_versions(engine)
-    inspector = inspect(engine)
-    existing_tables = set(inspector.get_table_names())
     for path in sorted(_migration_dir().glob("*.sql")):
         version = path.stem
         if version in applied:
             continue
-        if version == "001_init_schema" and INIT_SCHEMA_TABLES.issubset(existing_tables):
+        if version == "001_init_schema" and INIT_SCHEMA_TABLES.issubset(_existing_tables(engine)):
             logger.info("Skipping %s because core schema already exists", version)
             _mark_applied(engine, version)
             continue
-        script = path.read_text(encoding="utf-8")
-        for statement in _split_sql_script(script):
-            with engine.begin() as connection:
-                connection.execute(text(statement))
-        logger.info("Applied migration %s", version)
+        _apply_sql_file(engine, path)
         _mark_applied(engine, version)
