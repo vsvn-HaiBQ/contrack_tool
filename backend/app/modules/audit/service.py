@@ -1,4 +1,3 @@
-import json
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -25,8 +24,8 @@ def write_audit_log(
             action=action,
             target_type=target_type,
             target_id=target_id,
-            payload_before=json.dumps(payload_before, ensure_ascii=True) if payload_before is not None else None,
-            payload_after=json.dumps(payload_after, ensure_ascii=True) if payload_after is not None else None,
+            payload_before=payload_before,
+            payload_after=payload_after,
             ip=ip,
             user_agent=user_agent,
         )
