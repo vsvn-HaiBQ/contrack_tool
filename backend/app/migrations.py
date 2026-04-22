@@ -22,7 +22,15 @@ def _repo_root() -> Path:
 
 
 def _migration_dir() -> Path:
-    return _repo_root() / "sql"
+    candidates = [
+        _repo_root() / "sql",
+        Path(__file__).resolve().parents[1] / "sql",
+        Path.cwd() / "sql",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    raise FileNotFoundError(f"Migration directory not found. Checked: {', '.join(str(path) for path in candidates)}")
 
 
 def ensure_schema_migrations_table(engine: Engine) -> None:

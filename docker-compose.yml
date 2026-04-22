@@ -27,7 +27,8 @@ services:
 
   backend:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       CONTRACK_DATABASE_URL: postgresql+psycopg://contrack:contrack@postgres:5432/contrack
       CONTRACK_REDIS_URL: redis://redis:6379/0
