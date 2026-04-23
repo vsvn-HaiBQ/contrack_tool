@@ -14,6 +14,10 @@ const emit = defineEmits<{
   settings: [];
   logout: [];
 }>();
+
+function isActiveTab(currentTab: string, tabKey: string) {
+  return currentTab === tabKey || currentTab.startsWith(`${tabKey}/`);
+}
 </script>
 
 <template>
@@ -48,7 +52,7 @@ const emit = defineEmits<{
           v-for="tab in tabs"
           :key="tab.key"
           class="rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-200"
-          :class="currentTab === tab.key ? 'bg-[#3E6AE1] text-white' : 'bg-neutral-100 text-[#393C41] hover:bg-neutral-200'"
+          :class="isActiveTab(currentTab, tab.key) ? 'bg-[#3E6AE1] text-white' : 'bg-neutral-100 text-[#393C41] hover:bg-neutral-200'"
           @click="emit('select', tab.key)"
         >
           {{ tab.label }}

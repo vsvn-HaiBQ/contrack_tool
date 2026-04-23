@@ -1,26 +1,43 @@
-export async function copyText(value: string): Promise<void> {
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText && window.isSecureContext) {
-    await navigator.clipboard.writeText(value);
-    return;
-  }
+type CopyPayload = {
+  text: string;
+  html?: string;
+};
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function copyWithExecCommand(payload: CopyPayload): void {
   if (typeof document === "undefined") {
     throw new Error("Clipboard API is unavailable");
   }
 
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.top = "0";
-  textarea.style.left = "0";
-  textarea.style.opacity = "0";
-  textarea.style.pointerEvents = "none";
+  const div = document.createElement("div");
+  div.contentEditable = "true";
+  div.style.position = "fixed";
+  div.style.top = "0";
+  div.style.left = "0";
+  div.style.opacity = "0";
+  div.style.pointerEvents = "none";
+  div.innerHTML = payload.html ?? escapeHtml(payload.text).replaceAll("\n", "<br>");
+  document.body.appendChild(div);
 
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  textarea.setSelectionRange(0, textarea.value.length);
+  const range = document.createRange();
+  range.selectNodeContents(div);
+
+  const selection = window.getSelection();
+  if (!selection) {
+    document.body.removeChild(div);
+    throw new Error("Selection API is unavailable");
+  }
+
+  selection.removeAllRanges();
+  selection.addRange(range);
 
   try {
     const copied = document.execCommand("copy");
@@ -28,6 +45,17 @@ export async function copyText(value: string): Promise<void> {
       throw new Error("Copy command failed");
     }
   } finally {
-    document.body.removeChild(textarea);
+    selection.removeAllRanges();
+    document.body.removeChild(div);
   }
 }
+
+export async function copyClipboard(payload: CopyPayload): Promise<void> {
+  copyWithExecCommand(payload);
+}
+
+export async function copyText(value: string): Promise<void> {
+  await copyClipboard({ text: value });
+}
+
+export { escapeHtml };

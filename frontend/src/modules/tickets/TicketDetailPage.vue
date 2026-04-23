@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { onBeforeUnmount, reactive, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import TicketDetailView from "./TicketDetailView.vue";
 import { ticketsApi } from "./api";
 import { showToast } from "../../shared/toast";
 import type { Assignee, ManagedTicketListItem, StatusOption, TicketDetail } from "../../shared/types";
 import { usersApi } from "../users/api";
 import { sessionState } from "../../shared/session";
-import { copyText } from "../../shared/clipboard";
+import { copyClipboard, copyText, escapeHtml } from "../../shared/clipboard";
 
 const router = useRouter();
+const route = useRoute();
 const ticketSearch = ref("");
 const managedScope = ref<"following" | "all">("following");
 const ticketDetail = ref<TicketDetail | null>(null);
@@ -83,7 +84,7 @@ function snapshotEdit(issueId: number, status: string, assignee: string) {
 async function loadByJpIssueId(
   jpIssueId: number,
   options?: { notifyLoaded?: boolean; notifyMissing?: boolean }
-) {
+): Promise<boolean> {
   const notifyLoaded = options?.notifyLoaded ?? true;
   const notifyMissing = options?.notifyMissing ?? true;
   loadingDetail.value = true;
@@ -95,10 +96,11 @@ async function loadByJpIssueId(
       if (notifyMissing) {
         showToast("JP issue is not managed yet. Sync it first.", "warning");
       }
-      return;
+      return false;
     }
 
     ticketDetail.value = await ticketsApi.detail(jpIssueId);
+    ticketSearch.value = String(jpIssueId);
     quickCreateOpenIssueId.value = null;
     quickCreateForm.subject = "";
     quickCreateForm.description = "";
@@ -115,12 +117,36 @@ async function loadByJpIssueId(
     if (notifyLoaded) {
       showToast("Ticket loaded", "success");
     }
+    return true;
   } catch (error) {
     ticketDetail.value = null;
     showToast((error as Error).message, "error");
+    return false;
   } finally {
     loadingDetail.value = false;
   }
+}
+
+function currentRouteJpIssueId() {
+  const raw = route.params.jpIssueId;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function syncDetailRoute(jpIssueId: number | null, mode: "push" | "replace" = "replace") {
+  const currentJpIssueId = currentRouteJpIssueId();
+  if (jpIssueId == null) {
+    if (currentJpIssueId != null) {
+      await router.replace({ name: "detail" });
+    }
+    return;
+  }
+  if (currentJpIssueId === jpIssueId) {
+    return;
+  }
+  await router[mode]({ name: "detail", params: { jpIssueId: String(jpIssueId) } });
 }
 
 async function load(options?: { notifyInvalid?: boolean; notifyLoaded?: boolean; notifyMissing?: boolean }) {
@@ -136,11 +162,18 @@ async function load(options?: { notifyInvalid?: boolean; notifyLoaded?: boolean;
 
   skipNextAutoSearch = ticketSearch.value !== String(jpIssueId);
   ticketSearch.value = String(jpIssueId);
-  await loadByJpIssueId(jpIssueId, options);
+  const loaded = await loadByJpIssueId(jpIssueId, options);
+  if (loaded) {
+    await syncDetailRoute(jpIssueId, "replace");
+  }
 }
 
 async function selectManaged(jpIssueId: number) {
-  await loadByJpIssueId(jpIssueId);
+  if (currentRouteJpIssueId() === jpIssueId) {
+    await loadByJpIssueId(jpIssueId);
+    return;
+  }
+  await syncDetailRoute(jpIssueId, "push");
 }
 
 async function saveAll() {
@@ -263,8 +296,29 @@ async function copyTeamThread() {
     lines.push("", section.label, section.url as string);
   }
 
+  const htmlParts = [
+    `<div>#${ticketDetail.value.jp_issue_id}: ${escapeHtml(ticketDetail.value.jp_info.subject)}</div>`,
+    "<br>",
+    "<div><b>Ticket JP:</b></div>",
+    `<div>${escapeHtml(ticketDetail.value.jp_info.url)}</div>`,
+    "<br>",
+    "<div><b>Ticket VN:</b></div>",
+    `<div>${escapeHtml(ticketDetail.value.vn_issue.url)}</div>`
+  ];
+
+  for (const section of optionalSections) {
+    htmlParts.push(
+      "<br>",
+      `<div><b>${escapeHtml(section.label)}</b></div>`,
+      `<div>${escapeHtml(section.url as string)}</div>`
+    );
+  }
+
   try {
-    await copyText(lines.join("\n"));
+    await copyClipboard({
+      text: lines.join("\n"),
+      html: htmlParts.join("")
+    });
     showToast("Team thread format copied", "success");
   } catch {
     showToast("Cannot copy team thread format", "error");
@@ -343,10 +397,12 @@ async function deleteManagedTicket(jpIssueId: number) {
     await ticketsApi.deleteManaged(jpIssueId);
     if (ticketDetail.value?.jp_issue_id === jpIssueId) {
       ticketDetail.value = null;
+      ticketSearch.value = "";
       quickCreateOpenIssueId.value = null;
       quickCreateForm.parent_issue_id = null;
       quickCreateForm.subject = "";
       quickCreateForm.description = "";
+      await syncDetailRoute(null);
     }
     suggestSyncJpIssueId.value = jpIssueId;
     await loadManaged();
@@ -381,6 +437,23 @@ watch(
   managedScope,
   async () => {
     await loadManaged();
+  },
+  { immediate: true }
+);
+
+watch(
+  () => route.params.jpIssueId,
+  async () => {
+    const jpIssueId = currentRouteJpIssueId();
+    if (jpIssueId == null) {
+      return;
+    }
+    if (ticketDetail.value?.jp_issue_id === jpIssueId && ticketSearch.value === String(jpIssueId)) {
+      return;
+    }
+    skipNextAutoSearch = true;
+    ticketSearch.value = String(jpIssueId);
+    await loadByJpIssueId(jpIssueId, { notifyLoaded: false, notifyMissing: true });
   },
   { immediate: true }
 );

@@ -29,7 +29,7 @@ const router = createRouter({
         },
         { path: "settings", name: "settings", component: SettingsPage },
         { path: "tickets/sync", name: "sync", component: SyncTicketPage },
-        { path: "tickets/detail", name: "detail", component: TicketDetailPage },
+        { path: "tickets/detail/:jpIssueId?", name: "detail", component: TicketDetailPage },
         { path: "logtime", name: "logtime", component: LogtimePage },
         { path: "pull-requests", name: "pull-requests", component: PullRequestPage }
       ]
