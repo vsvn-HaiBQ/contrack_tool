@@ -41,8 +41,8 @@ router = APIRouter(prefix="/users", tags=["users"])
 _LONG_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 
-def _assignee_cache_key(host: str | None, encrypted_api_key: str | None, project_id: str | None) -> str:
-    digest = hashlib.sha256(f"{host or ''}:{encrypted_api_key or ''}:{project_id or ''}".encode("utf-8")).hexdigest()
+def _assignee_cache_key(host: str | None, project_id: str | None) -> str:
+    digest = hashlib.sha256(f"{host or ''}:{project_id or ''}".encode("utf-8")).hexdigest()
     return f"cache:redmine_vn_assignees:{digest}"
 
 
@@ -191,7 +191,7 @@ def list_assignees(
     host = system_settings.get("redmine_vn_host")
     project_id = system_settings.get("redmine_vn_project_id")
     encrypted_api_key = settings.redmine_vn_api_key_enc
-    cache_key = _assignee_cache_key(host, encrypted_api_key, project_id)
+    cache_key = _assignee_cache_key(host, project_id)
     try:
         cached = session_store._client().get(cache_key)
         if cached:

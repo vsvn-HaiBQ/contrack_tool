@@ -31,7 +31,8 @@ const syncState = reactive({
   existing_vn_issue_id: null as number | null,
   selected_subtasks: [] as string[],
   subtask_titles: { ...DEFAULT_SUBTASK_LABELS } as Record<string, string>,
-  extra_tracker: "Story"
+  extra_tracker: "Story",
+  force_create: false
 });
 
 const syncResult = reactive<SyncResult>({
@@ -104,7 +105,9 @@ async function verify(existingVnIssueId: number | null = null) {
   syncState.verifying = true;
 
   try {
+    const searchResult = await ticketsApi.search(jpIssueId);
     const response = await ticketsApi.verifySync({ jp_issue_id: jpIssueId });
+    const resolvedExistingVnIssueId = existingVnIssueId ?? searchResult.vn_issue_id;
 
     syncState.jp_issue_id = response.jp_issue_id;
     syncState.jp_issue_input = String(response.jp_issue_id);
@@ -112,8 +115,9 @@ async function verify(existingVnIssueId: number | null = null) {
     syncState.jp_issue_url = response.jp_issue_url;
     syncState.verified = true;
     syncState.candidates = response.candidates;
-    syncState.existing_vn_issue_id = existingVnIssueId;
+    syncState.existing_vn_issue_id = resolvedExistingVnIssueId;
     syncState.subject = buildStorySubject();
+    syncState.force_create = response.candidates.length === 0;
 
     if (!syncState.description) {
       const template = sessionState.systemSettings.description_template?.trim();
@@ -139,6 +143,7 @@ async function verify(existingVnIssueId: number | null = null) {
     syncState.jp_issue_url = "";
     syncState.candidates = [];
     syncState.existing_vn_issue_id = null;
+    syncState.force_create = false;
     showToast((error as Error).message, "error");
   } finally {
     syncState.verifying = false;
@@ -170,7 +175,8 @@ async function runSync(mode: "create_new" | "link" = "create_new", existingVnIss
       create_subtasks: syncState.selected_subtasks
         .map((key) => syncState.subtask_titles[key])
         .filter(Boolean),
-      extra_tracker: syncState.extra_tracker
+      extra_tracker: syncState.extra_tracker,
+      force_create: syncState.force_create
     });
 
     syncResult.mode = result.mode;
@@ -180,6 +186,9 @@ async function runSync(mode: "create_new" | "link" = "create_new", existingVnIss
 
     if (mode === "link") {
       syncState.existing_vn_issue_id = linkedIssueId ?? null;
+    }
+    if (mode === "create_new" && result.story) {
+      syncState.existing_vn_issue_id = result.story.issue_id;
     }
 
     showToast("Sync completed", "success");
@@ -240,5 +249,6 @@ watch(
     :trackers="sessionState.trackers"
     @verify="verify"
     @run-sync="(payload) => runSync(payload?.mode, payload?.existingVnIssueId)"
+    @force-create="syncState.force_create = true"
   />
 </template>

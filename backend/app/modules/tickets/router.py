@@ -66,7 +66,11 @@ def _derive_link_label(link_type: str, url: str, explicit_label: str | None) -> 
 def search_ticket(jp_issue_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     _ = user
     ticket = db.query(ManagedTicket).filter(ManagedTicket.jp_issue_id == jp_issue_id).first()
-    return {"exists": bool(ticket), "managed_ticket_id": ticket.id if ticket else None}
+    return {
+        "exists": bool(ticket),
+        "managed_ticket_id": ticket.id if ticket else None,
+        "vn_issue_id": ticket.vn_issue_id if ticket else None,
+    }
 
 
 @router.get("/managed", response_model=list[ManagedTicketListItem])
@@ -210,6 +214,17 @@ def sync_ticket(
     else:
         try:
             jp_issue = redmine.verify_jp_issue_resolved(jp_issue_id, settings.get("redmine_jp_host"), user_settings.redmine_jp_api_key_enc)
+            candidates = redmine.search_reference_tickets_resolved(
+                settings.get("redmine_vn_host"),
+                user_settings.redmine_vn_api_key_enc,
+                settings.get("redmine_vn_project_id"),
+                jp_issue_id,
+            )
+            if candidates and not payload.force_create:
+                raise HTTPException(
+                    status_code=400,
+                    detail="VN reference tickets already exist. Link an existing Story or force create to continue.",
+                )
             sync_result = redmine.create_vn_ticket_resolved(
                 vn_host=settings.get("redmine_vn_host"),
                 vn_api_key_enc=user_settings.redmine_vn_api_key_enc,

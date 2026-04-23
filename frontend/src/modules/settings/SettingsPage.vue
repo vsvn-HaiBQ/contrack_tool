@@ -14,12 +14,17 @@ const loadingActivities = ref(false);
 const loadingStatuses = ref(false);
 const loadingTrackers = ref(false);
 const showCreateUserRow = ref(false);
+const changingPassword = ref(false);
 const createUserForm = reactive({
   username: "",
   password: "",
   role: "user"
 });
 const passwordDrafts = reactive<Record<number, string>>({});
+const passwordForm = reactive({
+  current_password: "",
+  new_password: ""
+});
 
 async function loadIntegrationStatuses() {
   try {
@@ -38,6 +43,28 @@ async function saveUserSettings() {
     showToast("User settings saved", "success");
   } catch (error) {
     showToast((error as Error).message, "error");
+  }
+}
+
+async function changePassword() {
+  if (!passwordForm.current_password.trim() || !passwordForm.new_password.trim()) {
+    showToast("Current password and new password are required", "warning");
+    return;
+  }
+
+  changingPassword.value = true;
+  try {
+    await usersApi.changeMyPassword({
+      current_password: passwordForm.current_password,
+      new_password: passwordForm.new_password
+    });
+    passwordForm.current_password = "";
+    passwordForm.new_password = "";
+    showToast("Password updated", "success");
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  } finally {
+    changingPassword.value = false;
   }
 }
 
@@ -187,10 +214,13 @@ onMounted(async () => {
     :loading-activities="loadingActivities"
     :loading-statuses="loadingStatuses"
     :loading-trackers="loadingTrackers"
+    :changing-password="changingPassword"
     :create-user-form="createUserForm"
     :show-create-user-row="showCreateUserRow"
     :password-drafts="passwordDrafts"
+    :password-form="passwordForm"
     @save-user-settings="saveUserSettings"
+    @change-password="changePassword"
     @load-redmine-assignees="loadRedmineAssigneeCache"
     @load-redmine-activities="loadRedmineActivityCache"
     @load-redmine-statuses="loadRedmineStatusCache"

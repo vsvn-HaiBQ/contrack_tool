@@ -22,6 +22,7 @@ const props = defineProps<{
     selected_subtasks: string[];
     subtask_titles: Record<string, string>;
     extra_tracker: string;
+    force_create: boolean;
   };
   syncResult: SyncResult;
   assignees: Assignee[];
@@ -31,6 +32,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   verify: [];
   runSync: [payload?: { mode: "create_new" | "link"; existingVnIssueId?: number | null }];
+  forceCreate: [];
 }>();
 
 type ReferenceRow = {
@@ -79,6 +81,7 @@ const subtaskPreview = computed(() =>
 );
 
 const editorTitle = computed(() => `Create ${props.syncState.extra_tracker}`);
+const hasReferenceCandidates = computed(() => props.syncState.candidates.length > 0);
 const trackerOptions = computed(() => {
   if (props.trackers.length) return props.trackers;
   return [
@@ -221,9 +224,28 @@ function trackerBadgeClass(tracker: string | null | undefined) {
       <div v-else class="rounded-xl border border-dashed border-neutral-300 px-4 py-6 text-center text-sm text-[#5C5E62]">
         No VN reference tickets found yet.
       </div>
+
+      <div
+        v-if="hasReferenceCandidates && !syncState.force_create"
+        class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p class="m-0 font-semibold">VN reference already exists.</p>
+            <p class="mt-1 text-amber-800">Create form is hidden to avoid duplicate Story creation. Link an existing Story, or continue only if you need to force create.</p>
+          </div>
+          <button
+            type="button"
+            class="inline-flex min-h-10 items-center justify-center rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-900 transition hover:bg-amber-100"
+            @click="emit('forceCreate')"
+          >
+            Force Create
+          </button>
+        </div>
+      </div>
     </div>
 
-    <div class="grid content-start gap-5 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
+    <div v-if="!hasReferenceCandidates || syncState.force_create" class="grid content-start gap-5 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
       <div class="flex items-center gap-3">
         <h3 class="m-0 text-xl font-semibold text-[#171A20]">{{ editorTitle }}</h3>
       </div>

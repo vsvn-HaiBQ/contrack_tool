@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { Assignee, ManagedTicketListItem, StatusOption, TicketDetail, TrackerOption } from "../../shared/types";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
 
@@ -47,12 +47,14 @@ const emit = defineEmits<{
   saveAll: [];
   addLink: [];
   copyLink: [url: string];
+  copyTeamThread: [];
   editLink: [linkId: number, type: string, url: string];
   cancelEditLink: [];
   deleteLink: [linkId: number];
 }>();
 
 const linkTypes = ["spec", "thread", "build", "pr"];
+const showClosedIssues = ref(false);
 const quickCreateTrackerOptions = computed(() => {
   if (props.trackerOptions.length) {
     return props.trackerOptions;
@@ -99,18 +101,20 @@ const groupedLinks = computed(() => {
 const groupedRelatedIssues = computed(() => {
   if (!props.ticketDetail?.related?.length) return [];
 
-  const groups = new Map<string, typeof props.ticketDetail.related>();
-  for (const issue of props.ticketDetail.related) {
+  const groups = new Map<string, Array<(typeof props.ticketDetail.related)[number] & { isClosed: boolean; order: number }>>();
+  props.ticketDetail.related.forEach((issue, idx) => {
     const key = issue.tracker || "Other";
     const bucket = groups.get(key) ?? [];
-    bucket.push(issue);
+    bucket.push({ ...issue, isClosed: isClosedLike(issue.status), order: idx });
     groups.set(key, bucket);
-  }
+  });
 
   return Array.from(groups.entries()).map(([tracker, items]) => ({
     tracker,
-    items
-  }));
+    items: items
+      .filter((item) => showClosedIssues.value || !item.isClosed)
+      .sort((a, b) => Number(a.isClosed) - Number(b.isClosed) || a.order - b.order)
+  })).filter((group) => group.items.length > 0);
 });
 
 function trackerBadgeClass(tracker: string | null | undefined) {
@@ -157,18 +161,40 @@ const editableRows = computed(() => {
   const rows: Array<{
     kind: "story" | "child";
     issue: { issue_id: number; subject: string; tracker: string; url: string; status: string; allowed_statuses: string[] };
+    isClosed: boolean;
+    order: number;
     last: boolean;
-  }> = [{ kind: "story", issue: props.ticketDetail.vn_issue, last: props.ticketDetail.children.length === 0 }];
+  }> = [
+    {
+      kind: "story",
+      issue: props.ticketDetail.vn_issue,
+      isClosed: isClosedLike(props.ticketDetail.vn_issue.status),
+      order: 0,
+      last: false
+    }
+  ];
 
   props.ticketDetail.children.forEach((child, idx) => {
     rows.push({
       kind: "child",
       issue: child,
-      last: idx === props.ticketDetail!.children.length - 1
+      isClosed: isClosedLike(child.status),
+      order: idx + 1,
+      last: false
     });
   });
 
-  return rows;
+  const visibleRows = rows
+    .filter((row) => showClosedIssues.value || !row.isClosed)
+    .sort((a, b) => Number(a.isClosed) - Number(b.isClosed) || a.order - b.order);
+
+  const childRows = visibleRows.filter((row) => row.kind === "child");
+  const lastChildIssueId = childRows.length ? childRows[childRows.length - 1].issue.issue_id : null;
+
+  return visibleRows.map((row) => ({
+    ...row,
+    last: row.kind === "child" && row.issue.issue_id === lastChildIssueId
+  }));
 });
 
 function issueStatusOptions(issue: { status: string; allowed_statuses?: string[] }) {
@@ -177,6 +203,11 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
     id: name,
     name
   }));
+}
+
+function isClosedLike(status: string | null | undefined) {
+  const value = (status || "").trim().toLowerCase();
+  return value.includes("close");
 }
 </script>
 
@@ -283,21 +314,6 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
             <div class="flex items-center justify-between gap-2">
               <span class="break-words text-sm text-[#5C5E62]">{{ item.assignee || "Unassigned" }}</span>
               <div class="flex items-center gap-2">
-                <button
-                  v-if="isAdmin"
-                  type="button"
-                  class="flex size-7 shrink-0 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  :disabled="deletingManagedJpIssueId === item.jp_issue_id"
-                  title="Delete managed ticket"
-                  @click.stop="emit('deleteManagedTicket', item.jp_issue_id)"
-                >
-                  <LoadingCircle v-if="deletingManagedJpIssueId === item.jp_issue_id" class="size-4" />
-                  <svg v-else viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M4.5 6.5h11"></path>
-                    <path d="M8 6.5V5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5"></path>
-                    <path d="M6.5 6.5 7 15a1 1 0 0 0 1 .94h4a1 1 0 0 0 1-.94l.5-8.5"></path>
-                  </svg>
-                </button>
                 <span
                   role="button"
                   tabindex="0"
@@ -333,6 +349,24 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
             <h3 class="m-0 text-xl font-semibold text-[#171A20]">Story &amp; subtasks</h3>
             <button
               type="button"
+              class="inline-flex items-center gap-3 rounded-full border px-3 py-1.5 text-xs font-medium transition"
+              :class="showClosedIssues ? 'border-[#3E6AE1] bg-[#EAF1FF] text-[#2F56BA]' : 'border-neutral-200 bg-white text-[#5C5E62] hover:bg-neutral-50'"
+              :aria-pressed="showClosedIssues"
+              @click="showClosedIssues = !showClosedIssues"
+            >
+              <span
+                class="relative h-5 w-9 rounded-full transition"
+                :class="showClosedIssues ? 'bg-[#3E6AE1]' : 'bg-neutral-300'"
+              >
+                <span
+                  class="absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition"
+                  :class="showClosedIssues ? 'translate-x-4' : 'translate-x-0'"
+                ></span>
+              </span>
+              Show close/inclose
+            </button>
+            <button
+              type="button"
               class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-white transition"
               :class="quickCreateOpenIssueId === ticketDetail.vn_issue.issue_id ? 'border-[#3E6AE1] bg-[#EAF1FF] text-[#3E6AE1]' : 'border-neutral-200 text-[#5C5E62] hover:border-[#3E6AE1] hover:bg-[#F5F8FF] hover:text-[#3E6AE1]'"
               :title="quickCreateOpenIssueId === ticketDetail.vn_issue.issue_id ? 'Editing task form' : 'Add task'"
@@ -345,6 +379,22 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
             </button>
           </div>
           <div class="flex items-center gap-2">
+            <button
+              v-if="isAdmin"
+              type="button"
+              class="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="deletingManagedJpIssueId === ticketDetail.jp_issue_id"
+              @click="emit('deleteManagedTicket', ticketDetail.jp_issue_id)"
+            >
+              <LoadingCircle v-if="deletingManagedJpIssueId === ticketDetail.jp_issue_id" class="size-4" />
+              <svg v-else viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 6.5h8"></path>
+                <path d="M7.5 10h5"></path>
+                <path d="M4.5 10h1.5"></path>
+                <path d="M14 10h1.5"></path>
+              </svg>
+              {{ deletingManagedJpIssueId === ticketDetail.jp_issue_id ? "Unlinking..." : "Unlink" }}
+            </button>
             <button
               type="button"
               class="flex size-9 items-center justify-center rounded-full border border-neutral-200 bg-white transition hover:bg-neutral-100"
@@ -399,7 +449,7 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
           >
             <div
               class="grid gap-3 border-b border-neutral-200 px-3 py-3 transition last:border-b-0 md:grid-cols-[140px_minmax(0,1fr)_120px_120px] md:items-center md:py-2"
-              :class="row.kind === 'story' ? 'bg-[#F5F8FF]' : 'hover:bg-neutral-50'"
+              :class="row.isClosed ? 'bg-neutral-100 text-[#7A7D81]' : row.kind === 'story' ? 'bg-[#F5F8FF]' : 'hover:bg-neutral-50'"
             >
               <div class="flex flex-wrap items-center gap-2">
                 <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Type / ID</span>
@@ -420,7 +470,7 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
                   target="_blank"
                   rel="noreferrer"
                   class="flex items-start gap-2 break-words text-sm hover:text-[#3E6AE1] hover:underline"
-                  :class="row.kind === 'story' ? 'font-medium text-[#171A20]' : 'text-[#171A20]'"
+                  :class="row.isClosed ? 'text-[#7A7D81]' : row.kind === 'story' ? 'font-medium text-[#171A20]' : 'text-[#171A20]'"
                 >
                   <span v-if="row.kind === 'child'" class="select-none font-mono text-xs leading-5 text-[#9CA0A6]">{{ row.last ? "L-" : "|-" }}</span>
                   <span>{{ row.issue.subject }}</span>
@@ -430,7 +480,8 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
                 <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Status</span>
                 <select
                   v-model="ticketEdit[row.issue.issue_id].status"
-                  class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                  class="w-full rounded-lg border border-[#D0D1D2] px-1 py-1 text-sm outline-none transition focus:border-[#3E6AE1]"
+                  :class="row.isClosed ? 'bg-neutral-50 text-[#7A7D81]' : 'bg-white text-[#171A20]'"
                 >
                   <option v-for="status in issueStatusOptions(row.issue)" :key="status.id" :value="status.name">{{ status.name }}</option>
                 </select>
@@ -439,7 +490,8 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
                 <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Assignee</span>
                 <select
                   v-model="ticketEdit[row.issue.issue_id].assignee"
-                  class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                  class="w-full rounded-lg border border-[#D0D1D2] px-1 py-1 text-sm outline-none transition focus:border-[#3E6AE1]"
+                  :class="row.isClosed ? 'bg-neutral-50 text-[#7A7D81]' : 'bg-white text-[#171A20]'"
                 >
                   <option value="">Unassigned</option>
                   <option v-for="assignee in assigneeOptions" :key="assignee.id" :value="assignee.name">{{ assignee.name }}</option>
@@ -600,7 +652,8 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
                 :href="rel.url"
                 target="_blank"
                 rel="noreferrer"
-                class="grid gap-2 border-b border-neutral-200 px-3 py-3 text-sm text-[#171A20] transition hover:bg-neutral-50 last:border-b-0 md:grid-cols-[104px_minmax(0,1fr)_80px_80px] md:items-center md:py-2"
+                class="grid gap-2 border-b border-neutral-200 px-3 py-3 text-sm transition last:border-b-0 md:grid-cols-[104px_minmax(0,1fr)_80px_80px] md:items-center md:py-2"
+                :class="rel.isClosed ? 'bg-neutral-100 text-[#7A7D81]' : 'text-[#171A20] hover:bg-neutral-50'"
               >
                 <div class="grid gap-1">
                   <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Issue</span>
@@ -608,15 +661,15 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
                 </div>
                 <div class="grid gap-1">
                   <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Subject</span>
-                  <span class="break-words text-[#171A20]">{{ rel.subject }}</span>
+                  <span class="break-words" :class="rel.isClosed ? 'text-[#7A7D81]' : 'text-[#171A20]'">{{ rel.subject }}</span>
                 </div>
                 <div class="grid gap-1">
                   <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Status</span>
-                  <span class="text-[#5C5E62]">{{ rel.status }}</span>
+                  <span :class="rel.isClosed ? 'text-[#7A7D81]' : 'text-[#5C5E62]'">{{ rel.status }}</span>
                 </div>
                 <div class="grid gap-1">
                   <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Assignee</span>
-                  <span class="text-[#5C5E62]">{{ rel.assignee || "Unassigned" }}</span>
+                  <span :class="rel.isClosed ? 'text-[#7A7D81]' : 'text-[#5C5E62]'">{{ rel.assignee || "Unassigned" }}</span>
                 </div>
               </a>
             </div>
@@ -630,17 +683,30 @@ function issueStatusOptions(issue: { status: string; allowed_statuses?: string[]
             <h3 class="m-0 text-xl font-semibold text-[#171A20]">Links</h3>
             <p class="mt-1 text-xs text-[#5C5E62]">Spec / thread / build / PR.</p>
           </div>
-          <button
-            type="button"
-            class="flex size-9 items-center justify-center rounded-full border border-neutral-200 bg-white text-[#171A20] transition hover:bg-neutral-100"
-            title="Add link"
-            @click="emit('toggleLinkForm')"
-          >
-            <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M10 4v12"></path>
-              <path d="M4 10h12"></path>
-            </svg>
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100"
+              @click="emit('copyTeamThread')"
+            >
+              <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="7" y="7" width="9" height="9" rx="2"></rect>
+                <path d="M4 13V5a2 2 0 0 1 2-2h8"></path>
+              </svg>
+              Copy Team Thread
+            </button>
+            <button
+              type="button"
+              class="flex size-9 items-center justify-center rounded-full border border-neutral-200 bg-white text-[#171A20] transition hover:bg-neutral-100"
+              title="Add link"
+              @click="emit('toggleLinkForm')"
+            >
+              <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10 4v12"></path>
+                <path d="M4 10h12"></path>
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div class="grid gap-3">

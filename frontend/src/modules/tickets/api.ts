@@ -2,7 +2,8 @@ import { http } from "../../shared/http";
 import type { ManagedTicketListItem, SyncIssueSummary, SyncResult, TicketDetail } from "../../shared/types";
 
 export const ticketsApi = {
-  search: (jpIssueId: number) => http<{ exists: boolean; managed_ticket_id: number | null }>(`/tickets/search?jp_issue_id=${jpIssueId}`),
+  search: (jpIssueId: number) =>
+    http<{ exists: boolean; managed_ticket_id: number | null; vn_issue_id: number | null }>(`/tickets/search?jp_issue_id=${jpIssueId}`),
   verifySync: (payload: unknown) =>
     http<{ jp_issue_id: number; jp_subject: string; jp_issue_url: string; candidates: Array<{ issue_id: number; subject: string; assignee?: string; tracker?: string; status?: string; url?: string; parent_issue_id?: number | null }> }>(
       "/tickets/sync/verify",

@@ -134,6 +134,7 @@ class SyncActionRequest(BaseModel):
     existing_vn_issue_id: int | None = None
     create_subtasks: list[str] = []
     extra_tracker: str | None = None
+    force_create: bool = False
 
 
 class ChildIssueCreateRequest(BaseModel):

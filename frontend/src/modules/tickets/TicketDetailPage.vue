@@ -235,6 +235,41 @@ async function copyLink(url: string) {
   }
 }
 
+async function copyTeamThread() {
+  if (!ticketDetail.value) {
+    showToast("Load a managed ticket first", "warning");
+    return;
+  }
+
+  const findLink = (type: string) => ticketDetail.value?.links.find((link) => link.type === type)?.url;
+  const lines = [
+    `#${ticketDetail.value.jp_issue_id}: ${ticketDetail.value.jp_info.subject}`,
+    "",
+    "Ticket JP:",
+    ticketDetail.value.jp_info.url,
+    "",
+    "Ticket VN:",
+    ticketDetail.value.vn_issue.url
+  ];
+
+  const optionalSections = [
+    { label: "Spec:", url: findLink("spec") },
+    { label: "Pull request:", url: findLink("pr") },
+    { label: "Build:", url: findLink("build") }
+  ].filter((item) => item.url);
+
+  for (const section of optionalSections) {
+    lines.push("", section.label, section.url as string);
+  }
+
+  try {
+    await navigator.clipboard.writeText(lines.join("\n"));
+    showToast("Team thread format copied", "success");
+  } catch {
+    showToast("Cannot copy team thread format", "error");
+  }
+}
+
 function openQuickCreate(issueId?: number) {
   if (!ticketDetail.value) {
     showToast("Load a managed ticket first", "warning");
@@ -298,7 +333,7 @@ async function createManagedTicket() {
 loadOptions();
 
 async function deleteManagedTicket(jpIssueId: number) {
-  if (!window.confirm(`Delete managed ticket for JP #${jpIssueId}?`)) {
+  if (!window.confirm(`Unlink managed ticket for JP #${jpIssueId}? This only removes the mapping in ct_tool.`)) {
     return;
   }
 
@@ -314,7 +349,7 @@ async function deleteManagedTicket(jpIssueId: number) {
     }
     suggestSyncJpIssueId.value = jpIssueId;
     await loadManaged();
-    showToast("Managed ticket deleted", "success");
+    showToast("Managed ticket unlinked", "success");
   } catch (error) {
     showToast((error as Error).message, "error");
   } finally {
@@ -421,6 +456,7 @@ onBeforeUnmount(() => {
     @save-all="saveAll"
     @add-link="addLink"
     @copy-link="copyLink"
+    @copy-team-thread="copyTeamThread"
     @edit-link="startEditLink"
     @cancel-edit-link="cancelEditLink"
     @delete-link="deleteLink"

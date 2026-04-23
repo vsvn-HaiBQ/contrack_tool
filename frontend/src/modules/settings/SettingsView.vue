@@ -19,6 +19,7 @@ const props = defineProps<{
   loadingActivities: boolean;
   loadingStatuses: boolean;
   loadingTrackers: boolean;
+  changingPassword: boolean;
   createUserForm: {
     username: string;
     password: string;
@@ -26,6 +27,10 @@ const props = defineProps<{
   };
   showCreateUserRow: boolean;
   passwordDrafts: Record<number, string>;
+  passwordForm: {
+    current_password: string;
+    new_password: string;
+  };
 }>();
 
 function integrationStatus(service: string) {
@@ -34,6 +39,7 @@ function integrationStatus(service: string) {
 
 const emit = defineEmits<{
   saveUserSettings: [];
+  changePassword: [];
   loadRedmineAssignees: [];
   loadRedmineActivities: [];
   loadRedmineStatuses: [];
@@ -112,6 +118,32 @@ const emit = defineEmits<{
       </div>
       <div class="flex items-center gap-3 pt-2">
         <button class="min-h-10 min-w-[200px] rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95" @click="emit('saveUserSettings')">Save User Settings</button>
+      </div>
+
+      <div class="grid gap-4 rounded-xl border border-neutral-200 p-4">
+        <div>
+          <h4 class="text-base font-semibold text-[#171A20]">Change Password</h4>
+          <p class="mt-1 text-sm text-[#5C5E62]">Update the password for your current account.</p>
+        </div>
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-[#393C41]">Current Password</label>
+            <input v-model="passwordForm.current_password" type="password" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+          </div>
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-[#393C41]">New Password</label>
+            <input v-model="passwordForm.new_password" type="password" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <button
+            class="min-h-10 min-w-[200px] rounded-lg border border-[#171A20] bg-[#171A20] px-4 py-2 text-sm font-medium text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="changingPassword"
+            @click="emit('changePassword')"
+          >
+            {{ changingPassword ? "Updating Password..." : "Change Password" }}
+          </button>
+        </div>
       </div>
     </div>
 
