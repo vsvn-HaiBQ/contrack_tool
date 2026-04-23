@@ -7,6 +7,7 @@ import { showToast } from "../../shared/toast";
 import type { Assignee, ManagedTicketListItem, StatusOption, TicketDetail } from "../../shared/types";
 import { usersApi } from "../users/api";
 import { sessionState } from "../../shared/session";
+import { copyText } from "../../shared/clipboard";
 
 const router = useRouter();
 const ticketSearch = ref("");
@@ -228,7 +229,7 @@ async function deleteLink(linkId: number) {
 
 async function copyLink(url: string) {
   try {
-    await navigator.clipboard.writeText(url);
+    await copyText(url);
     showToast("Link copied", "success");
   } catch {
     showToast("Cannot copy link", "error");
@@ -263,7 +264,7 @@ async function copyTeamThread() {
   }
 
   try {
-    await navigator.clipboard.writeText(lines.join("\n"));
+    await copyText(lines.join("\n"));
     showToast("Team thread format copied", "success");
   } catch {
     showToast("Cannot copy team thread format", "error");
