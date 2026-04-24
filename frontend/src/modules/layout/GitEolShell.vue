@@ -17,10 +17,6 @@ const tabs = [
   { key: "/logtime", label: "Logtime" },
 ];
 
-function visibleTabs() {
-  return tabs;
-}
-
 async function logout() {
   await authApi.logout();
   clearSession();
@@ -35,10 +31,10 @@ function goSettings() {
 </script>
 
 <template>
-  <div v-if="sessionState.me" class="min-h-screen bg-neutral-50">
+  <div v-if="sessionState.me" class="flex min-h-screen flex-col bg-neutral-50">
     <SidebarNav
       :me="sessionState.me"
-      :tabs="visibleTabs()"
+      :tabs="tabs"
       :current-tab="$route.path"
       :user-menu-open="userMenuOpen"
       @select="$router.push($event)"
@@ -46,7 +42,7 @@ function goSettings() {
       @settings="goSettings"
       @logout="logout"
     />
-    <main class="mx-auto grid w-full max-w-7xl gap-8 px-4 py-6 sm:px-6 lg:px-8">
+    <main class="flex-1 w-full px-4 py-6 sm:px-6">
       <RouterView />
     </main>
   </div>

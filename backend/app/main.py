@@ -13,6 +13,7 @@ from app.core.middleware import RateLimitMiddleware, RequestIDMiddleware
 from app.db import SessionLocal, engine, ensure_database_exists
 from app.migrations import apply_sql_migrations
 from app.modules.auth.router import router as auth_router
+from app.modules.git_eol.router import router as git_eol_router
 from app.modules.health.router import router as health_router
 from app.modules.logtime.router import router as logtime_router
 from app.modules.pull_requests.router import router as pull_requests_router
@@ -76,3 +77,4 @@ app.include_router(settings_router, prefix=settings.api_prefix)
 app.include_router(tickets_router, prefix=settings.api_prefix)
 app.include_router(logtime_router, prefix=settings.api_prefix)
 app.include_router(pull_requests_router, prefix=settings.api_prefix)
+app.include_router(git_eol_router, prefix=settings.api_prefix)

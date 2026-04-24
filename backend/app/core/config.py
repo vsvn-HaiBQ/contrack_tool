@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     master_key: str = "change-me"
     cors_origins: str = "http://localhost:8888,http://127.0.0.1:8888"
     http_verify_ssl: bool = True
+    git_workspace_root: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="CONTRACK_", extra="ignore")
 

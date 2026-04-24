@@ -75,3 +75,98 @@ export type PrPreview = {
   branch_exists: boolean;
   tickets: Array<{ issue_id: number; subject: string; url: string }>;
 };
+
+export type GitEolFilePreview = {
+  path: string;
+  old_path?: string | null;
+  status: string;
+  selected: boolean;
+  processable: boolean;
+  reason?: string | null;
+  base_eol?: string | null;
+  source_eol?: string | null;
+  changed_lines: number;
+  eol_only_lines: number;
+};
+
+export type GitEolPreview = {
+  session_id: string;
+  base_branch: string;
+  source_branch: string;
+  merge_base: string;
+  files: GitEolFilePreview[];
+};
+
+export type GitEolFixResult = {
+  session_id: string;
+  fixed_files: Array<{
+    path: string;
+    restored_eol_lines: number;
+    remaining_changed_lines: number;
+    remaining_eol_only_lines: number;
+    worktree_changed?: boolean;
+    message?: string | null;
+  }>;
+  skipped_files: Array<{ path: string; reason: string }>;
+  failed_files: Array<{ path: string; error: string }>;
+  total_restored_eol_lines: number;
+};
+
+export type GitEolCommitResult = {
+  session_id: string;
+  committed: boolean;
+  commit_sha?: string | null;
+  message: string;
+  changed_files: string[];
+};
+
+export type GitEolPushResult = {
+  session_id: string;
+  pushed: boolean;
+  source_branch: string;
+  message: string;
+};
+
+export type GitEolJobStatus = {
+  job_id: string;
+  kind: string;
+  status: "queued" | "running" | "succeeded" | "failed" | string;
+};
+
+export type GitEolJobResponse = GitEolJobStatus & {
+  error?: string | null;
+  result?: GitEolPreview | null;
+};
+
+export type GitEolJobLog = {
+  ts: number;
+  level: "info" | "warn" | "error" | string;
+  source: string;
+  message: string;
+};
+
+export type GitEolDiffResponse = {
+  session_id: string;
+  path: string;
+  diff: string;
+};
+
+export type GitEolDiffSide = {
+  lineno: number | null;
+  text: string | null;
+  eol: "lf" | "crlf" | "cr" | "none" | null;
+};
+
+export type GitEolDiffRow = {
+  type: "equal" | "eol" | "replace" | "delete" | "insert" | string;
+  left: GitEolDiffSide | null;
+  right: GitEolDiffSide | null;
+};
+
+export type GitEolStructuredDiff = {
+  session_id: string;
+  path: string;
+  binary: boolean;
+  rows: GitEolDiffRow[];
+  stats: { added?: number; removed?: number; changed?: number; eol_only?: number };
+};
