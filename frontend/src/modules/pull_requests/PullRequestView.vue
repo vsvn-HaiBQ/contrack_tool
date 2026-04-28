@@ -81,7 +81,7 @@ const canVerify = computed(() => Boolean(props.prForm.jp_tickets.trim() && props
                 rel="noreferrer"
                 class="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-[#171A20] transition hover:bg-neutral-50"
               >
-                <span class="font-mono text-[#3E6AE1]">#{{ ticket.issue_id }}</span>
+                <span class="font-mono text-[#3E6AE1]">#{{ ticket.issue_id }}:</span>
                 {{ ticket.subject }}
               </a>
             </div>

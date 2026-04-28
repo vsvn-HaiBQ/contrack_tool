@@ -13,14 +13,14 @@ const props = defineProps<{
   ticketDetail: TicketDetail | null;
   loadingDetail: boolean;
   ticketEdit: Record<number, { status: string; assignee: string }>;
-  quickCreateOpenIssueId: number | null;
-  quickCreateForm: {
+  quickCreateForms: Array<{
+    id: number;
     tracker: string;
     parent_issue_id: number | null;
     subject: string;
     description: string;
     assignee_id: number | null;
-  };
+  }>;
   trackerOptions: TrackerOption[];
   creatingChild: boolean;
   linkForm: { type: string; url: string };
@@ -42,8 +42,8 @@ const emit = defineEmits<{
   createManagedTicket: [];
   deleteManagedTicket: [jpIssueId: number];
   openQuickCreate: [issueId?: number];
-  cancelQuickCreate: [];
-  createChildTicket: [];
+  cancelQuickCreate: [draftId?: number];
+  createChildTicket: [draftId?: number];
   saveAll: [];
   addLink: [];
   copyLink: [url: string];
@@ -368,8 +368,8 @@ function isClosedLike(status: string | null | undefined) {
             <button
               type="button"
               class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-white transition"
-              :class="quickCreateOpenIssueId === ticketDetail.vn_issue.issue_id ? 'border-[#3E6AE1] bg-[#EAF1FF] text-[#3E6AE1]' : 'border-neutral-200 text-[#5C5E62] hover:border-[#3E6AE1] hover:bg-[#F5F8FF] hover:text-[#3E6AE1]'"
-              :title="quickCreateOpenIssueId === ticketDetail.vn_issue.issue_id ? 'Editing task form' : 'Add task'"
+              :class="quickCreateForms.length ? 'border-[#3E6AE1] bg-[#EAF1FF] text-[#3E6AE1]' : 'border-neutral-200 text-[#5C5E62] hover:border-[#3E6AE1] hover:bg-[#F5F8FF] hover:text-[#3E6AE1]'"
+              title="Add task row"
               @click="emit('openQuickCreate', ticketDetail.vn_issue.issue_id)"
             >
               <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -500,10 +500,15 @@ function isClosedLike(status: string | null | undefined) {
             </div>
 
             <div
-              v-if="row.kind === 'story' && quickCreateOpenIssueId === row.issue.issue_id"
+              v-for="draft in row.kind === 'story' ? quickCreateForms : []"
+              :key="`quick-create-${draft.id}`"
               class="grid gap-3 border-b border-neutral-200 bg-[#F8FAFF] px-3 py-3 md:grid-cols-[140px_minmax(0,1fr)]"
             >
-              <div class="hidden md:block"></div>
+              <div class="flex flex-wrap items-start gap-2">
+                <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Type / ID</span>
+                <span :class="['inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium', trackerBadgeClass(draft.tracker || 'Task')]">{{ draft.tracker || "Task" }}</span>
+                <span class="rounded bg-white px-1.5 py-0.5 text-xs font-mono text-[#9CA0A6] ring-1 ring-neutral-200">New</span>
+              </div>
               <div class="grid gap-3">
                 <div class="grid gap-1">
                   <label class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62]">Subject</label>
@@ -516,10 +521,10 @@ function isClosedLike(status: string | null | undefined) {
                       </svg>
                     </span>
                     <input
-                      v-model="quickCreateForm.subject"
+                      v-model="draft.subject"
                       placeholder="Enter task subject"
-                      class="w-full rounded-lg border border-[#D0D1D2] bg-white py-2 pr-3 pl-9 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
-                      @keydown.enter="emit('createChildTicket')"
+                      class="w-full rounded-lg border border-[#D0D1D2] bg-white py-1 pr-3 pl-9 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                      @keydown.enter="emit('createChildTicket', draft.id)"
                     />
                   </div>
                 </div>
@@ -534,10 +539,10 @@ function isClosedLike(status: string | null | undefined) {
                       </svg>
                     </span>
                     <textarea
-                      v-model="quickCreateForm.description"
+                      v-model="draft.description"
                       rows="2"
                       placeholder="Description (optional)"
-                      class="w-full rounded-lg border border-[#D0D1D2] bg-white py-2 pr-3 pl-9 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                      class="w-full rounded-lg border border-[#D0D1D2] bg-white py-1 pr-3 pl-9 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
                     ></textarea>
                   </div>
                 </div>
@@ -553,8 +558,8 @@ function isClosedLike(status: string | null | undefined) {
                         </svg>
                       </span>
                       <select
-                        v-model="quickCreateForm.tracker"
-                        class="w-full rounded-lg border border-[#D0D1D2] bg-white py-2 pr-3 pl-9 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                        v-model="draft.tracker"
+                        class="w-full rounded-lg border border-[#D0D1D2] bg-white py-1 pr-3 pl-9 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
                       >
                         <option v-for="tracker in quickCreateTrackerOptions" :key="tracker.id" :value="tracker.name">{{ tracker.name }}</option>
                       </select>
@@ -570,8 +575,8 @@ function isClosedLike(status: string | null | undefined) {
                         </svg>
                       </span>
                       <select
-                        v-model="quickCreateForm.assignee_id"
-                        class="w-full rounded-lg border border-[#D0D1D2] bg-white py-2 pr-3 pl-9 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                        v-model="draft.assignee_id"
+                        class="w-full rounded-lg border border-[#D0D1D2] bg-white py-1 pr-3 pl-9 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
                       >
                         <option :value="null">Unassigned</option>
                         <option v-for="assignee in assigneeOptions" :key="assignee.id" :value="assignee.id">{{ assignee.name }}</option>
@@ -581,19 +586,19 @@ function isClosedLike(status: string | null | undefined) {
                   <div class="grid gap-1">
                     <label class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62]">Parent ID</label>
                     <input
-                      v-model.number="quickCreateForm.parent_issue_id"
+                      v-model.number="draft.parent_issue_id"
                       type="number"
                       min="1"
-                      class="w-full rounded-lg border border-[#D0D1D2] bg-white px-2 py-2 text-sm font-mono text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                      class="w-full rounded-lg border border-[#D0D1D2] bg-white px-2 py-1 text-sm font-mono text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
                     />
                   </div>
                   <div class="flex flex-wrap items-center gap-2 md:justify-end">
                     <button
                       type="button"
-                      class="inline-flex min-h-10 items-center justify-center gap-1 rounded-lg bg-[#3E6AE1] px-3 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60 md:w-10 md:px-0"
+                      class="inline-flex min-h-10 items-center justify-center gap-1 rounded-lg bg-[#3E6AE1] px-3 py-1 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60 md:w-10 md:px-0"
                       :disabled="creatingChild"
                       :title="creatingChild ? 'Creating task' : 'Create task'"
-                      @click="emit('createChildTicket')"
+                      @click="emit('createChildTicket', draft.id)"
                     >
                       <LoadingCircle v-if="creatingChild" class="md:size-4" />
                       <svg v-else viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -603,10 +608,10 @@ function isClosedLike(status: string | null | undefined) {
                     </button>
                     <button
                       type="button"
-                      class="inline-flex min-h-10 items-center justify-center gap-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 md:w-10 md:px-0"
+                      class="inline-flex min-h-10 items-center justify-center gap-1 rounded-lg border border-neutral-200 bg-white px-3 py-1 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 md:w-10 md:px-0"
                       :disabled="creatingChild"
                       title="Cancel task form"
-                      @click="emit('cancelQuickCreate')"
+                      @click="emit('cancelQuickCreate', draft.id)"
                     >
                       <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="m5 5 10 10"></path>

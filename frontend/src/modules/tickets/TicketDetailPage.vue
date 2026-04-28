@@ -28,14 +28,17 @@ const saving = ref(false);
 const deletingManagedJpIssueId = ref<number | null>(null);
 const suggestSyncJpIssueId = ref<number | null>(null);
 const creatingChild = ref(false);
-const quickCreateOpenIssueId = ref<number | null>(null);
-const quickCreateForm = reactive({
-  tracker: "Sub-task",
-  parent_issue_id: null as number | null,
-  subject: "",
-  description: "",
-  assignee_id: sessionState.userSettings.default_assignee_id as number | null
-});
+type QuickCreateDraft = {
+  id: number;
+  tracker: string;
+  parent_issue_id: number | null;
+  subject: string;
+  description: string;
+  assignee_id: number | null;
+};
+const quickCreateForms = reactive<QuickCreateDraft[]>([]);
+let quickCreateDraftId = 0;
+const defaultQuickCreateAssigneeId = () => sessionState.userSettings.default_assignee_id ?? sessionState.assignees[0]?.id ?? null;
 const AUTO_SEARCH_DELAY_MS = 500;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let skipNextAutoSearch = false;
@@ -58,9 +61,6 @@ async function loadOptions() {
     showToast((error as Error).message, "error");
   }
   assigneeOptions.value = sessionState.assignees;
-  if (!quickCreateForm.assignee_id) {
-    quickCreateForm.assignee_id = sessionState.userSettings.default_assignee_id ?? sessionState.assignees[0]?.id ?? null;
-  }
 }
 
 function parseJpIssueInput(value: string) {
@@ -83,10 +83,11 @@ function snapshotEdit(issueId: number, status: string, assignee: string) {
 
 async function loadByJpIssueId(
   jpIssueId: number,
-  options?: { notifyLoaded?: boolean; notifyMissing?: boolean }
+  options?: { notifyLoaded?: boolean; notifyMissing?: boolean; preserveQuickCreate?: boolean }
 ): Promise<boolean> {
   const notifyLoaded = options?.notifyLoaded ?? true;
   const notifyMissing = options?.notifyMissing ?? true;
+  const preserveQuickCreate = options?.preserveQuickCreate ?? false;
   loadingDetail.value = true;
   try {
     const searchResult = await ticketsApi.search(jpIssueId);
@@ -101,10 +102,9 @@ async function loadByJpIssueId(
 
     ticketDetail.value = await ticketsApi.detail(jpIssueId);
     ticketSearch.value = String(jpIssueId);
-    quickCreateOpenIssueId.value = null;
-    quickCreateForm.subject = "";
-    quickCreateForm.description = "";
-    quickCreateForm.parent_issue_id = null;
+    if (!preserveQuickCreate) {
+      quickCreateForms.splice(0);
+    }
     suggestSyncJpIssueId.value = null;
     snapshotEdit(
       ticketDetail.value.vn_issue.issue_id,
@@ -331,27 +331,38 @@ function openQuickCreate(issueId?: number) {
     return;
   }
 
-  quickCreateOpenIssueId.value = issueId ?? ticketDetail.value.vn_issue.issue_id;
-  quickCreateForm.tracker = "Sub-task";
-  quickCreateForm.parent_issue_id = quickCreateOpenIssueId.value;
-  quickCreateForm.subject = "";
-  quickCreateForm.description = "";
-  quickCreateForm.assignee_id = sessionState.userSettings.default_assignee_id ?? sessionState.assignees[0]?.id ?? null;
+  quickCreateForms.push({
+    id: ++quickCreateDraftId,
+    tracker: "Sub-task",
+    parent_issue_id: issueId ?? ticketDetail.value.vn_issue.issue_id,
+    subject: "",
+    description: "",
+    assignee_id: defaultQuickCreateAssigneeId()
+  });
 }
 
-function cancelQuickCreate() {
-  quickCreateOpenIssueId.value = null;
-  quickCreateForm.parent_issue_id = null;
-  quickCreateForm.subject = "";
-  quickCreateForm.description = "";
+function cancelQuickCreate(draftId?: number) {
+  if (draftId != null) {
+    const draftIndex = quickCreateForms.findIndex((draft) => draft.id === draftId);
+    if (draftIndex >= 0) {
+      quickCreateForms.splice(draftIndex, 1);
+    }
+    return;
+  }
+  quickCreateForms.splice(0);
 }
 
-async function createChildTicket() {
-  if (!ticketDetail.value || !quickCreateForm.parent_issue_id) {
+async function createChildTicket(draftId?: number) {
+  const draft = draftId != null ? quickCreateForms.find((item) => item.id === draftId) : null;
+  if (!draft) {
+    showToast("Task row is no longer available", "warning");
+    return;
+  }
+  if (!ticketDetail.value || !draft.parent_issue_id) {
     showToast("Select a parent issue first", "warning");
     return;
   }
-  if (!quickCreateForm.subject.trim()) {
+  if (!draft.subject.trim()) {
     showToast("Enter a task subject", "warning");
     return;
   }
@@ -359,15 +370,15 @@ async function createChildTicket() {
   creatingChild.value = true;
   try {
     const created = await ticketsApi.createChild(ticketDetail.value.jp_issue_id, {
-      parent_issue_id: quickCreateForm.parent_issue_id,
-      subject: quickCreateForm.subject.trim(),
-      description: quickCreateForm.description.trim() || null,
-      assignee_id: quickCreateForm.assignee_id,
-      tracker: quickCreateForm.tracker
+      parent_issue_id: draft.parent_issue_id,
+      subject: draft.subject.trim(),
+      description: draft.description.trim() || null,
+      assignee_id: draft.assignee_id,
+      tracker: draft.tracker
     });
     showToast(`Created ${created.tracker} #${created.issue_id}`, "success");
-    cancelQuickCreate();
-    await load();
+    cancelQuickCreate(draftId);
+    await loadByJpIssueId(ticketDetail.value.jp_issue_id, { notifyLoaded: false, preserveQuickCreate: true });
   } catch (error) {
     showToast((error as Error).message, "error");
   } finally {
@@ -398,10 +409,7 @@ async function deleteManagedTicket(jpIssueId: number) {
     if (ticketDetail.value?.jp_issue_id === jpIssueId) {
       ticketDetail.value = null;
       ticketSearch.value = "";
-      quickCreateOpenIssueId.value = null;
-      quickCreateForm.parent_issue_id = null;
-      quickCreateForm.subject = "";
-      quickCreateForm.description = "";
+      quickCreateForms.splice(0);
       await syncDetailRoute(null);
     }
     suggestSyncJpIssueId.value = jpIssueId;
@@ -506,8 +514,7 @@ onBeforeUnmount(() => {
     :ticket-detail="ticketDetail"
     :loading-detail="loadingDetail"
     :ticket-edit="ticketEdit"
-    :quick-create-open-issue-id="quickCreateOpenIssueId"
-    :quick-create-form="quickCreateForm"
+    :quick-create-forms="quickCreateForms"
     :tracker-options="sessionState.trackers"
     :creating-child="creatingChild"
     :link-form="linkForm"
