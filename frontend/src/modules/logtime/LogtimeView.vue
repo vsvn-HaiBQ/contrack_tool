@@ -194,7 +194,7 @@ const formattedHeaderDate = computed(() => {
               <div
                 v-for="item in group.children"
                 :key="item.row.issue_id"
-                class="grid gap-2 border-b border-neutral-200 px-1 py-1 last:border-b-0 md:grid-cols-[minmax(132px,0.68fr)_minmax(0,3.2fr)_minmax(115px,0.62fr)_minmax(115px,0.62fr)_minmax(115px,0.58fr)_60px] md:items-center"
+                class="grid gap-2 border-b border-neutral-200 px-2 py-1 last:border-b-0 md:grid-cols-[minmax(132px,0.68fr)_minmax(0,3.2fr)_minmax(115px,0.62fr)_minmax(115px,0.62fr)_minmax(115px,0.58fr)_60px] md:items-center"
               >
                 <div class="flex min-w-0 flex-wrap items-center gap-2">
                   <span class="inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-semibold" :class="trackerBadgeClass(item.row.tracker)">

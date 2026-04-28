@@ -14,6 +14,11 @@ type Group =
   | { type: "rows"; rows: { row: GitEolDiffRow; index: number }[] }
   | { type: "fold"; rows: { row: GitEolDiffRow; index: number }[]; key: string };
 
+type DiffTextToken =
+  | { type: "text"; value: string }
+  | { type: "space" }
+  | { type: "tab" };
+
 const expandedFolds = reactive<Record<string, boolean>>({});
 
 const groups = computed<Group[]>(() => {
@@ -92,8 +97,8 @@ const innerMinWidth = computed(() => {
   if (!props.diff) return "100%";
   let max = 0;
   for (const r of props.diff.rows) {
-    if (r.left?.text) max = Math.max(max, r.left.text.length);
-    if (r.right?.text) max = Math.max(max, r.right.text.length);
+    if (r.left?.text) max = Math.max(max, diffTextVisualLength(r.left.text));
+    if (r.right?.text) max = Math.max(max, diffTextVisualLength(r.right.text));
   }
   // monospace ~0.62em per char + a little padding for the EOL glyph
   const sideEm = Math.max(20, max + 2) * 0.62;
@@ -155,6 +160,32 @@ function eolTitle(eol?: string | null): string {
   if (eol === "cr") return "CR (\\r)";
   if (eol === "none") return "no end-of-line";
   return "";
+}
+
+function diffTextVisualLength(text: string): number {
+  return text.replace(/\t/g, "    ").length;
+}
+
+function tokenizeDiffText(text?: string | null): DiffTextToken[] {
+  if (!text) return [];
+
+  const tokens: DiffTextToken[] = [];
+  let current = "";
+
+  for (const char of text) {
+    if (char === " " || char === "\t") {
+      if (current) {
+        tokens.push({ type: "text", value: current });
+        current = "";
+      }
+      tokens.push(char === " " ? { type: "space" } : { type: "tab" });
+    } else {
+      current += char;
+    }
+  }
+
+  if (current) tokens.push({ type: "text", value: current });
+  return tokens;
 }
 
 function expandFold(key: string) {
@@ -221,7 +252,11 @@ function collapseFold(key: string) {
               {{ entry.row.left?.lineno ?? "" }}
             </div>
             <div class="overflow-hidden px-3 whitespace-pre-wrap" :class="[leftCellClass(entry.row.type), leftTextColor(entry.row.type)]">
-              <span>{{ entry.row.left?.text ?? "" }}</span>
+              <template v-for="(token, tokenIndex) in tokenizeDiffText(entry.row.left?.text)" :key="`left-${entry.index}-${tokenIndex}`">
+                <span v-if="token.type === 'text'">{{ token.value }}</span>
+                <span v-else-if="token.type === 'space'" class="text-neutral-400/60">·</span>
+                <span v-else class="inline-block w-[4ch] text-center text-neutral-400/60">-&gt;</span>
+              </template>
               <span
                 v-if="entry.row.left"
                 class="ml-1 select-none text-neutral-400"
@@ -232,7 +267,11 @@ function collapseFold(key: string) {
               {{ entry.row.right?.lineno ?? "" }}
             </div>
             <div class="overflow-hidden px-3 whitespace-pre-wrap" :class="[rightCellClass(entry.row.type), rightTextColor(entry.row.type)]">
-              <span>{{ entry.row.right?.text ?? "" }}</span>
+              <template v-for="(token, tokenIndex) in tokenizeDiffText(entry.row.right?.text)" :key="`right-${entry.index}-${tokenIndex}`">
+                <span v-if="token.type === 'text'">{{ token.value }}</span>
+                <span v-else-if="token.type === 'space'" class="text-neutral-400/60">·</span>
+                <span v-else class="inline-block w-[4ch] text-center text-neutral-400/60">-&gt;</span>
+              </template>
               <span
                 v-if="entry.row.right"
                 class="ml-1 select-none text-neutral-400"
