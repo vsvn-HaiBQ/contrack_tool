@@ -13,6 +13,8 @@ from app.modules.users.dependencies import get_current_user_settings
 from app.schemas import (
     AssigneeOption,
     ChangePasswordRequest,
+    LocalPathsIn,
+    LocalPathsOut,
     MessageResponse,
     PasswordResetRequest,
     TrackerOption,
@@ -23,7 +25,9 @@ from app.schemas import (
 )
 from app.modules.users.service import (
     apply_user_settings,
+    apply_local_paths,
     create_user_record,
+    serialize_local_paths,
     serialize_user_settings,
     update_password,
     validate_password,
@@ -178,6 +182,33 @@ def update_my_settings(
     db.commit()
     db.refresh(settings)
     return serialize_user_settings(settings)
+
+
+@router.get("/me/local-paths", response_model=LocalPathsOut)
+def get_my_local_paths(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> LocalPathsOut:
+    settings = db.get(UserSettings, user.id)
+    if not settings:
+        settings = UserSettings(user_id=user.id)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return LocalPathsOut(**serialize_local_paths(settings))
+
+
+@router.put("/me/local-paths", response_model=LocalPathsOut)
+def update_my_local_paths(
+    payload: LocalPathsIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LocalPathsOut:
+    settings = db.get(UserSettings, user.id)
+    if not settings:
+        settings = UserSettings(user_id=user.id)
+        db.add(settings)
+    apply_local_paths(settings, **payload.model_dump(exclude_unset=True))
+    db.commit()
+    db.refresh(settings)
+    return LocalPathsOut(**serialize_local_paths(settings))
 
 
 @router.get("/assignees", response_model=list[AssigneeOption])

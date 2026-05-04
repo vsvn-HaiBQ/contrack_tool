@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import GitEolView from "./GitEolView.vue";
 import { gitEolApi } from "./api";
-import { electronApi, isElectronClient } from "../../shared/electron";
+import { localServerApi, localServerBase } from "../../shared/localServer";
 import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
+import { usersApi } from "../users/api";
 import type {
   GitEolCommitResult,
   GitEolFixResult,
@@ -15,7 +16,7 @@ import type {
 } from "../../shared/types";
 
 const form = reactive({
-  mode: (isElectronClient() ? "working_tree" : "branch") as "branch" | "working_tree",
+  mode: "working_tree" as "branch" | "working_tree",
   base_branch: "",
   source_branch: "",
   local_source_folder: ""
@@ -43,8 +44,8 @@ const jobId = ref<string | null>(null);
 const jobStatus = ref<"queued" | "running" | "succeeded" | "failed" | "idle">("idle");
 const jobLogs = ref<GitEolJobLog[]>([]);
 const jobError = ref<string | null>(null);
+const localServerOnline = ref(false);
 let eventSource: EventSource | null = null;
-let pollTimer: number | null = null;
 
 const loadingPreview = computed(() => jobStatus.value === "queued" || jobStatus.value === "running");
 const isWorkingTreeMode = computed(() => form.mode === "working_tree");
@@ -56,6 +57,10 @@ const selectedPaths = computed(() =>
 const selectedResultPaths = computed(() =>
   Object.keys(selectedResultFiles).filter((k) => selectedResultFiles[k])
 );
+
+function hasFixedOutput(file: GitEolFixResult["fixed_files"][number]) {
+  return Boolean(file.committable || file.worktree_changed || file.restored_eol_lines > 0);
+}
 
 function clearMap(target: Record<string, unknown>) {
   Object.keys(target).forEach((key) => delete target[key]);
@@ -88,10 +93,6 @@ function closeStream() {
   if (eventSource) {
     eventSource.close();
     eventSource = null;
-  }
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer);
-    pollTimer = null;
   }
 }
 
@@ -140,11 +141,6 @@ async function loadPreview() {
 }
 
 async function loadWorkingTreePreview() {
-  const api = electronApi();
-  if (!api) {
-    showToast("Working Tree mode chỉ chạy trong Electron client", "warning");
-    return;
-  }
   if (!form.local_source_folder.trim()) {
     showToast("Target source folder is required", "warning");
     return;
@@ -158,21 +154,23 @@ async function loadWorkingTreePreview() {
   jobStatus.value = "running";
   jobId.value = null;
   try {
-    await api.setSetting("paths.gitEolSourceFolder", form.local_source_folder);
+    form.local_source_folder = await validateLocalDirectory(form.local_source_folder, "Source folder");
+    await usersApi.updateLocalPaths({ git_eol_source_folder: form.local_source_folder });
     pushLog({
       ts: Date.now() / 1000,
       level: "info",
-      source: "electron",
+      source: "local-node",
       message: `Comparing working tree with HEAD at ${form.local_source_folder}`
     });
-    preview.value = await api.gitEol.previewWorkingTree({ sourceFolder: form.local_source_folder });
+    preview.value = await localServerApi.gitEol.previewWorkingTree({ sourceFolder: form.local_source_folder });
+    localServerOnline.value = true;
     syncSelectedFiles(preview.value);
     jobStatus.value = "succeeded";
     const processableCount = preview.value.files.filter((file) => file.processable).length;
     pushLog({
       ts: Date.now() / 1000,
       level: "info",
-      source: "electron",
+      source: "local-node",
       message: `Preview ready: ${processableCount} processable files`
     });
     showToast(`Preview ready: ${processableCount} processable files`, processableCount ? "success" : "warning");
@@ -182,7 +180,7 @@ async function loadWorkingTreePreview() {
     pushLog({
       ts: Date.now() / 1000,
       level: "error",
-      source: "electron",
+      source: "local-node",
       message: (error as Error).message
     });
     showToast((error as Error).message, "error");
@@ -190,36 +188,7 @@ async function loadWorkingTreePreview() {
 }
 
 function openStream(id: string) {
-  if (isElectronClient()) {
-    pollTimer = window.setInterval(async () => {
-      try {
-        const [status, logs] = await Promise.all([gitEolApi.job(id), gitEolApi.jobLogs(id)]);
-        jobLogs.value = logs;
-        jobStatus.value = status.status as typeof jobStatus.value;
-        if (status.status === "succeeded" && status.result) {
-          preview.value = status.result;
-          syncSelectedFiles(preview.value);
-          const processableCount = preview.value.files.filter((file) => file.processable).length;
-          showToast(`Preview ready: ${processableCount} processable files`, processableCount ? "success" : "warning");
-          closeStream();
-        } else if (status.status === "failed") {
-          jobError.value = status.error || "Preview failed";
-          showToast(jobError.value, "error");
-          closeStream();
-        }
-      } catch (error) {
-        pushLog({
-          ts: Date.now() / 1000,
-          level: "warn",
-          source: "system",
-          message: `Polling failed: ${(error as Error).message}`
-        });
-      }
-    }, 1000);
-    return;
-  }
-  const url = gitEolApi.jobStreamUrl(id);
-  const source = new EventSource(url, { withCredentials: true });
+  const source = new EventSource(gitEolApi.jobStreamUrl(id), { withCredentials: true });
   eventSource = source;
 
   source.onmessage = (event) => {
@@ -242,7 +211,7 @@ function openStream(id: string) {
         closeStream();
       } else if (status === "failed") {
         jobError.value = payload.status.error || "Preview failed";
-        showToast(jobError.value!, "error");
+        showToast(jobError.value, "error");
         closeStream();
       }
     } else if (payload.type === "error") {
@@ -275,13 +244,9 @@ async function loadDiff(
   if (!force && cache[path]) return;
   loading[path] = true;
   try {
-    if (isWorkingTreeMode.value) {
-      const api = electronApi();
-      if (!api) throw new Error("Electron client is required for local diff");
-      cache[path] = await api.gitEol.structuredDiff({ sessionId: preview.value.session_id, path });
-    } else {
-      cache[path] = await gitEolApi.diff(preview.value.session_id, path);
-    }
+    cache[path] = isWorkingTreeMode.value
+      ? await localServerApi.gitEol.structuredDiff({ sessionId: preview.value.session_id, path })
+      : await gitEolApi.diff(preview.value.session_id, path);
   } catch (error) {
     cache[path] = {
       session_id: preview.value.session_id,
@@ -330,24 +295,31 @@ async function fixSelectedFiles() {
   clearMap(resultDiffLoading);
   clearMap(selectedResultFiles);
   try {
+    fixResult.value = isWorkingTreeMode.value
+      ? await localServerApi.gitEol.fixWorkingTree({
+          sessionId: preview.value.session_id,
+          files: selectedPaths.value
+        })
+      : await gitEolApi.fix({
+          session_id: preview.value.session_id,
+          files: selectedPaths.value
+        });
     if (isWorkingTreeMode.value) {
-      const api = electronApi();
-      if (!api) throw new Error("Electron client is required for local EOL fix");
-      fixResult.value = await api.gitEol.fixWorkingTree({
-        sessionId: preview.value.session_id,
-        files: selectedPaths.value
-      });
+      const appliedCount = fixResult.value.fixed_files.filter((f) => f.worktree_changed).length;
+      const committableCount = fixResult.value.fixed_files.filter((f) => f.committable).length;
+      showToast(
+        appliedCount || committableCount
+          ? `Applied ${appliedCount} file(s); ${committableCount} file(s) ready to commit`
+          : "No EOL changes were needed",
+        appliedCount || committableCount ? "success" : "warning"
+      );
     } else {
-      fixResult.value = await gitEolApi.fix({
-        session_id: preview.value.session_id,
-        files: selectedPaths.value
-      });
+      showToast(`Restored ${fixResult.value.total_restored_eol_lines} EOL lines`, "success");
     }
-    showToast(`Restored ${fixResult.value.total_restored_eol_lines} EOL lines`, "success");
     // Auto-select all changed fixed files for commit
     clearMap(selectedResultFiles);
     fixResult.value.fixed_files
-      .filter((f) => f.worktree_changed ?? f.restored_eol_lines > 0)
+      .filter(hasFixedOutput)
       .forEach((f) => { selectedResultFiles[f.path] = true; });
     // Invalidate diffs of fixed files (worktree changed) and refresh open ones.
     const fixedPaths = fixResult.value.fixed_files.map((file) => file.path);
@@ -366,66 +338,6 @@ async function fixSelectedFiles() {
   }
 }
 
-async function commitChanges() {
-  if (!preview.value || !fixResult.value) {
-    showToast("Fix EOL first", "warning");
-    return;
-  }
-
-  committing.value = true;
-  commitResult.value = null;
-  pushResult.value = null;
-  try {
-    if (isWorkingTreeMode.value) {
-      const api = electronApi();
-      if (!api) throw new Error("Electron client is required for local commit");
-      commitResult.value = await api.gitEol.commitWorkingTree({
-        sessionId: preview.value.session_id,
-        message: commitForm.message
-      });
-    } else {
-      commitResult.value = await gitEolApi.commit({
-        session_id: preview.value.session_id,
-        message: commitForm.message
-      });
-    }
-    showToast(commitResult.value.committed ? "EOL fix committed" : commitResult.value.message, commitResult.value.committed ? "success" : "warning");
-  } catch (error) {
-    showToast((error as Error).message, "error");
-  } finally {
-    committing.value = false;
-  }
-}
-
-async function pushBranch() {
-  if (!preview.value || !commitResult.value?.committed) {
-    showToast("Commit before push", "warning");
-    return;
-  }
-
-  pushing.value = true;
-  pushResult.value = null;
-  try {
-    if (isWorkingTreeMode.value) {
-      const api = electronApi();
-      if (!api) throw new Error("Electron client is required for local push");
-      pushResult.value = await api.gitEol.pushWorkingTree({
-        sessionId: preview.value.session_id,
-        githubToken: sessionState.userSettings.github_token
-      });
-    } else {
-      pushResult.value = await gitEolApi.push({
-        session_id: preview.value.session_id
-      });
-    }
-    showToast("Branch pushed", "success");
-  } catch (error) {
-    showToast((error as Error).message, "error");
-  } finally {
-    pushing.value = false;
-  }
-}
-
 async function commitAndPushBranch() {
   if (!preview.value || !fixResult.value) {
     showToast("Fix EOL first", "warning");
@@ -437,32 +349,25 @@ async function commitAndPushBranch() {
   commitResult.value = null;
   pushResult.value = null;
   try {
-    if (isWorkingTreeMode.value) {
-      const api = electronApi();
-      if (!api) throw new Error("Electron client is required for local commit");
-      commitResult.value = await api.gitEol.commitWorkingTree({
-        sessionId: preview.value.session_id,
-        message: commitForm.message
-      });
-    } else {
-      commitResult.value = await gitEolApi.commit({
-        session_id: preview.value.session_id,
-        message: commitForm.message
-      });
-    }
+    commitResult.value = isWorkingTreeMode.value
+      ? await localServerApi.gitEol.commitWorkingTree({
+          sessionId: preview.value.session_id,
+          message: commitForm.message
+        })
+      : await gitEolApi.commit({
+          session_id: preview.value.session_id,
+          message: commitForm.message
+        });
     if (!commitResult.value.committed) {
       showToast(commitResult.value.message, "warning");
       return;
     }
-    if (isWorkingTreeMode.value) {
-      const api = electronApi();
-      pushResult.value = await api!.gitEol.pushWorkingTree({
-        sessionId: preview.value.session_id,
-        githubToken: sessionState.userSettings.github_token
-      });
-    } else {
-      pushResult.value = await gitEolApi.push({ session_id: preview.value.session_id });
-    }
+    pushResult.value = isWorkingTreeMode.value
+      ? await localServerApi.gitEol.pushWorkingTree({
+          sessionId: preview.value.session_id,
+          githubToken: sessionState.userSettings.github_token
+        })
+      : await gitEolApi.push({ session_id: preview.value.session_id });
     showToast("Committed and pushed", "success");
   } catch (error) {
     showToast((error as Error).message, "error");
@@ -499,19 +404,43 @@ watch(
 );
 
 async function browseLocalSourceFolder() {
-  const api = electronApi();
-  if (!api) return;
-  const selected = await api.selectDirectory(form.local_source_folder);
-  if (selected) {
-    form.local_source_folder = selected;
-    await api.setSetting("paths.gitEolSourceFolder", selected);
+  try {
+    const selected = await localServerApi.selectDirectory(form.local_source_folder);
+    if (selected) {
+      form.local_source_folder = await validateLocalDirectory(selected, "Source folder");
+      await usersApi.updateLocalPaths({ git_eol_source_folder: form.local_source_folder });
+    }
+  } catch (error) {
+    showToast((error as Error).message, "error");
   }
 }
 
+async function validateLocalDirectory(path: string, label: string) {
+  const result = await localServerApi.validatePath(path, true);
+  if (!result.valid) {
+    throw new Error(`${label}: ${result.message}`);
+  }
+  localServerOnline.value = true;
+  return result.path;
+}
+
 async function loadLocalPathSetting() {
-  const api = electronApi();
-  if (!api) return;
-  form.local_source_folder = (await api.getSetting<string>("paths.gitEolSourceFolder")) || "";
+  try {
+    const health = await localServerApi.health();
+    localServerOnline.value = Boolean(health.ok);
+  } catch {
+    localServerOnline.value = false;
+    return;
+  }
+
+  try {
+    const paths = await usersApi.localPaths();
+    if (paths.git_eol_source_folder?.trim()) {
+      form.local_source_folder = await validateLocalDirectory(paths.git_eol_source_folder, "Saved source folder");
+    }
+  } catch (error) {
+    showToast((error as Error).message, "warning");
+  }
 }
 
 watch(
@@ -524,17 +453,16 @@ watch(
   { immediate: true }
 );
 
-onBeforeUnmount(() => {
-  closeStream();
-});
-
-loadLocalPathSetting();
+onBeforeUnmount(closeStream);
+onMounted(loadLocalPathSetting);
 </script>
 
 <template>
   <GitEolView
     :form="form"
-    :electron-client="isElectronClient()"
+    :local-client="true"
+    :local-server-online="localServerOnline"
+    :local-server-base="localServerBase"
     :commit-form="commitForm"
     :preview="preview"
     :selected-files="selectedFiles"

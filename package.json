@@ -1,4 +1,11 @@
 {
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "build": "pnpm run build:web && pnpm run build:local-server",
+    "build:web": "pnpm --dir frontend build",
+    "build:local-server": "node local-server/scripts/build.cjs",
+    "local-server": "node local-server/server.cjs"
+  },
   "dependencies": {
     "pnpm": "^10.33.2"
   }

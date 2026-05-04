@@ -6,6 +6,8 @@ from app.core.security import decrypt_secret, encrypt_secret, hash_password
 from app.models import User, UserSettings
 from app.schemas import UserSettingsOut
 
+_UNSET = object()
+
 
 def create_user_record(db: Session, *, username: str, password: str, role: str) -> User:
     user = User(username=username, password_hash=hash_password(password), role=role)
@@ -40,6 +42,36 @@ def apply_user_settings(
     settings.redmine_vn_api_key_enc = encrypt_secret(redmine_vn_api_key)
     settings.github_token_enc = encrypt_secret(github_token)
     settings.default_assignee_id = default_assignee_id
+
+
+def serialize_local_paths(settings: UserSettings) -> dict[str, str | None]:
+    return {
+        "build_source_folder": settings.build_source_folder,
+        "build_output_folder": settings.build_output_folder,
+        "git_eol_source_folder": settings.git_eol_source_folder,
+    }
+
+
+def normalize_local_path(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def apply_local_paths(
+    settings: UserSettings,
+    *,
+    build_source_folder: object = _UNSET,
+    build_output_folder: object = _UNSET,
+    git_eol_source_folder: object = _UNSET,
+) -> None:
+    if build_source_folder is not _UNSET:
+        settings.build_source_folder = normalize_local_path(build_source_folder if isinstance(build_source_folder, str) else None)
+    if build_output_folder is not _UNSET:
+        settings.build_output_folder = normalize_local_path(build_output_folder if isinstance(build_output_folder, str) else None)
+    if git_eol_source_folder is not _UNSET:
+        settings.git_eol_source_folder = normalize_local_path(git_eol_source_folder if isinstance(git_eol_source_folder, str) else None)
 
 
 def validate_username(username: str) -> str:

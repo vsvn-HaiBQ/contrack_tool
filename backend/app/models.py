@@ -34,6 +34,9 @@ class UserSettings(Base):
     redmine_vn_api_key_enc: Mapped[str | None] = mapped_column(Text)
     github_token_enc: Mapped[str | None] = mapped_column(Text)
     default_assignee_id: Mapped[int | None] = mapped_column(Integer)
+    build_source_folder: Mapped[str | None] = mapped_column(Text)
+    build_output_folder: Mapped[str | None] = mapped_column(Text)
+    git_eol_source_folder: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

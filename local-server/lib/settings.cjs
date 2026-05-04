@@ -1,15 +1,16 @@
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
-const { app } = require("electron");
 
 let cachedSettings = null;
 
 function settingsFile() {
-  return path.join(app.getPath("userData"), "settings.json");
+  const dataDir = process.env.CONTRACK_LOCAL_DATA_DIR || path.join(os.homedir(), ".contrack-client");
+  return path.join(dataDir, "settings.json");
 }
 
 function appRoot() {
-  if (app.isPackaged) {
+  if (process.pkg) {
     return path.dirname(process.execPath);
   }
   return path.resolve(__dirname, "..");
@@ -50,10 +51,6 @@ function mergeDefaults(value) {
       ...((stored && stored.cookies) || {}),
     },
   };
-}
-
-function getApiBaseUrl() {
-  return process.env.CONTRACK_API_BASE || process.env.VITE_API_BASE || "http://localhost:8009/api";
 }
 
 function readSettings() {
@@ -109,16 +106,23 @@ function setSetting(key, value) {
 }
 
 function getBuildToolDir() {
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, "build");
+  if (process.env.CONTRACK_BUILD_TOOL_DIR) {
+    return path.resolve(process.env.CONTRACK_BUILD_TOOL_DIR);
   }
-  return path.resolve(__dirname, "..", "..", "build");
+  if (process.pkg) {
+    return path.join(path.dirname(process.execPath), "build");
+  }
+  const candidates = [
+    path.resolve(__dirname, "..", "build"),
+    path.resolve(__dirname, "..", "..", "build"),
+    path.resolve(process.cwd(), "build"),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[1];
 }
 
 module.exports = {
   appRoot,
   defaultPaths,
-  getApiBaseUrl,
   getBuildToolDir,
   getSetting,
   readSettings,

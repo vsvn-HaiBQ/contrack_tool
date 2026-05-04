@@ -14,17 +14,6 @@ export type IntegrationStatus = {
   message?: string | null;
 };
 
-export type ClientUpdateInfo = {
-  current_version?: string | null;
-  latest_version?: string | null;
-  has_update: boolean;
-  file_name?: string | null;
-  download_url?: string | null;
-  size_bytes?: number | null;
-  published_at?: string | null;
-  message: string;
-};
-
 export type BuildJobLog = {
   seq?: number;
   ts: number;
@@ -41,6 +30,7 @@ export type BuildArtifact = {
 
 export type BuildJob = {
   job_id: string;
+  target?: "client" | "server" | string;
   status: "queued" | "running" | "succeeded" | "failed" | string;
   error: string | null;
   logs: BuildJobLog[];
@@ -48,6 +38,7 @@ export type BuildJob = {
   artifacts: BuildArtifact[];
   created_at: number;
   updated_at: number;
+  target_jobs?: Partial<Record<"client" | "server" | string, BuildJob>>;
 };
 
 export type TicketCandidate = {
@@ -141,6 +132,7 @@ export type GitEolFixResult = {
     remaining_changed_lines: number;
     remaining_eol_only_lines: number;
     worktree_changed?: boolean;
+    committable?: boolean;
     message?: string | null;
   }>;
   skipped_files: Array<{ path: string; reason: string }>;

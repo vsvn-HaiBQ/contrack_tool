@@ -1,3 +1,12 @@
+FROM node:22-alpine AS frontend-build
+
+WORKDIR /frontend
+
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/tsconfig.json frontend/vite.config.ts frontend/index.html ./
+COPY frontend/public ./public
+COPY frontend/src ./src
+RUN corepack enable && pnpm install --frozen-lockfile && pnpm build
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -10,5 +19,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/app ./app
 COPY sql ./sql
+COPY --from=frontend-build /frontend/dist ./frontend_dist
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8009"]

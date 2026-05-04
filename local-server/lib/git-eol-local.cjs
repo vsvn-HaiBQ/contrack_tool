@@ -1,15 +1,18 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const sessions = new Map();
+const exactDiffCellLimit = 50_000_000;
 
 function git(repoPath, args, options = {}) {
   const result = spawnSync("git", args, {
     cwd: repoPath,
     encoding: options.encoding || "buffer",
-    env: tokenEnv(options.token),
+    env: { ...tokenEnv(options.token), ...(options.env || {}) },
+    input: options.input,
     maxBuffer: 1024 * 1024 * 100,
   });
   if (result.error) {
@@ -106,6 +109,18 @@ function gitObject(repoPath, rev, relativePath) {
   return git(repoPath, ["show", `${rev}:${relativePath}`]);
 }
 
+function gitObjectForWorktree(repoPath, rev, relativePath) {
+  return git(repoPath, ["cat-file", "--filters", `--path=${relativePath}`, `${rev}:${relativePath}`]);
+}
+
+function worktreeBytes(repoPath, relativePath) {
+  const absolute = safeFile(repoPath, relativePath);
+  if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) {
+    throw new Error(`File does not exist in working tree: ${relativePath}`);
+  }
+  return fs.readFileSync(absolute);
+}
+
 function isBinary(buffer) {
   return buffer.includes(0);
 }
@@ -165,7 +180,7 @@ function opcodes(leftLines, rightLines) {
   const right = lineKeys(rightLines);
   const n = left.length;
   const m = right.length;
-  if (n * m > 2500000) {
+  if (n * m > exactDiffCellLimit) {
     return positionalOpcodes(left, right);
   }
   const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
@@ -284,12 +299,13 @@ function previewWorkingTree({ sourceFolder }) {
     files,
   };
   sessions.set(sessionId, {
-    user_id: "electron-local",
+    user_id: "local-node",
     mode: "working_tree",
     repoPath,
     head,
     files,
     fixed_files: [],
+    fixed_blobs: new Map(),
     commit_sha: null,
   });
   return preview;
@@ -310,9 +326,8 @@ function previewFile(repoPath, entry) {
   }
   try {
     const oldPath = entry.old_path || entry.path;
-    const baseBytes = gitObject(repoPath, "HEAD", oldPath);
-    const filePath = safeFile(repoPath, entry.path);
-    const sourceBytes = fs.readFileSync(filePath);
+    const baseBytes = gitObjectForWorktree(repoPath, "HEAD", oldPath);
+    const sourceBytes = worktreeBytes(repoPath, entry.path);
     if (isBinary(baseBytes) || isBinary(sourceBytes)) {
       return { ...entry, selected: false, processable: false, reason: "Binary file", changed_lines: 0, eol_only_lines: 0 };
     }
@@ -357,12 +372,12 @@ function structuredDiff({ sessionId, path: filePath }) {
   let baseBytes = Buffer.alloc(0);
   let sourceBytes = Buffer.alloc(0);
   try {
-    baseBytes = gitObject(value.repoPath, "HEAD", oldPath);
+    baseBytes = gitObjectForWorktree(value.repoPath, "HEAD", oldPath);
   } catch {
     baseBytes = Buffer.alloc(0);
   }
   try {
-    sourceBytes = fs.readFileSync(safeFile(value.repoPath, filePath));
+    sourceBytes = worktreeBytes(value.repoPath, filePath);
   } catch {
     sourceBytes = Buffer.alloc(0);
   }
@@ -430,6 +445,7 @@ function fixWorkingTree({ sessionId, files }) {
   const fixedFiles = [];
   const skippedFiles = [];
   const failedFiles = [];
+  const fixedBlobs = new Map();
   for (const filePath of files || []) {
     const entry = fileMap.get(filePath);
     if (!entry) {
@@ -441,12 +457,17 @@ function fixWorkingTree({ sessionId, files }) {
       continue;
     }
     try {
-      fixedFiles.push(fixFile(value.repoPath, entry));
+      const fixed = fixFile(value.repoPath, entry);
+      fixedFiles.push(fixed.result);
+      if (fixed.blobBytes) {
+        fixedBlobs.set(entry.path, fixed.blobBytes);
+      }
     } catch (error) {
       failedFiles.push({ path: filePath, error: error.message });
     }
   }
   value.fixed_files = fixedFiles;
+  value.fixed_blobs = fixedBlobs;
   return {
     session_id: sessionId,
     fixed_files: fixedFiles,
@@ -458,82 +479,178 @@ function fixWorkingTree({ sessionId, files }) {
 
 function fixFile(repoPath, entry) {
   const oldPath = entry.old_path || entry.path;
-  const baseBytes = gitObject(repoPath, "HEAD", oldPath);
-  const filePath = safeFile(repoPath, entry.path);
-  const sourceBytes = fs.readFileSync(filePath);
-  if (isBinary(baseBytes) || isBinary(sourceBytes)) {
+  const baseBytes = gitObjectForWorktree(repoPath, "HEAD", oldPath);
+  const baseBlobBytes = gitObject(repoPath, "HEAD", oldPath);
+  const sourceBytes = worktreeBytes(repoPath, entry.path);
+  if (isBinary(baseBytes) || isBinary(baseBlobBytes) || isBinary(sourceBytes)) {
     throw new Error("Binary file");
   }
   const baseLines = splitLines(baseBytes);
   const sourceLines = splitLines(sourceBytes);
+  const restored = restoreComparableLineEols(baseLines, sourceLines);
+  const nextWorktreeBytes = joinLines(sourceLines);
+  const worktreeChanged = !sourceBytes.equals(nextWorktreeBytes);
+  if (worktreeChanged) {
+    fs.writeFileSync(safeFile(repoPath, entry.path), nextWorktreeBytes);
+  }
+
+  const baseBlobLines = splitLines(baseBlobBytes);
+  const blobLines = splitLines(nextWorktreeBytes);
+  restoreComparableLineEols(baseBlobLines, blobLines);
+  const nextBlobBytes = joinLines(blobLines);
+  const remaining = diffStats(baseBytes, nextWorktreeBytes);
+  const blobRemaining = diffStats(baseBlobBytes, nextBlobBytes);
+  const committable = blobRemaining.changed_lines > 0;
+  let message = null;
+  if (!committable && restored > 0) {
+    message = "Only EOL changes were applied to the working tree file";
+  } else if (restored === 0) {
+    message = committable ? "Content changes are ready without EOL rewrite" : "No EOL changes were needed";
+  } else {
+    message = "Applied EOL fix to the working tree file";
+  }
+  return {
+    result: {
+      path: entry.path,
+      restored_eol_lines: restored,
+      remaining_changed_lines: remaining.changed_lines,
+      remaining_eol_only_lines: remaining.eol_only_lines,
+      worktree_changed: worktreeChanged,
+      committable,
+      message,
+    },
+    blobBytes: committable ? nextBlobBytes : null,
+  };
+}
+
+function restoreComparableLineEols(baseLines, sourceLines) {
+  const fallbackEol = dominantEol(baseLines);
   let restored = 0;
   for (const op of opcodes(baseLines, sourceLines)) {
-    if (op.tag !== "equal") {
+    if (op.tag === "delete") {
       continue;
     }
-    for (let offset = 0; offset < op.i2 - op.i1; offset += 1) {
-      const baseLine = baseLines[op.i1 + offset];
-      const sourceLine = sourceLines[op.j1 + offset];
-      if (sourceLine.eol !== baseLine.eol) {
-        sourceLine.eol = baseLine.eol;
-        restored += 1;
+    if (op.tag === "equal") {
+      for (let offset = 0; offset < op.i2 - op.i1; offset += 1) {
+        const baseLine = baseLines[op.i1 + offset];
+        const sourceLine = sourceLines[op.j1 + offset];
+        if (!sourceLine || sourceLine.eol === "") {
+          continue;
+        }
+        const targetEol = baseLine && baseLine.eol ? baseLine.eol : fallbackEol;
+        if (targetEol && sourceLine.eol !== targetEol) {
+          sourceLine.eol = targetEol;
+          restored += 1;
+        }
+      }
+    } else if (op.tag === "insert") {
+      const targetEol = nearbyBaseEol(baseLines, op.i1) || fallbackEol;
+      for (let offset = 0; offset < op.j2 - op.j1; offset += 1) {
+        const sourceLine = sourceLines[op.j1 + offset];
+        if (!sourceLine || sourceLine.eol === "") {
+          continue;
+        }
+        if (targetEol && sourceLine.eol !== targetEol) {
+          sourceLine.eol = targetEol;
+          restored += 1;
+        }
       }
     }
   }
-  const nextBytes = joinLines(sourceLines);
-  const worktreeChanged = !nextBytes.equals(sourceBytes);
-  if (worktreeChanged) {
-    fs.writeFileSync(filePath, nextBytes);
+  return restored;
+}
+
+function nearbyBaseEol(lines, index) {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (lines[i] && lines[i].eol) {
+      return lines[i].eol;
+    }
   }
-  const remaining = diffStats(baseBytes, nextBytes);
-  let message = null;
-  if (restored > 0 && !worktreeChanged) {
-    message = "EOL was already aligned with the HEAD blob";
-  } else if (restored === 0) {
-    message = "No EOL changes were needed";
+  for (let i = index; i < lines.length; i += 1) {
+    if (lines[i] && lines[i].eol) {
+      return lines[i].eol;
+    }
   }
-  return {
-    path: entry.path,
-    restored_eol_lines: restored,
-    remaining_changed_lines: remaining.changed_lines,
-    remaining_eol_only_lines: remaining.eol_only_lines,
-    worktree_changed: worktreeChanged,
-    message,
-  };
+  return "";
+}
+
+function dominantEol(lines) {
+  const counts = new Map();
+  for (const line of lines) {
+    if (!line.eol) {
+      continue;
+    }
+    counts.set(line.eol, (counts.get(line.eol) || 0) + 1);
+  }
+  let winner = "";
+  let winnerCount = 0;
+  for (const [eol, count] of counts) {
+    if (count > winnerCount) {
+      winner = eol;
+      winnerCount = count;
+    }
+  }
+  return winner;
 }
 
 function commitWorkingTree({ sessionId, message }) {
   const value = session(sessionId);
-  const files = (value.fixed_files || []).map((item) => item.path);
+  const fixedBlobs = value.fixed_blobs instanceof Map ? value.fixed_blobs : new Map();
+  const files = (value.fixed_files || []).map((item) => item.path).filter((filePath) => fixedBlobs.has(filePath));
   if (!files.length) {
-    return { session_id: sessionId, committed: false, commit_sha: null, message: "No fixed files to commit", changed_files: [] };
+    return { session_id: sessionId, committed: false, commit_sha: null, message: "No committable content changes after ignoring EOL-only differences", changed_files: [] };
   }
-  for (const filePath of files) {
-    stageExactFile(value.repoPath, filePath);
+  const branch = gitText(value.repoPath, ["branch", "--show-current"]).trim();
+  if (!branch) {
+    throw new Error("Current repo is detached; cannot commit without a branch");
   }
-  const changed = git(value.repoPath, ["diff", "--cached", "--name-only", "-z", "--", ...files])
-    .toString("utf8")
-    .split("\0")
-    .filter(Boolean);
-  if (!changed.length) {
-    return { session_id: sessionId, committed: false, commit_sha: null, message: "No committable EOL changes after staging", changed_files: [] };
-  }
+  const parent = gitText(value.repoPath, ["rev-parse", "HEAD"]).trim();
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "contrack-git-index-"));
+  const tempEnv = { GIT_INDEX_FILE: path.join(tempDir, "index") };
+  const stagedBlobs = new Map();
   const commitMessage = message && message.trim() ? message.trim() : "Fix EOL noise";
-  git(value.repoPath, ["commit", "-m", commitMessage]);
-  const commitSha = gitText(value.repoPath, ["rev-parse", "HEAD"]).trim();
-  value.commit_sha = commitSha;
-  return { session_id: sessionId, committed: true, commit_sha: commitSha, message: commitMessage, changed_files: changed };
+  try {
+    git(value.repoPath, ["read-tree", "HEAD"], { env: tempEnv });
+    for (const filePath of files) {
+      const mode = trackedFileMode(value.repoPath, filePath, tempEnv);
+      const blob = writeBlob(value.repoPath, fixedBlobs.get(filePath));
+      updateIndexBlob(value.repoPath, filePath, mode, blob, tempEnv);
+      stagedBlobs.set(filePath, { mode, blob });
+    }
+    const tree = gitText(value.repoPath, ["write-tree"], { env: tempEnv }).trim();
+    const changed = git(value.repoPath, ["diff", "--name-only", "-z", "HEAD", tree, "--", ...files])
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean);
+    if (!changed.length) {
+      return { session_id: sessionId, committed: false, commit_sha: null, message: "No committable EOL changes after staging", changed_files: [] };
+    }
+    const commitSha = gitText(value.repoPath, ["commit-tree", tree, "-p", parent, "-m", commitMessage]).trim();
+    git(value.repoPath, ["update-ref", `refs/heads/${branch}`, commitSha, parent]);
+    for (const filePath of changed) {
+      const staged = stagedBlobs.get(filePath);
+      if (staged) {
+        updateIndexBlob(value.repoPath, filePath, staged.mode, staged.blob);
+      }
+    }
+    value.commit_sha = commitSha;
+    return { session_id: sessionId, committed: true, commit_sha: commitSha, message: commitMessage, changed_files: changed };
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
-function stageExactFile(repoPath, filePath) {
-  const absolute = safeFile(repoPath, filePath);
-  if (!fs.existsSync(absolute)) {
-    throw new Error(`Fixed file no longer exists: ${filePath}`);
-  }
-  const modeOutput = gitText(repoPath, ["ls-files", "-s", "--", filePath]).trim();
-  const mode = modeOutput ? modeOutput.split(/\s+/, 1)[0] : "100644";
-  const blob = gitText(repoPath, ["hash-object", "-w", "--no-filters", "--", filePath]).trim();
-  git(repoPath, ["update-index", "--add", "--cacheinfo", `${mode},${blob},${filePath}`]);
+function trackedFileMode(repoPath, filePath, env) {
+  const modeOutput = gitText(repoPath, ["ls-files", "-s", "--", filePath], { env }).trim();
+  return modeOutput ? modeOutput.split(/\s+/, 1)[0] : "100644";
+}
+
+function writeBlob(repoPath, blobBytes) {
+  return git(repoPath, ["hash-object", "-w", "--stdin"], { input: blobBytes }).toString("utf8").trim();
+}
+
+function updateIndexBlob(repoPath, filePath, mode, blob, env) {
+  git(repoPath, ["update-index", "--add", "--cacheinfo", `${mode},${blob},${filePath}`], { env });
 }
 
 function pushWorkingTree({ sessionId, githubToken }) {

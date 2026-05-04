@@ -66,6 +66,18 @@ class UserSettingsOut(BaseModel):
     default_assignee_id: int | None = None
 
 
+class LocalPathsIn(BaseModel):
+    build_source_folder: str | None = None
+    build_output_folder: str | None = None
+    git_eol_source_folder: str | None = None
+
+
+class LocalPathsOut(BaseModel):
+    build_source_folder: str | None = None
+    build_output_folder: str | None = None
+    git_eol_source_folder: str | None = None
+
+
 class SystemSettingsOut(BaseModel):
     values: dict[str, str | None]
 
@@ -88,17 +100,6 @@ class IntegrationStatusResponse(BaseModel):
 class IntegrationTestResponse(BaseModel):
     service: str
     success: bool
-    message: str
-
-
-class ClientUpdateResponse(BaseModel):
-    current_version: str | None = None
-    latest_version: str | None = None
-    has_update: bool = False
-    file_name: str | None = None
-    download_url: str | None = None
-    size_bytes: int | None = None
-    published_at: datetime | None = None
     message: str
 
 

@@ -6,7 +6,9 @@ import GitEolDiffTable from "./GitEolDiffTable.vue";
 
 const props = defineProps<{
   form: { mode: "branch" | "working_tree"; base_branch: string; source_branch: string; local_source_folder: string };
-  electronClient: boolean;
+  localClient: boolean;
+  localServerOnline: boolean;
+  localServerBase: string;
   commitForm: { message: string };
   preview: GitEolPreview | null;
   selectedFiles: Record<string, boolean>;
@@ -46,15 +48,18 @@ const emit = defineEmits<{
 
 const canPreview = computed(() => {
   if (props.form.mode === "working_tree") {
-    return props.electronClient && Boolean(props.form.local_source_folder.trim());
+    return props.localClient && Boolean(props.form.local_source_folder.trim());
   }
   return Boolean(props.form.base_branch.trim() && props.form.source_branch.trim());
 });
+function hasFixedOutput(file: GitEolFixResult["fixed_files"][number]) {
+  return Boolean(file.committable || file.worktree_changed || file.restored_eol_lines > 0);
+}
 const changedFixedFiles = computed(() =>
-  props.fixResult?.fixed_files.filter((f) => f.worktree_changed ?? f.restored_eol_lines > 0) ?? []
+  props.fixResult?.fixed_files.filter(hasFixedOutput) ?? []
 );
 const noChangeFixedFiles = computed(() =>
-  props.fixResult?.fixed_files.filter((f) => !(f.worktree_changed ?? f.restored_eol_lines > 0)) ?? []
+  props.fixResult?.fixed_files.filter((f) => !hasFixedOutput(f)) ?? []
 );
 const processableCount = computed(() => props.preview?.files.filter((file) => file.processable).length ?? 0);
 const showLogPanel = computed(() => props.jobStatus !== "idle" || props.jobLogs.length > 0);
@@ -113,6 +118,22 @@ function statusBadgeClass(status: string): string {
   <section class="grid gap-6">
     <div class="grid gap-4 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
       <div class="grid gap-4">
+        <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Fix EOL</h3>
+            <p class="mt-1 text-sm text-[#5C5E62]">
+              Branch compare runs on the shared server; working tree runs on the Node processing server.
+            </p>
+          </div>
+          <span
+            v-if="form.mode === 'working_tree'"
+            class="rounded px-2 py-1 text-xs ring-1"
+            :class="localServerOnline ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-amber-50 text-amber-800 ring-amber-200'"
+          >
+            {{ localServerOnline ? "Node processing server online" : `Node processing server: ${localServerBase}` }}
+          </span>
+        </div>
+
         <div class="flex flex-wrap items-center gap-2">
           <button
             class="rounded-lg px-4 py-2 text-sm font-medium transition"
@@ -124,12 +145,11 @@ function statusBadgeClass(status: string): string {
           <button
             class="rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60"
             :class="form.mode === 'working_tree' ? 'bg-[#171A20] text-white' : 'bg-neutral-100 text-[#393C41] hover:bg-neutral-200'"
-            :disabled="!electronClient"
+            :disabled="!localClient"
             @click="form.mode = 'working_tree'"
           >
             Working Tree vs Head
           </button>
-          <span v-if="!electronClient" class="text-sm text-[#5C5E62]">Working Tree mode chỉ khả dụng trong Electron.</span>
         </div>
 
         <div v-if="form.mode === 'branch'" class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -322,7 +342,7 @@ function statusBadgeClass(status: string): string {
       <div v-if="fixResult" class="grid gap-4">
         <div class="grid gap-3 md:grid-cols-4">
           <div class="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-            <p class="text-xs font-medium text-[#5C5E62] uppercase">Restored Lines</p>
+            <p class="text-xs font-medium text-[#5C5E62] uppercase">{{ form.mode === "working_tree" ? "Applied EOL Lines" : "Restored Lines" }}</p>
             <p class="mt-1 text-2xl font-semibold text-[#171A20]">{{ fixResult.total_restored_eol_lines }}</p>
           </div>
           <div class="rounded-lg border border-neutral-200 bg-neutral-50 p-3">

@@ -1,4 +1,5 @@
 import { http } from "../../shared/http";
+import { apiBase } from "../../shared/runtimeConfig";
 import type {
   GitEolCommitResult,
   GitEolFixResult,
@@ -9,7 +10,7 @@ import type {
   GitEolStructuredDiff
 } from "../../shared/types";
 
-const API_BASE = (import.meta.env.VITE_API_BASE ?? "/api").replace(/\/$/, "");
+const API_BASE = apiBase;
 
 export const gitEolApi = {
   preview: (payload: unknown) =>

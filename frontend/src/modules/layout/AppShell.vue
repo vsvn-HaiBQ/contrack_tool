@@ -5,7 +5,6 @@ import SidebarNav from "./SidebarNav.vue";
 import { authApi } from "../auth/api";
 import { clearSession, sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
-import { checkClientUpdate, updateInfo } from "../../shared/update";
 
 const router = useRouter();
 const userMenuOpen = ref(false);
@@ -34,19 +33,6 @@ function goSettings() {
   userMenuOpen.value = false;
   router.push({ name: "settings" });
 }
-
-async function goUpdates() {
-  userMenuOpen.value = false;
-  try {
-    await checkClientUpdate();
-    if (updateInfo.value?.has_update) {
-      showToast("Có phiên bản client mới", "warning");
-    }
-  } catch (error) {
-    showToast((error as Error).message, "error");
-  }
-  router.push({ name: "updates" });
-}
 </script>
 
 <template>
@@ -59,12 +45,11 @@ async function goUpdates() {
       @select="$router.push($event)"
       @toggle-user-menu="userMenuOpen = !userMenuOpen"
       @settings="goSettings"
-      @check-update="goUpdates"
       @logout="logout"
     />
     <main
       class="mx-auto grid w-full gap-8 px-4 py-6 sm:px-6 lg:px-8"
-      :class="$route.path.startsWith('/git-eol') || $route.path.startsWith('/build-source') ? 'max-w-none' : 'max-w-7xl'"
+      :class="$route.path.startsWith('/git-eol') ? 'max-w-none' : 'max-w-7xl'"
     >
       <RouterView v-slot="{ Component }">
         <KeepAlive>

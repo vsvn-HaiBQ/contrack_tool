@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
-import { electronApi, isElectronClient } from "../../shared/electron";
+import { localServerApi, localServerBase } from "../../shared/localServer";
 import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
-import type { BuildJob } from "../../shared/types";
+import { usersApi } from "../users/api";
+import type { BuildJob, BuildJobLog } from "../../shared/types";
 
 const form = reactive({
   targetBranch: "",
@@ -16,31 +17,67 @@ const form = reactive({
 
 const job = ref<BuildJob | null>(null);
 const polling = ref<number | null>(null);
-const logContainer = ref<HTMLElement | null>(null);
+const logContainers: Record<string, HTMLElement | null> = {};
 const autoScroll = ref(true);
+const localServerOnline = ref(false);
+const checkingLocalServer = ref(false);
 
-const running = computed(() => job.value?.status === "queued" || job.value?.status === "running");
+const running = computed(() =>
+  job.value?.status === "queued" ||
+  job.value?.status === "running" ||
+  buildPanels.value.some((panel) => panel.job.status === "queued" || panel.job.status === "running")
+);
 const canBuild = computed(() =>
-  isElectronClient() &&
   Boolean(form.targetBranch.trim() && form.sourceFolder.trim() && form.buildFolder.trim() && (form.buildClient || form.buildServer))
 );
-const buildLogs = computed(() => job.value?.logs ?? []);
-const hiddenLogCount = computed(() => Math.max((job.value?.total_logs ?? buildLogs.value.length) - buildLogs.value.length, 0));
-const lastLogKey = computed(() => {
-  const logs = buildLogs.value;
-  const last = logs[logs.length - 1];
-  return last ? `${job.value?.updated_at ?? 0}:${last.seq ?? last.ts}:${logs.length}` : `${job.value?.updated_at ?? 0}:empty`;
+
+const buildPanels = computed(() => {
+  const current = job.value;
+  if (!current) return [];
+  const targets = current.target_jobs ?? {};
+  const keys = ["client", "server"].filter((key) => Boolean(targets[key]));
+  if (!keys.length) {
+    return [buildPanel("build", "Build Log", current)];
+  }
+  return keys.map((key) => buildPanel(key, key === "client" ? "Client Log" : "Server Log", targets[key]!));
 });
+
+const artifacts = computed(() => job.value?.artifacts ?? []);
+const lastLogKey = computed(() =>
+  buildPanels.value
+    .map((panel) => {
+      const logs = panel.logs;
+      const last = logs[logs.length - 1];
+      return `${panel.key}:${panel.job.updated_at ?? 0}:${last?.seq ?? last?.ts ?? "empty"}:${logs.length}`;
+    })
+    .join("|")
+);
+
+function buildPanel(key: string, title: string, targetJob: BuildJob) {
+  const logs = targetJob.logs ?? [];
+  return {
+    key,
+    title,
+    job: targetJob,
+    logs,
+    hiddenLogCount: Math.max((targetJob.total_logs ?? logs.length) - logs.length, 0),
+  };
+}
+
+function setLogContainer(key: string, el: unknown) {
+  logContainers[key] = el instanceof HTMLElement ? el : null;
+}
 
 function logLineClass(level: string): string {
   if (level === "error") return "text-red-300";
   if (level === "warn") return "text-amber-300";
-  return "text-neutral-200";
+  return "text-neutral-100";
 }
 
 function statusBadgeClass(status: string): string {
   if (status === "succeeded") return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
   if (status === "failed") return "bg-red-50 text-red-700 ring-1 ring-red-200";
+  if (status === "partial") return "bg-amber-50 text-amber-800 ring-1 ring-amber-200";
   if (status === "running" || status === "queued") return "bg-sky-50 text-sky-700 ring-1 ring-sky-200";
   return "bg-neutral-100 text-[#5C5E62] ring-1 ring-neutral-200";
 }
@@ -50,47 +87,104 @@ function formatTs(ts: number): string {
 }
 
 async function loadDefaults() {
-  const api = electronApi();
-  if (!api) return;
-  const defaults = await api.getDefaultPaths();
-  form.sourceFolder = (await api.getSetting<string>("paths.buildSourceFolder")) || defaults.sourceFolder;
-  form.buildFolder = (await api.getSetting<string>("paths.buildOutputFolder")) || defaults.buildFolder;
+  await refreshLocalServerStatus();
+  let defaults: { sourceFolder: string; buildFolder: string };
+  try {
+    defaults = await localServerApi.defaultPaths();
+  } catch (error) {
+    localServerOnline.value = false;
+    showToast((error as Error).message, "warning");
+    return;
+  }
+
+  let savedPaths: Awaited<ReturnType<typeof usersApi.localPaths>> = {};
+  try {
+    savedPaths = await usersApi.localPaths();
+  } catch (error) {
+    showToast((error as Error).message, "warning");
+  }
+  form.sourceFolder = await validDirectoryOrFallback(savedPaths.build_source_folder, defaults.sourceFolder, "Saved source folder");
+  form.buildFolder = await validDirectoryOrFallback(savedPaths.build_output_folder, defaults.buildFolder, "Saved build folder");
+}
+
+async function validateDirectory(path: string, label: string) {
+  const result = await localServerApi.validatePath(path, true);
+  if (!result.valid) {
+    throw new Error(`${label}: ${result.message}`);
+  }
+  localServerOnline.value = true;
+  return result.path;
+}
+
+async function validDirectoryOrFallback(savedPath: string | null | undefined, fallback: string, label: string) {
+  if (savedPath?.trim()) {
+    try {
+      return await validateDirectory(savedPath, label);
+    } catch (error) {
+      showToast((error as Error).message, "warning");
+    }
+  }
+  if (fallback?.trim()) {
+    try {
+      return await validateDirectory(fallback, "Default folder");
+    } catch {
+      return fallback;
+    }
+  }
+  return "";
+}
+
+async function refreshLocalServerStatus(showMessage = false) {
+  checkingLocalServer.value = true;
+  try {
+    await localServerApi.health();
+    localServerOnline.value = true;
+    if (showMessage) showToast("Node processing server is running", "success");
+  } catch (error) {
+    localServerOnline.value = false;
+    if (showMessage) showToast((error as Error).message, "error");
+  } finally {
+    checkingLocalServer.value = false;
+  }
 }
 
 async function browseSource() {
-  const api = electronApi();
-  if (!api) return;
-  const selected = await api.selectDirectory(form.sourceFolder);
-  if (selected) {
-    form.sourceFolder = selected;
-    await api.setSetting("paths.buildSourceFolder", selected);
+  try {
+    const selected = await localServerApi.selectDirectory(form.sourceFolder);
+    if (selected) {
+      form.sourceFolder = await validateDirectory(selected, "Source folder");
+      await usersApi.updateLocalPaths({ build_source_folder: form.sourceFolder });
+    }
+  } catch (error) {
+    showToast((error as Error).message, "error");
   }
 }
 
 async function browseBuild() {
-  const api = electronApi();
-  if (!api) return;
-  const selected = await api.selectDirectory(form.buildFolder);
-  if (selected) {
-    form.buildFolder = selected;
-    await api.setSetting("paths.buildOutputFolder", selected);
+  try {
+    const selected = await localServerApi.selectDirectory(form.buildFolder);
+    if (selected) {
+      form.buildFolder = await validateDirectory(selected, "Build folder");
+      await usersApi.updateLocalPaths({ build_output_folder: form.buildFolder });
+    }
+  } catch (error) {
+    showToast((error as Error).message, "error");
   }
 }
 
 async function startBuild() {
-  const api = electronApi();
-  if (!api) {
-    showToast("Build source chỉ chạy trong Electron client", "warning");
-    return;
-  }
   if (!canBuild.value) {
-    showToast("Nhập branch, source folder, build folder và chọn ít nhất một target", "warning");
+    showToast("Enter branch, source folder, build folder, and select at least one target", "warning");
     return;
   }
-  await api.setSetting("paths.buildSourceFolder", form.sourceFolder);
-  await api.setSetting("paths.buildOutputFolder", form.buildFolder);
   try {
-    job.value = await api.build.start({
+    form.sourceFolder = await validateDirectory(form.sourceFolder, "Source folder");
+    form.buildFolder = await validateDirectory(form.buildFolder, "Build folder");
+    await usersApi.updateLocalPaths({
+      build_source_folder: form.sourceFolder,
+      build_output_folder: form.buildFolder,
+    });
+    job.value = await localServerApi.build.start({
       targetBranch: form.targetBranch.trim(),
       sourceFolder: form.sourceFolder,
       buildFolder: form.buildFolder,
@@ -99,6 +193,7 @@ async function startBuild() {
       repo: sessionState.systemSettings.git_repo,
       githubToken: sessionState.userSettings.github_token,
     });
+    localServerOnline.value = true;
     startPolling();
   } catch (error) {
     showToast((error as Error).message, "error");
@@ -107,19 +202,29 @@ async function startBuild() {
 
 function startPolling() {
   stopPolling();
-  const api = electronApi();
-  if (!api || !job.value) return;
+  if (!job.value) return;
   polling.value = window.setInterval(async () => {
     if (!job.value) return;
-    const next = await api.build.getJob(job.value.job_id);
-    if (next) {
-      job.value = next;
-      if (next.status === "succeeded" || next.status === "failed") {
-        stopPolling();
-        showToast(next.status === "succeeded" ? "Build completed" : next.error || "Build failed", next.status === "succeeded" ? "success" : "error");
+    try {
+      const next = await localServerApi.build.getJob(job.value.job_id);
+      if (next) {
+        job.value = next;
+        if (["succeeded", "failed", "partial"].includes(next.status)) {
+          stopPolling();
+          showToast(buildStatusMessage(next), next.status === "succeeded" ? "success" : next.status === "partial" ? "warning" : "error");
+        }
       }
+    } catch (error) {
+      stopPolling();
+      showToast((error as Error).message, "error");
     }
   }, 1000);
+}
+
+function buildStatusMessage(next: BuildJob) {
+  if (next.status === "succeeded") return "Build completed";
+  if (next.status === "partial") return next.error || "Build completed partially";
+  return next.error || "Build failed";
 }
 
 function stopPolling() {
@@ -130,7 +235,11 @@ function stopPolling() {
 }
 
 async function openArtifact(path: string) {
-  await electronApi()?.openPath(path);
+  try {
+    await localServerApi.openContainingFolder(path);
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  }
 }
 
 watch(
@@ -138,8 +247,9 @@ watch(
   async () => {
     if (!autoScroll.value) return;
     await nextTick();
-    const el = logContainer.value;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    for (const el of Object.values(logContainers)) {
+      el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
   }
 );
 
@@ -153,11 +263,16 @@ onBeforeUnmount(stopPolling);
       <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Build Source</h3>
-          <p class="mt-1 text-sm text-[#5C5E62]">Build chạy trên máy Windows của Electron client.</p>
+          <p class="mt-1 text-sm text-[#5C5E62]">Client and server builds run on the Node processing server.</p>
         </div>
-        <span v-if="!isElectronClient()" class="rounded bg-amber-50 px-3 py-2 text-sm text-amber-800 ring-1 ring-amber-200">
-          Chức năng này chỉ khả dụng trong bản Electron.
-        </span>
+        <button
+          class="rounded px-3 py-2 text-sm ring-1 transition"
+          :class="localServerOnline ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-amber-50 text-amber-800 ring-amber-200'"
+          :disabled="checkingLocalServer"
+          @click="refreshLocalServerStatus(true)"
+        >
+          {{ checkingLocalServer ? "Checking..." : localServerOnline ? "Node server online" : `Node server: ${localServerBase}` }}
+        </button>
       </div>
 
       <div class="grid gap-4 lg:grid-cols-2">
@@ -198,7 +313,7 @@ onBeforeUnmount(stopPolling);
         </div>
       </div>
 
-      <div class="flex items-center gap-3">
+      <div class="flex flex-wrap items-center gap-3">
         <button
           class="inline-flex min-h-10 min-w-[180px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
           :disabled="!canBuild || running"
@@ -211,35 +326,37 @@ onBeforeUnmount(stopPolling);
       </div>
     </div>
 
-    <div v-if="job" class="grid gap-3 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <div class="flex items-center gap-3">
-          <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Build Logs</h3>
-          <span class="text-xs text-[#5C5E62]">job <code class="rounded bg-neutral-100 px-1.5 py-0.5">{{ job.job_id.slice(0, 12) }}</code></span>
-          <span v-if="hiddenLogCount" class="text-xs text-[#5C5E62]">showing last {{ buildLogs.length }} of {{ job.total_logs }} lines</span>
+    <div v-if="buildPanels.length" class="grid gap-4 xl:grid-cols-2">
+      <div v-for="panel in buildPanels" :key="panel.key" class="grid gap-3 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">{{ panel.title }}</h3>
+            <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" :class="statusBadgeClass(panel.job.status)">{{ panel.job.status }}</span>
+            <span v-if="panel.hiddenLogCount" class="text-xs text-[#5C5E62]">showing last {{ panel.logs.length }} of {{ panel.job.total_logs }} lines</span>
+          </div>
+          <label class="flex items-center gap-2 text-xs text-[#5C5E62]">
+            <input v-model="autoScroll" type="checkbox" class="size-3.5 accent-[#3E6AE1]" />
+            Auto-scroll
+          </label>
         </div>
-        <label class="flex items-center gap-2 text-xs text-[#5C5E62]">
-          <input v-model="autoScroll" type="checkbox" class="size-3.5 accent-[#3E6AE1]" />
-          Auto-scroll
-        </label>
-      </div>
-      <div ref="logContainer" class="max-h-96 overflow-auto scroll-smooth rounded-lg bg-neutral-900 p-3 font-mono text-xs leading-relaxed">
-        <div v-if="!buildLogs.length" class="text-neutral-500">Waiting for log output...</div>
-        <div v-else class="grid gap-0.5">
-          <div v-for="(entry, idx) in buildLogs" :key="entry.seq ?? `${entry.ts}-${idx}`" class="flex gap-2 transition-colors duration-200" :class="logLineClass(entry.level)">
-            <span class="shrink-0 text-neutral-500">{{ formatTs(entry.ts) }}</span>
-            <span class="shrink-0 text-neutral-400">[{{ entry.source }}]</span>
-            <span class="break-all whitespace-pre-wrap">{{ entry.message }}</span>
+        <div :ref="(el) => setLogContainer(panel.key, el)" class="build-log-output max-h-[30rem] overflow-auto scroll-smooth rounded-lg bg-neutral-950 p-3">
+          <div v-if="!panel.logs.length" class="text-neutral-500">Waiting for log output...</div>
+          <div v-else class="grid gap-1">
+            <div v-for="(entry, idx) in (panel.logs as BuildJobLog[])" :key="entry.seq ?? `${entry.ts}-${idx}`" class="flex gap-2" :class="logLineClass(entry.level)">
+              <span class="shrink-0 text-neutral-500">{{ formatTs(entry.ts) }}</span>
+              <span class="shrink-0 text-neutral-400">[{{ entry.source }}]</span>
+              <span class="min-w-0 whitespace-pre-wrap break-words">{{ entry.message }}</span>
+            </div>
           </div>
         </div>
+        <p v-if="panel.job.error" class="whitespace-pre-wrap text-sm text-red-700">{{ panel.job.error }}</p>
       </div>
-      <p v-if="job.error" class="text-sm text-red-700">{{ job.error }}</p>
     </div>
 
-    <div v-if="job?.artifacts.length" class="grid gap-3 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
+    <div v-if="artifacts.length" class="grid gap-3 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
       <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Artifacts</h3>
       <button
-        v-for="artifact in job.artifacts"
+        v-for="artifact in artifacts"
         :key="artifact.path"
         class="flex items-center justify-between gap-4 rounded border border-neutral-200 bg-neutral-50 px-4 py-3 text-left transition hover:bg-neutral-100"
         @click="openArtifact(artifact.path)"
@@ -253,3 +370,17 @@ onBeforeUnmount(stopPolling);
     </div>
   </section>
 </template>
+
+<style scoped>
+.build-log-output {
+  font-family:
+    "Cascadia Mono",
+    "Consolas",
+    "Noto Sans Mono",
+    "SFMono-Regular",
+    "Menlo",
+    monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+</style>

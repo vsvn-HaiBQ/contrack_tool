@@ -2,8 +2,6 @@
 import { onMounted, ref } from "vue";
 import { RouterView, useRouter } from "vue-router";
 import { bootstrapSession, hasRequiredRedmineKeys, sessionState } from "./shared/session";
-import { isElectronClient } from "./shared/electron";
-import { checkClientUpdate } from "./shared/update";
 import { showToast, toastState } from "./shared/toast";
 import LoadingCircle from "./shared/LoadingCircle.vue";
 
@@ -16,15 +14,6 @@ function authenticatedHomeRouteName() {
 
 onMounted(async () => {
   try {
-    if (isElectronClient()) {
-      checkClientUpdate()
-        .then((info) => {
-          if (info.has_update) {
-            showToast(`Có phiên bản client mới: ${info.latest_version}`, "warning");
-          }
-        })
-        .catch(() => undefined);
-    }
     await bootstrapSession();
     if (sessionState.me && router.currentRoute.value.name === "login") {
       await router.replace({ name: authenticatedHomeRouteName() });

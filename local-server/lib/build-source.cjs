@@ -11,6 +11,8 @@ const jobs = new Map();
 
 function startBuildJob(input) {
   const jobId = crypto.randomBytes(16).toString("hex");
+  const buildClient = Boolean(input && input.buildClient);
+  const buildServer = Boolean(input && input.buildServer);
   const job = {
     job_id: jobId,
     status: "queued",
@@ -18,12 +20,31 @@ function startBuildJob(input) {
     logs: [],
     log_seq: 0,
     artifacts: [],
+    target_jobs: {
+      ...(buildClient ? { client: createTargetJob(jobId, "client") } : {}),
+      ...(buildServer ? { server: createTargetJob(jobId, "server") } : {}),
+    },
     created_at: Date.now() / 1000,
     updated_at: Date.now() / 1000,
   };
   jobs.set(jobId, job);
   setImmediate(() => runBuild(job, input).catch((error) => fail(job, error)));
   return snapshot(job);
+}
+
+function createTargetJob(parentJobId, target) {
+  const now = Date.now() / 1000;
+  return {
+    job_id: `${parentJobId}:${target}`,
+    target,
+    status: "queued",
+    error: null,
+    logs: [],
+    log_seq: 0,
+    artifacts: [],
+    created_at: now,
+    updated_at: now,
+  };
 }
 
 function getBuildJob(jobId) {
@@ -37,17 +58,31 @@ function getBuildJob(jobId) {
 function snapshot(job) {
   return {
     job_id: job.job_id,
+    target: job.target,
     status: job.status,
     error: job.error,
     logs: job.logs.slice(-LOG_RESPONSE_LIMIT),
     total_logs: job.log_seq,
     artifacts: job.artifacts,
+    target_jobs: snapshotTargets(job.target_jobs),
     created_at: job.created_at,
     updated_at: job.updated_at,
   };
 }
 
+function snapshotTargets(targetJobs) {
+  if (!targetJobs) {
+    return undefined;
+  }
+  return Object.fromEntries(Object.entries(targetJobs).map(([target, targetJob]) => [target, snapshot(targetJob)]));
+}
+
 function log(job, level, source, message) {
+  if (job.broadcast_targets && job.target_jobs) {
+    for (const targetJob of Object.values(job.target_jobs)) {
+      log(targetJob, level, source, message);
+    }
+  }
   job.log_seq += 1;
   job.logs.push({ seq: job.log_seq, ts: Date.now() / 1000, level, source, message });
   if (job.logs.length > LOG_STORAGE_LIMIT) {
@@ -57,13 +92,60 @@ function log(job, level, source, message) {
 }
 
 function fail(job, error) {
+  job.broadcast_targets = false;
   job.status = "failed";
   job.error = error && error.message ? error.message : String(error);
   log(job, "error", "system", job.error);
+  for (const targetJob of Object.values(job.target_jobs || {})) {
+    if (!isTerminal(targetJob.status)) {
+      fail(targetJob, error);
+    }
+  }
+  job.updated_at = Date.now() / 1000;
+}
+
+function isTerminal(status) {
+  return status === "succeeded" || status === "failed";
+}
+
+function markRunning(job) {
+  job.status = "running";
+  job.updated_at = Date.now() / 1000;
+}
+
+function markSucceeded(job, artifact) {
+  job.status = "succeeded";
+  job.error = null;
+  if (artifact) {
+    job.artifacts.push(artifact);
+  }
+  job.updated_at = Date.now() / 1000;
+}
+
+function syncParentStatus(job) {
+  const targetJobs = Object.values(job.target_jobs || {});
+  job.artifacts = targetJobs.flatMap((targetJob) => targetJob.artifacts || []);
+  if (!targetJobs.length) {
+    return;
+  }
+  if (targetJobs.some((targetJob) => targetJob.status === "queued" || targetJob.status === "running")) {
+    job.status = "running";
+  } else if (targetJobs.every((targetJob) => targetJob.status === "succeeded")) {
+    job.status = "succeeded";
+  } else if (targetJobs.every((targetJob) => targetJob.status === "failed")) {
+    job.status = "failed";
+  } else {
+    job.status = "partial";
+  }
+  job.error = targetJobs
+    .filter((targetJob) => targetJob.status === "failed" && targetJob.error)
+    .map((targetJob) => `${targetJob.target}: ${targetJob.error}`)
+    .join("\n") || null;
+  job.updated_at = Date.now() / 1000;
 }
 
 async function runBuild(job, input) {
-  job.status = "running";
+  markRunning(job);
   const targetBranch = cleanBranch(input.targetBranch);
   const sourceFolder = path.resolve(String(input.sourceFolder || ""));
   const buildFolder = path.resolve(String(input.buildFolder || ""));
@@ -73,6 +155,7 @@ async function runBuild(job, input) {
   if (!buildClient && !buildServer) {
     throw new Error("Select Client, Server, or both before build");
   }
+  job.broadcast_targets = true;
   log(job, "info", "system", `Build started for branch ${targetBranch}`);
   log(job, "info", "system", `Source folder: ${sourceFolder}`);
   log(job, "info", "system", `Build folder: ${buildFolder}`);
@@ -80,18 +163,44 @@ async function runBuild(job, input) {
 
   await ensureSource(job, sourceFolder, repo, input.githubToken);
   await prepareBranch(job, sourceFolder, targetBranch, input.githubToken);
-  await restoreNugetIfNeeded(job, sourceFolder);
+  job.broadcast_targets = false;
 
+  const targetTasks = [];
   if (buildClient) {
-    const artifact = await buildClientArtifact(job, sourceFolder, buildFolder, targetBranch);
-    job.artifacts.push(artifact);
+    targetTasks.push(
+      runTargetBuild(job, "client", async (targetJob) => {
+        await restoreNugetIfNeeded(targetJob, sourceFolder);
+        return buildClientArtifact(targetJob, sourceFolder, buildFolder, targetBranch);
+      })
+    );
   }
   if (buildServer) {
-    const artifact = await buildServerArtifact(job, sourceFolder, buildFolder, targetBranch);
-    job.artifacts.push(artifact);
+    targetTasks.push(runTargetBuild(job, "server", (targetJob) => buildServerArtifact(targetJob, sourceFolder, buildFolder, targetBranch)));
   }
-  job.status = "succeeded";
-  log(job, "info", "system", `Build completed with ${job.artifacts.length} artifact(s)`);
+
+  await Promise.allSettled(targetTasks);
+  syncParentStatus(job);
+  log(job, job.status === "failed" ? "error" : job.status === "partial" ? "warn" : "info", "system", `Build finished with status ${job.status}`);
+}
+
+async function runTargetBuild(parentJob, target, buildFn) {
+  const targetJob = parentJob.target_jobs[target];
+  markRunning(targetJob);
+  syncParentStatus(parentJob);
+  log(targetJob, "info", "system", `${targetLabel(target)} build started`);
+  try {
+    const artifact = await buildFn(targetJob);
+    markSucceeded(targetJob, artifact);
+    log(targetJob, "info", "system", `${targetLabel(target)} build completed`);
+  } catch (error) {
+    fail(targetJob, error);
+  } finally {
+    syncParentStatus(parentJob);
+  }
+}
+
+function targetLabel(target) {
+  return target === "client" ? "Client" : target === "server" ? "Server" : target;
 }
 
 function cleanBranch(value) {
@@ -454,7 +563,9 @@ function run(job, command, args, options = {}) {
       for (const raw of text.split(/\r?\n/)) {
         const line = raw.trimEnd();
         if (!line) continue;
-        const redacted = line.replace(/x-access-token:[A-Za-z0-9_\-]+/g, "x-access-token:***");
+        const redacted = line
+          .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+          .replace(/x-access-token:[A-Za-z0-9_\-]+/g, "x-access-token:***");
         tail.push(redacted);
         if (tail.length > 20) tail.shift();
         if (!options.quiet) {
