@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import LoadingCircle from "../../shared/LoadingCircle.vue";
 
-defineProps<{
+const props = defineProps<{
   setupMode: boolean;
   username: string;
   password: string;
@@ -20,6 +20,11 @@ const emit = defineEmits<{
   submit: [];
   submitSetup: [];
 }>();
+
+function submitPrimary() {
+  if (props.loading) return;
+  emit(props.setupMode ? "submitSetup" : "submit");
+}
 </script>
 
 <template>
@@ -35,7 +40,7 @@ const emit = defineEmits<{
         </div>
       </div>
       <div class="flex items-center">
-        <div class="grid w-full gap-3 rounded-2xl border border-neutral-200 bg-white p-8 shadow-sm">
+        <form class="grid w-full gap-3 rounded-2xl border border-neutral-200 bg-white p-8 shadow-sm" @submit.prevent="submitPrimary">
           <template v-if="setupMode">
             <div>
               <p class="text-sm font-semibold uppercase tracking-[0.08em] text-[#3E6AE1]">Initial Setup</p>
@@ -63,7 +68,7 @@ const emit = defineEmits<{
               @input="emit('update:setup-confirm-password', ($event.target as HTMLInputElement).value)"
             />
             <div class="flex items-center gap-3 pt-2">
-              <button class="inline-flex min-h-10 min-w-[200px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60" :disabled="loading" @click="emit('submitSetup')">
+              <button type="submit" class="inline-flex min-h-10 min-w-[200px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60" :disabled="loading">
                 <LoadingCircle v-if="loading" />
                 {{ loading ? "Creating..." : "Create Admin" }}
               </button>
@@ -84,13 +89,13 @@ const emit = defineEmits<{
               @input="emit('update:password', ($event.target as HTMLInputElement).value)"
             />
             <div class="flex items-center gap-3 pt-2">
-              <button class="inline-flex min-h-10 min-w-[200px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60" :disabled="loading" @click="emit('submit')">
+              <button type="submit" class="inline-flex min-h-10 min-w-[200px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60" :disabled="loading">
                 <LoadingCircle v-if="loading" />
                 {{ loading ? "Signing in..." : "Login" }}
               </button>
             </div>
           </template>
-        </div>
+        </form>
       </div>
     </div>
   </section>

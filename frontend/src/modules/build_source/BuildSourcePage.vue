@@ -200,6 +200,11 @@ async function startBuild() {
   }
 }
 
+function requestStartBuild() {
+  if (running.value) return;
+  void startBuild();
+}
+
 function startPolling() {
   stopPolling();
   if (!job.value) return;
@@ -259,13 +264,14 @@ onBeforeUnmount(stopPolling);
 
 <template>
   <section class="grid gap-6">
-    <div class="grid gap-4 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
+    <form class="grid gap-4 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm" @submit.prevent="requestStartBuild">
       <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Build Source</h3>
           <p class="mt-1 text-sm text-[#5C5E62]">Client and server builds run on the Node processing server.</p>
         </div>
         <button
+          type="button"
           class="rounded px-3 py-2 text-sm ring-1 transition"
           :class="localServerOnline ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-amber-50 text-amber-800 ring-amber-200'"
           :disabled="checkingLocalServer"
@@ -301,30 +307,30 @@ onBeforeUnmount(stopPolling);
           <label class="text-sm font-medium text-[#393C41]">Source Folder</label>
           <div class="flex gap-2">
             <input v-model="form.sourceFolder" class="min-w-0 flex-1 rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
-            <button class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="browseSource">Browse</button>
+            <button type="button" class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="browseSource">Browse</button>
           </div>
         </div>
         <div class="grid gap-2">
           <label class="text-sm font-medium text-[#393C41]">Build Folder</label>
           <div class="flex gap-2">
             <input v-model="form.buildFolder" class="min-w-0 flex-1 rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
-            <button class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="browseBuild">Browse</button>
+            <button type="button" class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="browseBuild">Browse</button>
           </div>
         </div>
       </div>
 
       <div class="flex flex-wrap items-center gap-3">
         <button
+          type="submit"
           class="inline-flex min-h-10 min-w-[180px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
           :disabled="!canBuild || running"
-          @click="startBuild"
         >
           <LoadingCircle v-if="running" />
           {{ running ? "Building..." : "Start Build" }}
         </button>
         <span v-if="job" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" :class="statusBadgeClass(job.status)">{{ job.status }}</span>
       </div>
-    </div>
+    </form>
 
     <div v-if="buildPanels.length" class="grid gap-4 xl:grid-cols-2">
       <div v-for="panel in buildPanels" :key="panel.key" class="grid gap-3 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">

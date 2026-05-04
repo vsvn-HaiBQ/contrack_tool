@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import type { User } from "../../shared/types";
 
-defineProps<{
+const props = defineProps<{
   me: User;
   tabs: Array<{ key: string; label: string }>;
   currentTab: string;
@@ -12,13 +13,32 @@ defineProps<{
 const emit = defineEmits<{
   select: [value: string];
   toggleUserMenu: [];
+  closeUserMenu: [];
   settings: [];
   logout: [];
 }>();
 
+const userMenuRef = ref<HTMLElement | null>(null);
+
 function isActiveTab(currentTab: string, tabKey: string) {
   return currentTab === tabKey || currentTab.startsWith(`${tabKey}/`);
 }
+
+function closeUserMenuOnClickOutside(event: PointerEvent) {
+  if (!props.userMenuOpen || !userMenuRef.value) return;
+  const target = event.target;
+  if (target instanceof Node && !userMenuRef.value.contains(target)) {
+    emit("closeUserMenu");
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("pointerdown", closeUserMenuOnClickOutside);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", closeUserMenuOnClickOutside);
+});
 </script>
 
 <template>
@@ -31,7 +51,7 @@ function isActiveTab(currentTab: string, tabKey: string) {
         >
           Contrack
         </button>
-        <div class="relative shrink-0">
+        <div ref="userMenuRef" class="relative shrink-0">
           <button class="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-2 text-left" @click="emit('toggleUserMenu')">
             <p class="text-sm font-medium text-[#171A20]">{{ me.username }}</p>
           </button>

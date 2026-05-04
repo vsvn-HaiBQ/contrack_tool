@@ -35,6 +35,11 @@ const emit = defineEmits<{
   forceCreate: [];
 }>();
 
+function emitVerify() {
+  if (props.syncState.verifying) return;
+  emit("verify");
+}
+
 type ReferenceRow = {
   candidate: TicketCandidate;
   isStory: boolean;
@@ -114,7 +119,7 @@ function trackerBadgeClass(tracker: string | null | undefined) {
       </span>
     </div>
 
-    <div class="flex flex-wrap items-end gap-3">
+    <form class="flex flex-wrap items-end gap-3" @submit.prevent="emitVerify">
       <div class="min-w-[220px]">
         <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-[#5C5E62]">JP issue ID or URL</label>
         <input
@@ -125,14 +130,14 @@ function trackerBadgeClass(tracker: string | null | undefined) {
         />
       </div>
       <button
+        type="submit"
         class="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-5 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
         :disabled="syncState.verifying"
-        @click="emit('verify')"
       >
         <LoadingCircle v-if="syncState.verifying" />
         {{ syncState.verifying ? "Verifying..." : "Verify" }}
       </button>
-    </div>
+    </form>
 
     <div v-if="syncState.jp_subject" class="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3">
       <div class="flex items-center gap-2">

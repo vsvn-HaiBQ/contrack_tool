@@ -84,6 +84,7 @@ onBeforeUnmount(() => {
       :node-server-warning="nodeServerWarning"
       @select="$router.push($event)"
       @toggle-user-menu="userMenuOpen = !userMenuOpen"
+      @close-user-menu="userMenuOpen = false"
       @settings="goSettings"
       @logout="logout"
     />

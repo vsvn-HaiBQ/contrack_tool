@@ -77,7 +77,7 @@ function defaultTranslationConfig() {
     reasoning_effort: process.env.CODEX_DEFAULT_REASONING_EFFORT || process.env.CONTRACK_CODEX_REASONING_EFFORT || "low",
     timeout_seconds: positiveInt(process.env.CONTRACK_CODEX_TIMEOUT_SECONDS || process.env.CODEX_TIMEOUT, 120, 5, 3600),
     context_window: positiveInt(process.env.CONTRACK_CODEX_CONTEXT_WINDOW || process.env.CODEX_CONTEXT_WINDOW, 20, 0, 200),
-    batch_size: positiveInt(process.env.CONTRACK_CODEX_BATCH_SIZE || process.env.CODEX_MAX_BATCH_SIZE, 50, 1, 200),
+    batch_size: positiveInt(process.env.CONTRACK_CODEX_BATCH_SIZE || process.env.CODEX_MAX_BATCH_SIZE, 100, 1, 200),
     concurrency: positiveInt(process.env.CONTRACK_CODEX_CONCURRENCY, 2, 1, 4),
     fast_mode: parseBoolean(process.env.CONTRACK_CODEX_FAST_MODE, false),
   };

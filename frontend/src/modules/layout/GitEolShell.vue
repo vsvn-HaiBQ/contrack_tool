@@ -39,6 +39,7 @@ function goSettings() {
       :user-menu-open="userMenuOpen"
       @select="$router.push($event)"
       @toggle-user-menu="userMenuOpen = !userMenuOpen"
+      @close-user-menu="userMenuOpen = false"
       @settings="goSettings"
       @logout="logout"
     />

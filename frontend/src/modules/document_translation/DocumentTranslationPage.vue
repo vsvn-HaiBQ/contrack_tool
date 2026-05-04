@@ -15,7 +15,7 @@ const form = reactive({
   reasoningEffort: "low",
   fastMode: false,
   timeoutSeconds: 120,
-  batchSize: 50,
+  batchSize: 100,
   contextWindow: 20,
   glossary: "",
   instructions: "",
@@ -102,7 +102,7 @@ function translationSettingsPayload(): DocumentTranslationSettings {
     model: form.model.trim() || null,
     reasoning_effort: form.reasoningEffort,
     timeout_seconds: normalizeNumber(form.timeoutSeconds, 120, 5, 3600),
-    batch_size: normalizeNumber(form.batchSize, 50, 1, 200),
+    batch_size: normalizeNumber(form.batchSize, 100, 1, 200),
     context_window: normalizeNumber(form.contextWindow, 20, 0, 200),
     fast_mode: form.fastMode,
     glossary: form.glossary.trim() ? form.glossary : null,
@@ -118,7 +118,7 @@ function applySavedTranslationSettings() {
   form.reasoningEffort = saved.reasoning_effort?.trim() || form.reasoningEffort;
   form.fastMode = Boolean(saved.fast_mode);
   form.timeoutSeconds = normalizeNumber(saved.timeout_seconds ?? form.timeoutSeconds, 120, 5, 3600);
-  form.batchSize = normalizeNumber(saved.batch_size ?? form.batchSize, 50, 1, 200);
+  form.batchSize = normalizeNumber(saved.batch_size ?? form.batchSize, 100, 1, 200);
   form.contextWindow = normalizeNumber(saved.context_window ?? form.contextWindow, 20, 0, 200);
   form.glossary = saved.glossary ?? "";
   form.instructions = saved.instructions ?? "";
@@ -255,7 +255,7 @@ async function startTranslation() {
       form.outputDirectory = await validateDirectory(form.outputDirectory, "Output folder");
     }
     form.timeoutSeconds = normalizeNumber(form.timeoutSeconds, 120, 5, 3600);
-    form.batchSize = normalizeNumber(form.batchSize, 50, 1, 200);
+    form.batchSize = normalizeNumber(form.batchSize, 100, 1, 200);
     form.contextWindow = normalizeNumber(form.contextWindow, 20, 0, 200);
     await saveTranslationSettings();
 
