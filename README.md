@@ -122,6 +122,7 @@ It also writes an update bundle and manifest to `build_output/releases/local-ser
 
 - `latest.json`
 - `contrack-local-server-{version}.bundle.json.gz`
+- `contrack-local-server-{version}.zip`
 
 Deploy `build_output/web` on the shared server, then edit `build_output/web/config.js` only if the Node processing server is not running on the user's local machine at port `3219`.
 Run `build_output/local-server/start-local-server.bat` on the Windows machine that performs source builds and Working Tree EOL fixes.
@@ -147,6 +148,7 @@ The backend acts as the release server for the local Node processing server:
 - `GET /api/local-server/releases/{version}/download?token=...` serves the update bundle after token validation.
 
 The frontend compares the backend release with the local Node `/health` version and shows an update action when a newer bundle exists. When clicked, the local Node server downloads the signed bundle from the backend, verifies `sha256`, stages the files under `.updates`, then restarts through an updater script. Bump the root `package.json` `version` before building a new local Node release.
+If the local Node server is offline, the header shows a Download action that fetches the latest `contrack-local-server-{version}.zip` package from the backend so the user can install or restart it manually.
 
 Admin shortcut:
 

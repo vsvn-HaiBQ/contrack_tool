@@ -62,7 +62,12 @@ def latest_release_manifest() -> dict[str, Any]:
         raise ReleaseNotFoundError(f"Local server release manifest is invalid: {exc}") from exc
     package_path = _safe_package_path(base_dir, str(manifest.get("package_file") or ""))
     manifest["package_size_bytes"] = package_path.stat().st_size
-    manifest["download_url"] = f"{settings.api_prefix.rstrip()}/local-server/releases/{manifest.get('version')}/download"
+    if manifest.get("zip_file"):
+        zip_path = _safe_package_path(base_dir, str(manifest.get("zip_file") or ""))
+        manifest["zip_size_bytes"] = zip_path.stat().st_size
+    api_prefix = settings.api_prefix.rstrip("/")
+    manifest["download_url"] = f"{api_prefix}/local-server/releases/{manifest.get('version')}/download"
+    manifest["zip_download_url"] = f"{api_prefix}/local-server/releases/{manifest.get('version')}/download-zip"
     return manifest
 
 
@@ -71,6 +76,13 @@ def package_path_for_version(version: str) -> Path:
     if version != manifest.get("version"):
         raise ReleaseNotFoundError("Requested local server release version is not available")
     return _safe_package_path(release_directory(), str(manifest.get("package_file") or ""))
+
+
+def zip_path_for_version(version: str) -> Path:
+    manifest = latest_release_manifest()
+    if version != manifest.get("version"):
+        raise ReleaseNotFoundError("Requested local server release version is not available")
+    return _safe_package_path(release_directory(), str(manifest.get("zip_file") or ""))
 
 
 def _signing_key() -> bytes:

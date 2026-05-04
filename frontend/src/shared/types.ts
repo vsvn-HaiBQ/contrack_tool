@@ -25,12 +25,17 @@ export type LocalServerReleaseManifest = {
   package_file: string;
   package_size_bytes: number;
   package_sha256: string;
+  zip_file?: string | null;
+  zip_size_bytes?: number | null;
+  zip_sha256?: string | null;
   download_url: string;
+  zip_download_url?: string | null;
 };
 
 export type LocalServerDownloadTicket = {
   version: string;
   download_url: string;
+  zip_download_url?: string | null;
   expires_at: number;
 };
 

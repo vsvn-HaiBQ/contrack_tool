@@ -18,6 +18,7 @@ const latestLocalServerRelease = ref<LocalServerReleaseManifest | null>(null);
 const localServerUpdateAvailable = ref(false);
 const localServerUpdaterUnavailable = ref(false);
 const installingNodeUpdate = ref(false);
+const downloadingNodeServer = ref(false);
 let nodeHealthTimer: number | null = null;
 let lastReleaseCheckAt = 0;
 
@@ -51,6 +52,14 @@ const nodeServerUpdate = computed(() =>
       }
     : null
 );
+const nodeServerDownload = computed(() =>
+  nodeServerChecked.value && !nodeServerOnline.value && latestLocalServerRelease.value
+    ? {
+        latestVersion: latestLocalServerRelease.value.version,
+        downloading: downloadingNodeServer.value
+      }
+    : null
+);
 
 function fallbackRoute() {
   return hasRequiredRedmineKeys() ? { name: "detail" } : { name: "settings" };
@@ -66,14 +75,11 @@ async function refreshNodeServerStatus() {
     nodeServerVersion.value = null;
     localServerUpdateAvailable.value = false;
     localServerUpdaterUnavailable.value = false;
-    latestLocalServerRelease.value = null;
   } finally {
     nodeServerChecked.value = true;
   }
 
-  if (nodeServerOnline.value) {
-    await refreshLocalServerRelease();
-  }
+  await refreshLocalServerRelease();
 
   if (!nodeServerOnline.value && nodeOnlyRoutes.has(router.currentRoute.value.path)) {
     await router.replace(fallbackRoute());
@@ -128,6 +134,20 @@ async function installNodeUpdate() {
   }
 }
 
+async function downloadNodeServerPackage() {
+  if (!latestLocalServerRelease.value || downloadingNodeServer.value) return;
+  downloadingNodeServer.value = true;
+  try {
+    const ticket = await localServerReleaseApi.createDownloadTicket(latestLocalServerRelease.value.version);
+    const downloadUrl = ticket.zip_download_url || ticket.download_url;
+    window.location.href = absoluteBackendUrl(downloadUrl);
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  } finally {
+    downloadingNodeServer.value = false;
+  }
+}
+
 async function logout() {
   await authApi.logout();
   clearSession();
@@ -161,12 +181,14 @@ onBeforeUnmount(() => {
       :user-menu-open="userMenuOpen"
       :node-server-warning="nodeServerWarning"
       :node-server-update="nodeServerUpdate"
+      :node-server-download="nodeServerDownload"
       @select="$router.push($event)"
       @toggle-user-menu="userMenuOpen = !userMenuOpen"
       @close-user-menu="userMenuOpen = false"
       @settings="goSettings"
       @logout="logout"
       @install-node-update="installNodeUpdate"
+      @download-node-server="downloadNodeServerPackage"
     />
     <main
       class="mx-auto grid w-full gap-8 px-4 py-6 sm:px-6 lg:px-8"

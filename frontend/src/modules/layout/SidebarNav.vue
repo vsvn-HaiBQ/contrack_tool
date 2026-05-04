@@ -9,6 +9,7 @@ const props = defineProps<{
   userMenuOpen: boolean;
   nodeServerWarning?: string | null;
   nodeServerUpdate?: { currentVersion?: string | null; latestVersion: string; installing: boolean } | null;
+  nodeServerDownload?: { latestVersion: string; downloading: boolean } | null;
 }>();
 
 const emit = defineEmits<{
@@ -18,6 +19,7 @@ const emit = defineEmits<{
   settings: [];
   logout: [];
   installNodeUpdate: [];
+  downloadNodeServer: [];
 }>();
 
 const userMenuRef = ref<HTMLElement | null>(null);
@@ -77,6 +79,17 @@ onBeforeUnmount(() => {
         </nav>
         <div v-if="nodeServerWarning" class="shrink-0 whitespace-nowrap rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
           {{ nodeServerWarning }}
+        </div>
+        <div v-if="nodeServerDownload" class="flex shrink-0 items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900">
+          <span class="whitespace-nowrap">Local server {{ nodeServerDownload.latestVersion }}</span>
+          <button
+            type="button"
+            class="rounded bg-amber-700 px-2 py-1 text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="nodeServerDownload.downloading"
+            @click="emit('downloadNodeServer')"
+          >
+            {{ nodeServerDownload.downloading ? "Preparing" : "Download" }}
+          </button>
         </div>
         <div v-if="nodeServerUpdate" class="flex shrink-0 items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-900">
           <span class="whitespace-nowrap">
