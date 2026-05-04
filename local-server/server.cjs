@@ -33,6 +33,8 @@ const {
   structuredDiff,
 } = requireLocalModule("git-eol-local.cjs");
 const { defaultPaths, getSetting, setSetting } = requireLocalModule("settings.cjs");
+const { prepareUpdate, updateStatus } = requireLocalModule("updater.cjs");
+const { localServerVersion } = requireLocalModule("version.cjs");
 
 const host = process.env.CONTRACK_LOCAL_SERVER_HOST || "127.0.0.1";
 const port = Number(process.env.CONTRACK_LOCAL_SERVER_PORT || 3219);
@@ -41,6 +43,8 @@ const allowedOrigins = (process.env.CONTRACK_ALLOWED_ORIGINS || process.env.CONT
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
   .filter(Boolean);
+let server;
+let updateApplyScheduled = false;
 
 function isLoopbackHost(value) {
   const hostName = String(value || "").replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
@@ -92,6 +96,34 @@ function sendJson(req, res, status, payload) {
 function sendError(req, res, status, error) {
   const message = error && error.message ? error.message : String(error);
   sendJson(req, res, status, { message });
+}
+
+function scheduleUpdateApply(applyScript) {
+  if (updateApplyScheduled) return;
+  updateApplyScheduled = true;
+  const exitCode = process.env.CONTRACK_RESTART_HANDLED_BY_LAUNCHER === "1" ? 75 : 0;
+  const timer = setTimeout(() => {
+    try {
+      const child = spawn(process.execPath, [applyScript, String(process.pid)], {
+        cwd: path.dirname(applyScript),
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false,
+      });
+      child.unref();
+      const forceExit = setTimeout(() => process.exit(exitCode), 2500);
+      forceExit.unref?.();
+      if (server) {
+        server.close(() => process.exit(exitCode));
+      } else {
+        process.exit(exitCode);
+      }
+    } catch (error) {
+      updateApplyScheduled = false;
+      console.error(`Failed to start update apply script: ${error && error.message ? error.message : String(error)}`);
+    }
+  }, 500);
+  timer.unref?.();
 }
 
 function readJson(req) {
@@ -395,13 +427,35 @@ async function route(req, res) {
   const pathname = url.pathname.replace(/\/+$/, "") || "/";
 
   if (req.method === "GET" && pathname === "/health") {
+    const versionInfo = localServerVersion();
     sendJson(req, res, 200, {
       ok: true,
       service: "contrack-local-node",
+      version: versionInfo.version,
+      created_at: versionInfo.created_at,
+      commit_sha: versionInfo.commit_sha,
+      updater_version: versionInfo.updater_version,
       port,
       default_paths: defaultPaths(),
       document_translation: defaultTranslationConfig(),
     });
+    return;
+  }
+  if (req.method === "GET" && pathname === "/updates/status") {
+    sendJson(req, res, 200, updateStatus(null));
+    return;
+  }
+  if (req.method === "POST" && pathname === "/updates/check") {
+    const body = await readJson(req);
+    sendJson(req, res, 200, updateStatus(body.manifest || null));
+    return;
+  }
+  if (req.method === "POST" && pathname === "/updates/install") {
+    const result = await prepareUpdate(await readJson(req));
+    sendJson(req, res, 200, result);
+    if (result.restart_required && result.apply_script) {
+      scheduleUpdateApply(result.apply_script);
+    }
     return;
   }
   if (req.method === "GET" && pathname === "/settings/default-paths") {
@@ -519,12 +573,16 @@ async function route(req, res) {
   sendJson(req, res, 404, { message: "Endpoint not found" });
 }
 
-const server = http.createServer((req, res) => {
+server = http.createServer((req, res) => {
   route(req, res).catch((error) => sendError(req, res, error.message === "Request body is too large" ? 413 : 500, error));
 });
 
 server.listen(port, host, () => {
-  console.log(`Contrack Node processing server listening at http://${host}:${port}`);
+  const versionInfo = localServerVersion();
+  console.log(`Contrack Node processing server ${versionInfo.version} listening at http://${host}:${port}`);
+  if (versionInfo.commit_sha) {
+    console.log(`Build commit: ${versionInfo.commit_sha}`);
+  }
   void bootstrapCodexCli({ logger: console }).catch((error) => {
     console.warn(`Codex CLI bootstrap failed: ${error && error.message ? error.message : String(error)}`);
   });

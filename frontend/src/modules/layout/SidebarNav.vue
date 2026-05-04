@@ -8,6 +8,7 @@ const props = defineProps<{
   currentTab: string;
   userMenuOpen: boolean;
   nodeServerWarning?: string | null;
+  nodeServerUpdate?: { currentVersion?: string | null; latestVersion: string; installing: boolean } | null;
 }>();
 
 const emit = defineEmits<{
@@ -16,6 +17,7 @@ const emit = defineEmits<{
   closeUserMenu: [];
   settings: [];
   logout: [];
+  installNodeUpdate: [];
 }>();
 
 const userMenuRef = ref<HTMLElement | null>(null);
@@ -75,6 +77,19 @@ onBeforeUnmount(() => {
         </nav>
         <div v-if="nodeServerWarning" class="shrink-0 whitespace-nowrap rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
           {{ nodeServerWarning }}
+        </div>
+        <div v-if="nodeServerUpdate" class="flex shrink-0 items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-900">
+          <span class="whitespace-nowrap">
+            Node {{ nodeServerUpdate.currentVersion || "unknown" }} -> {{ nodeServerUpdate.latestVersion }}
+          </span>
+          <button
+            type="button"
+            class="rounded bg-sky-700 px-2 py-1 text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="nodeServerUpdate.installing"
+            @click="emit('installNodeUpdate')"
+          >
+            {{ nodeServerUpdate.installing ? "Updating" : "Update" }}
+          </button>
         </div>
       </div>
     </div>

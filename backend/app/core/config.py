@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     http_verify_ssl: bool = True
     git_workspace_root: str = ""
     frontend_dist_dir: str = ""
+    local_server_release_dir: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="CONTRACK_", extra="ignore")
 

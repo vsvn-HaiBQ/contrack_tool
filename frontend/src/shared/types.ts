@@ -2,6 +2,58 @@ export type User = { id: number; username: string; role: string };
 
 export type SetupStatus = { needs_setup: boolean; user_count: number };
 
+export type LocalServerHealth = {
+  ok: boolean;
+  service: string;
+  version?: string | null;
+  created_at?: string | null;
+  commit_sha?: string | null;
+  updater_version?: string | null;
+  port: number;
+  default_paths: {
+    sourceFolder: string;
+    buildFolder: string;
+  };
+};
+
+export type LocalServerReleaseManifest = {
+  service: string;
+  format: string;
+  version: string;
+  created_at: string;
+  commit_sha?: string | null;
+  package_file: string;
+  package_size_bytes: number;
+  package_sha256: string;
+  download_url: string;
+};
+
+export type LocalServerDownloadTicket = {
+  version: string;
+  download_url: string;
+  expires_at: number;
+};
+
+export type LocalServerUpdateCheck = {
+  service: string;
+  current_version: string;
+  latest_version: string | null;
+  update_available: boolean;
+  updater_version: string;
+  manifest: LocalServerReleaseManifest | null;
+};
+
+export type LocalServerUpdateInstallResult = {
+  status: "staged" | string;
+  service: string;
+  current_version: string;
+  version: string;
+  staged_path: string;
+  apply_script: string;
+  restart_required: boolean;
+  message: string;
+};
+
 export type Assignee = { id: number; name: string };
 export type TrackerOption = { id: number; name: string };
 export type IntegrationTestResult = { service: string; success: boolean; message: string };

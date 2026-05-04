@@ -1,5 +1,6 @@
 import { HttpError } from "./http";
 import { nodeServerBase } from "./runtimeConfig";
+import type { LocalServerHealth, LocalServerUpdateCheck, LocalServerUpdateInstallResult } from "./types";
 
 export const localServerBase = nodeServerBase;
 
@@ -79,7 +80,12 @@ function jsonBody(payload: unknown): RequestInit {
 }
 
 export const localServerApi = {
-  health: () => localHttp<{ ok: boolean; service: string; port: number; default_paths: DefaultPaths }>("/health"),
+  health: () => localHttp<LocalServerHealth>("/health"),
+  updates: {
+    status: () => localHttp<LocalServerUpdateCheck>("/updates/status"),
+    check: (payload: unknown) => localHttp<LocalServerUpdateCheck>("/updates/check", jsonBody(payload)),
+    install: (payload: unknown) => localHttp<LocalServerUpdateInstallResult>("/updates/install", jsonBody(payload))
+  },
   defaultPaths: () => localHttp<DefaultPaths>("/settings/default-paths"),
   getSetting: async <T = unknown>(key: string) => {
     const response = await localHttp<SettingResponse<T>>(`/settings/${encodeURIComponent(key)}`);

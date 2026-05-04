@@ -45,6 +45,7 @@ Frontend:
 ## Run with Docker
 
 ```bash
+npm run build
 docker compose up --build
 ```
 
@@ -112,6 +113,11 @@ corepack pnpm build
 ```
 
 This builds the Vite web app to `build_output/web` for the shared web server and writes the Node processing package to `build_output/local-server`.
+It also writes an update bundle and manifest to `build_output/releases/local-server`:
+
+- `latest.json`
+- `contrack-local-server-{version}.bundle.json.gz`
+
 Deploy `build_output/web` on the shared server, then edit `build_output/web/config.js` only if the Node processing server is not running on the user's local machine at port `3219`.
 Run `build_output/local-server/start-local-server.bat` on the Windows machine that performs source builds and Working Tree EOL fixes.
 The launcher binds to `127.0.0.1:3219` by default and keeps a visible console open while the Node server is running. Use `Ctrl+C` in that console to stop it.
@@ -126,6 +132,31 @@ window.CONTRACK_CONFIG = {
 ```
 
 If the Node processing server is centralized on another Windows build machine, set `CONTRACK_LOCAL_SERVER_HOST=0.0.0.0`, change `nodeServerBase` to that host, and set `CONTRACK_ALLOWED_ORIGINS` on the Node server, for example `http://contrack-server:8888`.
+
+## Local Node server update flow
+
+The backend acts as the release server for the local Node processing server:
+
+- `GET /api/local-server/releases/latest` returns the latest release manifest for authenticated users.
+- `POST /api/local-server/releases/{version}/download-ticket` returns a short-lived signed download URL.
+- `GET /api/local-server/releases/{version}/download?token=...` serves the update bundle after token validation.
+
+The frontend compares the backend release with the local Node `/health` version and shows an update action when a newer bundle exists. When clicked, the local Node server downloads the signed bundle from the backend, verifies `sha256`, stages the files under `.updates`, then restarts through an updater script. Bump the root `package.json` `version` before building a new local Node release.
+
+Admin shortcut:
+
+```bat
+create-version.bat patch
+create-version.bat 0.2.0 --deploy
+```
+
+Linux/SSH shortcut:
+
+```bash
+chmod +x create-version.sh
+./create-version.sh patch
+./create-version.sh 0.2.0 --deploy
+```
 
 ## Notes
 

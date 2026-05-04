@@ -19,7 +19,6 @@ backend/contrack.db
 backend/.env
 src_build
 build_output
-*.dll
 *.csproj.user
 node_modules/
 build_output/
