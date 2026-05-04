@@ -6,6 +6,7 @@ defineProps<{
   tabs: Array<{ key: string; label: string }>;
   currentTab: string;
   userMenuOpen: boolean;
+  nodeServerWarning?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -40,17 +41,22 @@ function isActiveTab(currentTab: string, tabKey: string) {
           </div>
         </div>
       </div>
-      <nav class="flex w-full min-w-0 gap-2 overflow-x-auto pb-1">
-        <button
-          v-for="tab in tabs"
-          :key="tab.key"
-          class="shrink-0 rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-200"
-          :class="isActiveTab(currentTab, tab.key) ? 'bg-[#3E6AE1] text-white' : 'bg-neutral-100 text-[#393C41] hover:bg-neutral-200'"
-          @click="emit('select', tab.key)"
-        >
-          {{ tab.label }}
-        </button>
-      </nav>
+      <div class="flex min-w-0 items-center gap-2">
+        <nav class="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
+          <button
+            v-for="tab in tabs"
+            :key="tab.key"
+            class="shrink-0 rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-200"
+            :class="isActiveTab(currentTab, tab.key) ? 'bg-[#3E6AE1] text-white' : 'bg-neutral-100 text-[#393C41] hover:bg-neutral-200'"
+            @click="emit('select', tab.key)"
+          >
+            {{ tab.label }}
+          </button>
+        </nav>
+        <div v-if="nodeServerWarning" class="shrink-0 whitespace-nowrap rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+          {{ nodeServerWarning }}
+        </div>
+      </div>
     </div>
   </header>
 </template>

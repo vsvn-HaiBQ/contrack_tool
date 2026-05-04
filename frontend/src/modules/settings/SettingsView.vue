@@ -1,17 +1,12 @@
 <script setup lang="ts">
-import type { Assignee, IntegrationStatus, User } from "../../shared/types";
+import type { Assignee, IntegrationStatus, User, UserSettings } from "../../shared/types";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
 
 const props = defineProps<{
   me: User;
   assignees: Assignee[];
   users: User[];
-  userSettings: {
-    redmine_jp_api_key: string;
-    redmine_vn_api_key: string;
-    github_token: string;
-    default_assignee_id: number | null;
-  };
+  userSettings: UserSettings;
   systemSettings: Record<string, string>;
   integrationStatuses: IntegrationStatus[];
   testingService: string | null;

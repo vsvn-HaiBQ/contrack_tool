@@ -1,4 +1,5 @@
 import { http } from "../../shared/http";
+import type { UserSettings } from "../../shared/types";
 
 export const usersApi = {
   assignees: () => http<Array<{ id: number; name: string }>>("/users/assignees"),
@@ -6,8 +7,8 @@ export const usersApi = {
   statuses: (forceRefresh = false) =>
     http<Array<{ id: number; name: string }>>(`/users/statuses${forceRefresh ? "?force_refresh=true" : ""}`),
   trackers: () => http<Array<{ id: number; name: string }>>("/users/trackers"),
-  mySettings: () => http<{ redmine_jp_api_key?: string; redmine_vn_api_key?: string; github_token?: string; default_assignee_id?: number }>("/users/me/settings"),
-  updateMySettings: (payload: unknown) => http("/users/me/settings", { method: "PUT", body: JSON.stringify(payload) }),
+  mySettings: () => http<Partial<UserSettings>>("/users/me/settings"),
+  updateMySettings: (payload: unknown) => http<Partial<UserSettings>>("/users/me/settings", { method: "PUT", body: JSON.stringify(payload) }),
   localPaths: () =>
     http<{
       build_source_folder?: string | null;

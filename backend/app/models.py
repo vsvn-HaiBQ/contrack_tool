@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -37,6 +37,16 @@ class UserSettings(Base):
     build_source_folder: Mapped[str | None] = mapped_column(Text)
     build_output_folder: Mapped[str | None] = mapped_column(Text)
     git_eol_source_folder: Mapped[str | None] = mapped_column(Text)
+    document_translation_output_directory: Mapped[str | None] = mapped_column(Text)
+    document_translation_direction: Mapped[str | None] = mapped_column(String(20))
+    document_translation_model: Mapped[str | None] = mapped_column(String(100))
+    document_translation_reasoning_effort: Mapped[str | None] = mapped_column(String(20))
+    document_translation_timeout_seconds: Mapped[int | None] = mapped_column(Integer)
+    document_translation_batch_size: Mapped[int | None] = mapped_column(Integer)
+    document_translation_context_window: Mapped[int | None] = mapped_column(Integer)
+    document_translation_fast_mode: Mapped[bool | None] = mapped_column(Boolean)
+    document_translation_glossary: Mapped[str | None] = mapped_column(Text)
+    document_translation_instructions: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

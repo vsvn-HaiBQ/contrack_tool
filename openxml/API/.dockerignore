@@ -1,0 +1,48 @@
+# Build artifacts
+bin/
+obj/
+out/
+
+# NuGet packages
+**/packages/
+*.nupkg
+*.snupkg
+
+# Logs and debug files
+*.log
+*.tlog
+*.vspx
+*.user
+*.suo
+*.userprefs
+*.csproj.user
+
+# Publish output
+publish/
+*.db
+
+# Environment variables
+.env
+
+# Docker and Git files (if not needed in the image)
+.dockerignore
+Dockerfile
+.git/
+.gitignore
+
+# IDE / Editor directories and files
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Visual Studio specific files
+.vs/
+.vscode/
+*.sln.docstates
+
+# Temporary files
+tmp/
+temp/
+*.bak

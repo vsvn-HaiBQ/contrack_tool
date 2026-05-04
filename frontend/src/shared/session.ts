@@ -1,5 +1,5 @@
 import { reactive, ref } from "vue";
-import type { Assignee, TrackerOption, User } from "./types";
+import type { Assignee, TrackerOption, User, UserSettings } from "./types";
 import { authApi } from "../modules/auth/api";
 import { settingsApi } from "../modules/settings/api";
 import { usersApi } from "../modules/users/api";
@@ -14,8 +14,9 @@ export const sessionState = reactive({
     redmine_jp_api_key: "",
     redmine_vn_api_key: "",
     github_token: "",
-    default_assignee_id: null as number | null
-  },
+    default_assignee_id: null,
+    document_translation: {}
+  } as UserSettings,
   systemSettings: {
     git_repo: "",
     redmine_jp_host: "",
@@ -51,6 +52,7 @@ export async function bootstrapSession() {
   sessionState.userSettings.redmine_jp_api_key = mySettings.redmine_jp_api_key ?? "";
   sessionState.userSettings.redmine_vn_api_key = mySettings.redmine_vn_api_key ?? "";
   sessionState.userSettings.github_token = mySettings.github_token ?? "";
+  sessionState.userSettings.document_translation = mySettings.document_translation ?? {};
   try {
     sessionState.assignees = await usersApi.assignees();
   } catch {
@@ -78,6 +80,7 @@ export function clearSession() {
   sessionState.userSettings.redmine_vn_api_key = "";
   sessionState.userSettings.github_token = "";
   sessionState.userSettings.default_assignee_id = null;
+  sessionState.userSettings.document_translation = {};
   Object.keys(sessionState.systemSettings).forEach((key) => {
     sessionState.systemSettings[key] = "";
   });

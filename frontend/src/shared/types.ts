@@ -22,6 +22,27 @@ export type BuildJobLog = {
   message: string;
 };
 
+export type DocumentTranslationSettings = {
+  output_directory?: string | null;
+  direction?: "ja_to_vi" | "vi_to_ja" | string | null;
+  model?: string | null;
+  reasoning_effort?: string | null;
+  timeout_seconds?: number | null;
+  batch_size?: number | null;
+  context_window?: number | null;
+  fast_mode?: boolean | null;
+  glossary?: string | null;
+  instructions?: string | null;
+};
+
+export type UserSettings = {
+  redmine_jp_api_key: string;
+  redmine_vn_api_key: string;
+  github_token: string;
+  default_assignee_id: number | null;
+  document_translation: DocumentTranslationSettings;
+};
+
 export type BuildArtifact = {
   type: string;
   path: string;
@@ -39,6 +60,40 @@ export type BuildJob = {
   created_at: number;
   updated_at: number;
   target_jobs?: Partial<Record<"client" | "server" | string, BuildJob>>;
+};
+
+export type DocumentTranslationProgress = {
+  total_segments: number;
+  translatable_segments: number;
+  translated_segments: number;
+  batches_done: number;
+  batches_total: number;
+};
+
+export type DocumentTranslationResult = {
+  file_path: string;
+  output_path: string;
+  output_file_name?: string;
+  file_type?: "text" | "markdown" | "office" | string;
+  direction: "ja_to_vi" | "vi_to_ja" | string;
+  model: string;
+  reasoning_effort: string;
+  fast_mode?: boolean;
+  total_segments: number;
+  translatable_segments: number;
+  openxml_base_url: string;
+};
+
+export type DocumentTranslationJob = {
+  job_id: string;
+  kind: "document-translation" | string;
+  status: "queued" | "running" | "succeeded" | "failed" | string;
+  error: string | null;
+  logs: BuildJobLog[];
+  progress: DocumentTranslationProgress;
+  result: DocumentTranslationResult | null;
+  created_at: number;
+  updated_at: number;
 };
 
 export type TicketCandidate = {

@@ -24,6 +24,7 @@ from app.schemas import (
     UserSettingsOut,
 )
 from app.modules.users.service import (
+    apply_document_translation_settings,
     apply_user_settings,
     apply_local_paths,
     create_user_record,
@@ -164,21 +165,16 @@ def update_my_settings(
         settings = UserSettings(user_id=user.id)
         db.add(settings)
     try:
+        raw_payload = payload.model_dump(exclude_unset=True)
+        settings_keys = ("redmine_jp_api_key", "redmine_vn_api_key", "github_token", "default_assignee_id")
         validated = validate_user_settings_input(
-            redmine_jp_api_key=payload.redmine_jp_api_key,
-            redmine_vn_api_key=payload.redmine_vn_api_key,
-            github_token=payload.github_token,
-            default_assignee_id=payload.default_assignee_id,
+            **{key: raw_payload[key] for key in settings_keys if key in raw_payload}
         )
+        if "document_translation" in raw_payload and raw_payload["document_translation"] is not None:
+            apply_document_translation_settings(settings, **raw_payload["document_translation"])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    apply_user_settings(
-        settings,
-        redmine_jp_api_key=validated["redmine_jp_api_key"],
-        redmine_vn_api_key=validated["redmine_vn_api_key"],
-        github_token=validated["github_token"],
-        default_assignee_id=validated["default_assignee_id"],
-    )
+    apply_user_settings(settings, **validated)
     db.commit()
     db.refresh(settings)
     return serialize_user_settings(settings)

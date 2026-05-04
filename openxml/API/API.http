@@ -1,0 +1,6 @@
+@API_HostAddress = http://localhost:5117
+
+POST {{API_HostAddress}}/excel/import
+Accept: multipart/form-data
+
+###

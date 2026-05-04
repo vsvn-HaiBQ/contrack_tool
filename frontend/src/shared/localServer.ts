@@ -22,6 +22,15 @@ export type LocalPathValidation = {
   message: string;
 };
 
+export type CodexModelOption = {
+  slug: string;
+  display_name: string;
+  description?: string;
+  default_reasoning_level?: string;
+  supported_reasoning_levels?: Array<{ effort: string; description?: string }>;
+  additional_speed_tiers?: string[];
+};
+
 function messageFromBody(body: unknown, fallback: string): string {
   if (body && typeof body === "object") {
     const message = (body as { message?: unknown }).message;
@@ -87,6 +96,10 @@ export const localServerApi = {
     const response = await localHttp<{ path: string | null }>("/dialog/select-directory", jsonBody({ currentPath }));
     return response.path;
   },
+  selectFile: async (currentPath?: string) => {
+    const response = await localHttp<{ path: string | null }>("/dialog/select-file", jsonBody({ currentPath }));
+    return response.path;
+  },
   openPath: (targetPath: string) => localHttp<{ ok: boolean }>("/shell/open-path", jsonBody({ path: targetPath })),
   openContainingFolder: (targetPath: string) =>
     localHttp<{ ok: boolean }>("/shell/open-containing-folder", jsonBody({ path: targetPath })),
@@ -95,6 +108,32 @@ export const localServerApi = {
   build: {
     start: (payload: unknown) => localHttp<import("./types").BuildJob>("/build/start", jsonBody(payload)),
     getJob: (jobId: string) => localHttp<import("./types").BuildJob>(`/build/jobs/${encodeURIComponent(jobId)}`)
+  },
+  documentTranslation: {
+    health: () =>
+      localHttp<{
+        ok: boolean;
+        openxml: { ok: boolean; base_url: string; message: string };
+        codex: { ok: boolean; command: string; message: string; version?: string };
+        defaults: Record<string, unknown>;
+      }>("/document-translation/health"),
+    models: async () => {
+      const response = await localHttp<{ models: CodexModelOption[] }>("/document-translation/models");
+      return response.models;
+    },
+    sheets: async (payload: unknown) => {
+      const response = await localHttp<{ sheets: string[] }>("/document-translation/sheets", jsonBody(payload));
+      return response.sheets;
+    },
+    extract: (payload: unknown) =>
+      localHttp<{ file_path: string; extension: string; file_type?: string; sheets: string[]; segment_count: number; segments: string[] }>(
+        "/document-translation/extract",
+        jsonBody(payload)
+      ),
+    start: (payload: unknown) =>
+      localHttp<import("./types").DocumentTranslationJob>("/document-translation/translate", jsonBody(payload)),
+    getJob: (jobId: string) =>
+      localHttp<import("./types").DocumentTranslationJob>(`/document-translation/jobs/${encodeURIComponent(jobId)}`)
   },
   gitEol: {
     previewWorkingTree: (payload: unknown) =>

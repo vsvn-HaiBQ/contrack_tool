@@ -8,7 +8,9 @@ import LogtimePage from "./modules/logtime/LogtimePage.vue";
 import PullRequestPage from "./modules/pull_requests/PullRequestPage.vue";
 import GitEolPage from "./modules/git_eol/GitEolPage.vue";
 import BuildSourcePage from "./modules/build_source/BuildSourcePage.vue";
+import DocumentTranslationPage from "./modules/document_translation/DocumentTranslationPage.vue";
 import { hasRequiredRedmineKeys, sessionReady, sessionState } from "./shared/session";
+import { localServerApi } from "./shared/localServer";
 
 function defaultRouteName() {
   if (!sessionState.me) {
@@ -36,12 +38,24 @@ const router = createRouter({
         { path: "pull-requests", name: "pull-requests", component: PullRequestPage },
         { path: "git-eol", name: "git-eol", component: GitEolPage },
         { path: "build-source", name: "build-source", component: BuildSourcePage },
+        { path: "document-translation", name: "document-translation", component: DocumentTranslationPage },
       ]
     }
   ]
 });
 
-router.beforeEach((to) => {
+const nodeOnlyRouteNames = new Set(["git-eol", "build-source", "document-translation"]);
+
+async function isNodeServerAvailable() {
+  try {
+    const health = await localServerApi.health();
+    return Boolean(health.ok);
+  } catch {
+    return false;
+  }
+}
+
+router.beforeEach(async (to) => {
   if (!sessionReady.value) {
     return true;
   }
@@ -55,11 +69,14 @@ router.beforeEach((to) => {
   if (
     authenticated &&
     !hasRequiredRedmineKeys() &&
-    !["settings", "git-eol", "build-source", "login"].includes(String(to.name))
+    !["settings", "git-eol", "build-source", "document-translation", "login"].includes(String(to.name))
   ) {
     return { name: "settings" };
   }
   if (authenticated && to.name === "login") {
+    return { name: defaultRouteName() };
+  }
+  if (authenticated && nodeOnlyRouteNames.has(String(to.name)) && !(await isNodeServerAvailable())) {
     return { name: defaultRouteName() };
   }
   return true;

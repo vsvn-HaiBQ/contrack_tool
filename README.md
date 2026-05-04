@@ -52,6 +52,7 @@ Services:
 
 - Frontend: `http://localhost:8888`
 - Backend API: `http://localhost:8009/api`
+- OpenXML API: `http://localhost:5000`
 
 ## Run locally
 
@@ -71,7 +72,7 @@ corepack pnpm install
 corepack pnpm dev
 ```
 
-Node processing server for Build Source and Fix EOL:
+Node processing server for Build Source, Fix EOL, and document translation orchestration:
 
 ```bash
 corepack pnpm local-server
@@ -82,7 +83,27 @@ Default local ports:
 - PostgreSQL: `5439`
 - Frontend: `8888`
 - Backend API: `8009`
+- OpenXML API: `5000`
 - Node processing server: `3219`
+
+## Document Translation Server Plan
+
+Office document translation is split into two server responsibilities:
+
+- `openxml/`: ASP.NET Core API that extracts and rewrites `.docx`, `.xlsx`, and `.pptx` text segments.
+- `local-server/`: Node.js processing server that calls OpenXML, prompts Codex CLI, and writes the translated file on the user's machine.
+
+Node endpoints:
+
+- `GET /document-translation/health`
+- `POST /document-translation/sheets`
+- `POST /document-translation/extract`
+- `POST /document-translation/translate`
+- `GET /document-translation/jobs/{job_id}`
+
+Frontend route: `/document-translation` (`Translate Docs` tab). The UI translates all visible sheets in `.xlsx` files; there is no sheet selection flow.
+
+Codex CLI must be installed and logged in on the machine running the Node processing server. OpenXML defaults to `http://127.0.0.1:5000`; override it with `CONTRACK_OPENXML_BASE_URL` when needed. See `docs/document-translation-codex-plan.md` for the full flow and environment options.
 
 ## Build web + local server
 

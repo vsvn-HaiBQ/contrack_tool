@@ -20,6 +20,10 @@ backend/.env
 src_build
 build_output
 *.dll
+*.csproj.user
 node_modules/
 build_output/
 src_build/
+openxml/**/bin/
+openxml/**/obj/
+openxml/wwwroot/

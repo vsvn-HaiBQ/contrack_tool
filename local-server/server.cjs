@@ -16,6 +16,16 @@ function requireLocalModule(fileName) {
 
 const { getBuildJob, startBuildJob } = requireLocalModule("build-source.cjs");
 const {
+  bootstrapCodexCli,
+  defaultTranslationConfig,
+  documentTranslationHealth,
+  extractDocumentText,
+  getDocumentTranslationJob,
+  judgeDocumentSheets,
+  listCodexModels,
+  startDocumentTranslationJob,
+} = requireLocalModule("codex-translation.cjs");
+const {
   commitWorkingTree,
   fixWorkingTree,
   previewWorkingTree,
@@ -143,6 +153,21 @@ function encodedPowerShell(script) {
   return Buffer.from(script, "utf16le").toString("base64");
 }
 
+function openWindowsExplorer(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("explorer.exe", args, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    child.on("error", reject);
+    child.on("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
 async function selectDirectory(currentPath) {
   if (process.platform !== "win32") {
     throw new Error("Folder picker is only supported on Windows local server");
@@ -194,6 +219,57 @@ async function selectDirectory(currentPath) {
   return output.trim() || null;
 }
 
+async function selectFile(currentPath) {
+  if (process.platform !== "win32") {
+    throw new Error("File picker is only supported on Windows local server");
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "$initial = $env:CONTRACK_INITIAL_FILE_PATH",
+    "$selected = $null",
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "Add-Type -AssemblyName System.Drawing",
+    "[System.Windows.Forms.Application]::EnableVisualStyles()",
+    "$owner = New-Object System.Windows.Forms.Form",
+    "$owner.StartPosition = 'CenterScreen'",
+    "$owner.Size = [System.Drawing.Size]::new(1, 1)",
+    "$owner.ShowInTaskbar = $false",
+    "$owner.TopMost = $true",
+    "$owner.Opacity = 0",
+    "$owner.Show()",
+    "$owner.Activate()",
+    "$dialog = New-Object System.Windows.Forms.OpenFileDialog",
+    "$dialog.Title = 'Select document'",
+    "$dialog.Filter = 'Supported documents (*.txt;*.md;*.docx;*.xlsx;*.pptx)|*.txt;*.md;*.docx;*.xlsx;*.pptx|Text documents (*.txt;*.md)|*.txt;*.md|Office documents (*.docx;*.xlsx;*.pptx)|*.docx;*.xlsx;*.pptx|All files (*.*)|*.*'",
+    "$dialog.Multiselect = $false",
+    "if (![string]::IsNullOrWhiteSpace($initial)) {",
+    "  if (Test-Path -LiteralPath $initial -PathType Leaf) {",
+    "    $dialog.InitialDirectory = [System.IO.Path]::GetDirectoryName($initial)",
+    "    $dialog.FileName = [System.IO.Path]::GetFileName($initial)",
+    "  } elseif (Test-Path -LiteralPath $initial -PathType Container) {",
+    "    $dialog.InitialDirectory = $initial",
+    "  }",
+    "}",
+    "if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $selected = $dialog.FileName }",
+    "$owner.Close()",
+    "$owner.Dispose()",
+    "if (![string]::IsNullOrWhiteSpace($selected)) { [Console]::Out.WriteLine($selected) }",
+  ].join("\r\n");
+  const output = await runProcess(
+    "powershell.exe",
+    ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedPowerShell(script)],
+    {
+      env: {
+        ...process.env,
+        CONTRACK_INITIAL_FILE_PATH: currentPath || "",
+      },
+      windowsHide: true,
+    }
+  );
+  return output.trim() || null;
+}
+
 async function openPath(targetPath) {
   const target = String(targetPath || "").trim();
   if (!target) {
@@ -233,18 +309,7 @@ async function openContainingFolder(targetPath) {
     throw new Error(`Output folder not found: ${folder}`);
   }
   if (process.platform === "win32") {
-    const script = [
-      "$folder = $env:CONTRACK_OPEN_FOLDER",
-      "if (![string]::IsNullOrWhiteSpace($folder) -and (Test-Path -LiteralPath $folder -PathType Container)) { Start-Process -LiteralPath $folder; exit 0 }",
-      "throw \"Output folder not found: $folder\"",
-    ].join("\r\n");
-    await runProcess("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedPowerShell(script)], {
-      env: {
-        ...process.env,
-        CONTRACK_OPEN_FOLDER: folder,
-      },
-      windowsHide: true,
-    });
+    await openWindowsExplorer(["/n,", folder]);
     return;
   }
   const opener = process.platform === "darwin" ? "open" : "xdg-open";
@@ -335,6 +400,7 @@ async function route(req, res) {
       service: "contrack-local-node",
       port,
       default_paths: defaultPaths(),
+      document_translation: defaultTranslationConfig(),
     });
     return;
   }
@@ -358,6 +424,11 @@ async function route(req, res) {
     sendJson(req, res, 200, { path: await selectDirectory(body.currentPath) });
     return;
   }
+  if (req.method === "POST" && pathname === "/dialog/select-file") {
+    const body = await readJson(req);
+    sendJson(req, res, 200, { path: await selectFile(body.currentPath) });
+    return;
+  }
   if (req.method === "POST" && pathname === "/shell/open-path") {
     const body = await readJson(req);
     await openPath(body.path);
@@ -372,6 +443,42 @@ async function route(req, res) {
   }
   if (req.method === "POST" && pathname === "/filesystem/validate-path") {
     sendJson(req, res, 200, validatePath(await readJson(req)));
+    return;
+  }
+  if (req.method === "GET" && pathname === "/document-translation/health") {
+    sendJson(req, res, 200, await documentTranslationHealth());
+    return;
+  }
+  if (req.method === "GET" && pathname === "/document-translation/models") {
+    sendJson(req, res, 200, { models: listCodexModels() });
+    return;
+  }
+  if (req.method === "POST" && pathname === "/document-translation/sheets") {
+    const body = await readJson(req);
+    sendJson(req, res, 200, {
+      sheets: await judgeDocumentSheets({
+        filePath: body.filePath ?? body.file_path,
+        openXmlBaseUrl: body.openXmlBaseUrl ?? body.openxml_base_url,
+      }),
+    });
+    return;
+  }
+  if (req.method === "POST" && pathname === "/document-translation/extract") {
+    sendJson(req, res, 200, await extractDocumentText(await readJson(req)));
+    return;
+  }
+  if (req.method === "POST" && pathname === "/document-translation/translate") {
+    sendJson(req, res, 200, startDocumentTranslationJob(await readJson(req)));
+    return;
+  }
+  if (req.method === "GET" && pathname.startsWith("/document-translation/jobs/")) {
+    const jobId = decodeURIComponent(pathname.slice("/document-translation/jobs/".length));
+    const job = getDocumentTranslationJob(jobId);
+    if (!job) {
+      sendJson(req, res, 404, { message: "Document translation job not found" });
+      return;
+    }
+    sendJson(req, res, 200, job);
     return;
   }
   if (req.method === "POST" && pathname === "/build/start") {
@@ -418,4 +525,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, host, () => {
   console.log(`Contrack Node processing server listening at http://${host}:${port}`);
+  void bootstrapCodexCli({ logger: console }).catch((error) => {
+    console.warn(`Codex CLI bootstrap failed: ${error && error.message ? error.message : String(error)}`);
+  });
 });

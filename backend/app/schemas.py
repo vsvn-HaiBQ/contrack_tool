@@ -52,11 +52,38 @@ class PasswordResetRequest(BaseModel):
     password: str
 
 
+class DocumentTranslationSettingsIn(BaseModel):
+    output_directory: str | None = None
+    direction: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
+    timeout_seconds: int | None = None
+    batch_size: int | None = None
+    context_window: int | None = None
+    fast_mode: bool | None = None
+    glossary: str | None = None
+    instructions: str | None = None
+
+
+class DocumentTranslationSettingsOut(BaseModel):
+    output_directory: str | None = None
+    direction: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
+    timeout_seconds: int | None = None
+    batch_size: int | None = None
+    context_window: int | None = None
+    fast_mode: bool | None = None
+    glossary: str | None = None
+    instructions: str | None = None
+
+
 class UserSettingsIn(BaseModel):
     redmine_jp_api_key: str | None = None
     redmine_vn_api_key: str | None = None
     github_token: str | None = None
     default_assignee_id: int | None = None
+    document_translation: DocumentTranslationSettingsIn | None = None
 
 
 class UserSettingsOut(BaseModel):
@@ -64,6 +91,7 @@ class UserSettingsOut(BaseModel):
     redmine_vn_api_key: str | None = None
     github_token: str | None = None
     default_assignee_id: int | None = None
+    document_translation: DocumentTranslationSettingsOut = Field(default_factory=DocumentTranslationSettingsOut)
 
 
 class LocalPathsIn(BaseModel):
