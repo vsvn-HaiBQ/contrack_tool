@@ -2,7 +2,14 @@ FROM node:22-alpine AS frontend-build
 
 WORKDIR /frontend
 
-ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+ARG NODE_TLS_REJECT_UNAUTHORIZED=1
+ARG NPM_CONFIG_STRICT_SSL=true
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    NODE_TLS_REJECT_UNAUTHORIZED=${NODE_TLS_REJECT_UNAUTHORIZED} \
+    NPM_CONFIG_STRICT_SSL=${NPM_CONFIG_STRICT_SSL}
+
+RUN apk add --no-cache ca-certificates \
+    && update-ca-certificates
 
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/tsconfig.json frontend/vite.config.ts frontend/index.html ./
 COPY frontend/public ./public

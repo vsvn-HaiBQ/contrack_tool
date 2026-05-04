@@ -47,6 +47,9 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        NODE_TLS_REJECT_UNAUTHORIZED: ${DOCKER_NODE_TLS_REJECT_UNAUTHORIZED:-1}
+        NPM_CONFIG_STRICT_SSL: ${DOCKER_NPM_CONFIG_STRICT_SSL:-true}
     environment:
       CONTRACK_DATABASE_URL: postgresql+psycopg://contrack:contrack@postgres:5432/contrack
       CONTRACK_REDIS_URL: redis://redis:6379/0
@@ -68,6 +71,9 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        NODE_TLS_REJECT_UNAUTHORIZED: ${DOCKER_NODE_TLS_REJECT_UNAUTHORIZED:-1}
+        NPM_CONFIG_STRICT_SSL: ${DOCKER_NPM_CONFIG_STRICT_SSL:-true}
     command: ["celery", "-A", "app.core.celery_app", "worker", "--loglevel=INFO", "--concurrency=4"]
     environment:
       CONTRACK_DATABASE_URL: postgresql+psycopg://contrack:contrack@postgres:5432/contrack
@@ -86,6 +92,9 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        NODE_TLS_REJECT_UNAUTHORIZED: ${DOCKER_NODE_TLS_REJECT_UNAUTHORIZED:-1}
+        NPM_CONFIG_STRICT_SSL: ${DOCKER_NPM_CONFIG_STRICT_SSL:-true}
     ports:
       - "8888:80"
     depends_on:

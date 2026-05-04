@@ -45,8 +45,13 @@ Frontend:
 ## Run with Docker
 
 ```bash
-npm run build
 docker compose up --build
+```
+
+If Docker build fails while Corepack downloads pnpm with `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, first try again after pulling the Dockerfile changes that install CA certificates. If the Linux server is behind an intercepting proxy whose CA is not installed inside Docker, run:
+
+```bash
+DOCKER_NODE_TLS_REJECT_UNAUTHORIZED=0 DOCKER_NPM_CONFIG_STRICT_SSL=false docker compose up --build -d
 ```
 
 Services:
