@@ -52,14 +52,16 @@ async function setupAdmin() {
   }
 }
 
-onMounted(async () => {
+async function loadSetupStatus() {
   try {
     const status = await authApi.setupStatus();
     setupMode.value = status.needs_setup;
   } catch {
     setupMode.value = false;
   }
-});
+}
+
+onMounted(loadSetupStatus);
 </script>
 
 <template>

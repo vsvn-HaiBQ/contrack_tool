@@ -91,6 +91,17 @@ class IntegrationTestResponse(BaseModel):
     message: str
 
 
+class ClientUpdateResponse(BaseModel):
+    current_version: str | None = None
+    latest_version: str | None = None
+    has_update: bool = False
+    file_name: str | None = None
+    download_url: str | None = None
+    size_bytes: int | None = None
+    published_at: datetime | None = None
+    message: str
+
+
 class AssigneeOption(BaseModel):
     id: int
     name: str

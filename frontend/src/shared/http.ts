@@ -46,7 +46,53 @@ export class HttpError extends Error {
   }
 }
 
+function plainHeaders(headers: HeadersInit | undefined): Record<string, string> {
+  if (!headers) {
+    return {};
+  }
+  if (headers instanceof Headers) {
+    const result: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      result[key] = value;
+    });
+    return result;
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+  return headers;
+}
+
+async function electronHttp<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await window.contrackElectron!.apiFetch(path, {
+    method: init?.method,
+    headers: {
+      "Content-Type": "application/json",
+      ...plainHeaders(init?.headers)
+    },
+    body: typeof init?.body === "string" ? init.body : undefined
+  });
+  let body: unknown = null;
+  if (response.bodyText) {
+    try {
+      body = JSON.parse(response.bodyText);
+    } catch {
+      body = response.bodyText;
+    }
+  }
+  if (!response.ok) {
+    throw new HttpError(response.status, pickMessage(body, response.status), response.headers["x-request-id"] ?? undefined);
+  }
+  if (response.status === 204 || response.bodyText === "") {
+    return undefined as T;
+  }
+  return body as T;
+}
+
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  if (window.contrackElectron?.apiFetch) {
+    return electronHttp<T>(path, init);
+  }
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
     headers: {

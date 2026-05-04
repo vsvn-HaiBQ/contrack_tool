@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<NetworkSettings xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.datacontract.org/2004/07/w_SCMS.Model.Settings">
+  <EncryptedProxyPassword></EncryptedProxyPassword>
+  <HostName>127.0.0.1</HostName>
+  <IsPAC>false</IsPAC>
+  <IsProxy>false</IsProxy>
+  <PACUrl i:nil="true" />
+  <PortNo>8080</PortNo>
+  <ProxyAccount i:nil="true" />
+  <ProxyPort i:nil="true" />
+  <ProxyUrl i:nil="true" />
+  <UseProxyAiServer>false</UseProxyAiServer>
+  <UseProxyGit>false</UseProxyGit>
+  <UseProxyIssueTracker>false</UseProxyIssueTracker>
+  <UseProxyServer>false</UseProxyServer>
+</NetworkSettings>

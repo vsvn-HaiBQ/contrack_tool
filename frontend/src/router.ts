@@ -1,14 +1,16 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHashHistory, createWebHistory } from "vue-router";
 import LoginPage from "./modules/auth/LoginPage.vue";
 import AppShell from "./modules/layout/AppShell.vue";
-import GitEolShell from "./modules/layout/GitEolShell.vue";
 import SettingsPage from "./modules/settings/SettingsPage.vue";
 import SyncTicketPage from "./modules/tickets/SyncTicketPage.vue";
 import TicketDetailPage from "./modules/tickets/TicketDetailPage.vue";
 import LogtimePage from "./modules/logtime/LogtimePage.vue";
 import PullRequestPage from "./modules/pull_requests/PullRequestPage.vue";
 import GitEolPage from "./modules/git_eol/GitEolPage.vue";
+import BuildSourcePage from "./modules/build_source/BuildSourcePage.vue";
+import UpdatePage from "./modules/updates/UpdatePage.vue";
 import { hasRequiredRedmineKeys, sessionReady, sessionState } from "./shared/session";
+import { isElectronClient } from "./shared/electron";
 
 function defaultRouteName() {
   if (!sessionState.me) {
@@ -18,7 +20,7 @@ function defaultRouteName() {
 }
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: isElectronClient() ? createWebHashHistory() : createWebHistory(),
   routes: [
     { path: "/login", name: "login", component: LoginPage },
     {
@@ -34,13 +36,9 @@ const router = createRouter({
         { path: "tickets/detail/:jpIssueId?", name: "detail", component: TicketDetailPage },
         { path: "logtime", name: "logtime", component: LogtimePage },
         { path: "pull-requests", name: "pull-requests", component: PullRequestPage },
-      ]
-    },
-    {
-      path: "/git-eol",
-      component: GitEolShell,
-      children: [
-        { path: "", name: "git-eol", component: GitEolPage }
+        { path: "git-eol", name: "git-eol", component: GitEolPage },
+        { path: "build-source", name: "build-source", component: BuildSourcePage },
+        { path: "updates", name: "updates", component: UpdatePage },
       ]
     }
   ]
@@ -57,7 +55,11 @@ router.beforeEach((to) => {
   if (!authenticated && to.name !== "login") {
     return { name: "login" };
   }
-  if (authenticated && !hasRequiredRedmineKeys() && to.name !== "settings" && to.name !== "login") {
+  if (
+    authenticated &&
+    !hasRequiredRedmineKeys() &&
+    !["settings", "updates", "git-eol", "build-source", "login"].includes(String(to.name))
+  ) {
     return { name: "settings" };
   }
   if (authenticated && to.name === "login") {

@@ -14,6 +14,42 @@ export type IntegrationStatus = {
   message?: string | null;
 };
 
+export type ClientUpdateInfo = {
+  current_version?: string | null;
+  latest_version?: string | null;
+  has_update: boolean;
+  file_name?: string | null;
+  download_url?: string | null;
+  size_bytes?: number | null;
+  published_at?: string | null;
+  message: string;
+};
+
+export type BuildJobLog = {
+  seq?: number;
+  ts: number;
+  level: "info" | "warn" | "error" | string;
+  source: string;
+  message: string;
+};
+
+export type BuildArtifact = {
+  type: string;
+  path: string;
+  file_name: string;
+};
+
+export type BuildJob = {
+  job_id: string;
+  status: "queued" | "running" | "succeeded" | "failed" | string;
+  error: string | null;
+  logs: BuildJobLog[];
+  total_logs?: number;
+  artifacts: BuildArtifact[];
+  created_at: number;
+  updated_at: number;
+};
+
 export type TicketCandidate = {
   issue_id: number;
   subject: string;

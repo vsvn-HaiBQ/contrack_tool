@@ -19,6 +19,7 @@ from app.modules.logtime.router import router as logtime_router
 from app.modules.pull_requests.router import router as pull_requests_router
 from app.modules.settings.router import router as settings_router
 from app.modules.tickets.router import router as tickets_router
+from app.modules.updates.router import router as updates_router
 from app.modules.users.router import router as users_router
 from app.modules.settings.service import ensure_system_settings
 
@@ -78,3 +79,4 @@ app.include_router(tickets_router, prefix=settings.api_prefix)
 app.include_router(logtime_router, prefix=settings.api_prefix)
 app.include_router(pull_requests_router, prefix=settings.api_prefix)
 app.include_router(git_eol_router, prefix=settings.api_prefix)
+app.include_router(updates_router, prefix=settings.api_prefix)

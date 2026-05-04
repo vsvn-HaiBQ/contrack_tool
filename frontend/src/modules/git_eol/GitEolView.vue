@@ -5,7 +5,8 @@ import LoadingCircle from "../../shared/LoadingCircle.vue";
 import GitEolDiffTable from "./GitEolDiffTable.vue";
 
 const props = defineProps<{
-  form: { base_branch: string; source_branch: string };
+  form: { mode: "branch" | "working_tree"; base_branch: string; source_branch: string; local_source_folder: string };
+  electronClient: boolean;
   commitForm: { message: string };
   preview: GitEolPreview | null;
   selectedFiles: Record<string, boolean>;
@@ -40,9 +41,15 @@ const emit = defineEmits<{
   toggleFile: [path: string];
   toggleResultFile: [path: string];
   clearLogs: [];
+  browseLocalSourceFolder: [];
 }>();
 
-const canPreview = computed(() => Boolean(props.form.base_branch.trim() && props.form.source_branch.trim()));
+const canPreview = computed(() => {
+  if (props.form.mode === "working_tree") {
+    return props.electronClient && Boolean(props.form.local_source_folder.trim());
+  }
+  return Boolean(props.form.base_branch.trim() && props.form.source_branch.trim());
+});
 const changedFixedFiles = computed(() =>
   props.fixResult?.fixed_files.filter((f) => f.worktree_changed ?? f.restored_eol_lines > 0) ?? []
 );
@@ -70,7 +77,7 @@ watch(
     await nextTick();
     const el = logContainer.value;
     if (el) {
-      el.scrollTop = el.scrollHeight;
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }
 );
@@ -105,31 +112,75 @@ function statusBadgeClass(status: string): string {
 <template>
   <section class="grid gap-6">
     <div class="grid gap-4 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
-      <div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div class="grid w-full gap-4 md:grid-cols-2">
-          <div class="grid gap-2">
-            <label class="text-sm font-medium text-[#393C41]">Base Branch</label>
-            <input
-              v-model="form.base_branch"
-              class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
-            />
-          </div>
-          <div class="grid gap-2">
-            <label class="text-sm font-medium text-[#393C41]">Source Branch</label>
-            <input
-              v-model="form.source_branch"
-              class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
-            />
-          </div>
+      <div class="grid gap-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            class="rounded-lg px-4 py-2 text-sm font-medium transition"
+            :class="form.mode === 'branch' ? 'bg-[#171A20] text-white' : 'bg-neutral-100 text-[#393C41] hover:bg-neutral-200'"
+            @click="form.mode = 'branch'"
+          >
+            Branch Compare
+          </button>
+          <button
+            class="rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60"
+            :class="form.mode === 'working_tree' ? 'bg-[#171A20] text-white' : 'bg-neutral-100 text-[#393C41] hover:bg-neutral-200'"
+            :disabled="!electronClient"
+            @click="form.mode = 'working_tree'"
+          >
+            Working Tree vs Head
+          </button>
+          <span v-if="!electronClient" class="text-sm text-[#5C5E62]">Working Tree mode chỉ khả dụng trong Electron.</span>
         </div>
-        <button
-          class="inline-flex min-h-10 min-w-[160px] items-center justify-center gap-2 rounded-lg bg-[#171A20] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
-          :disabled="!canPreview || loadingPreview"
-          @click="emit('preview')"
-        >
-          <LoadingCircle v-if="loadingPreview" />
-          {{ loadingPreview ? "Running..." : "Preview" }}
-        </button>
+
+        <div v-if="form.mode === 'branch'" class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div class="grid w-full gap-4 md:grid-cols-2">
+            <div class="grid gap-2">
+              <label class="text-sm font-medium text-[#393C41]">Base Branch</label>
+              <input
+                v-model="form.base_branch"
+                class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+              />
+            </div>
+            <div class="grid gap-2">
+              <label class="text-sm font-medium text-[#393C41]">Source Branch</label>
+              <input
+                v-model="form.source_branch"
+                class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+              />
+            </div>
+          </div>
+          <button
+            class="inline-flex min-h-10 min-w-[160px] items-center justify-center gap-2 rounded-lg bg-[#171A20] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="!canPreview || loadingPreview"
+            @click="emit('preview')"
+          >
+            <LoadingCircle v-if="loadingPreview" />
+            {{ loadingPreview ? "Running..." : "Preview" }}
+          </button>
+        </div>
+
+        <div v-else class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div class="grid w-full gap-2">
+            <label class="text-sm font-medium text-[#393C41]">Target Source Folder</label>
+            <div class="flex gap-2">
+              <input
+                v-model="form.local_source_folder"
+                class="min-w-0 flex-1 rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+              />
+              <button class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="emit('browseLocalSourceFolder')">
+                Browse
+              </button>
+            </div>
+          </div>
+          <button
+            class="inline-flex min-h-10 min-w-[190px] items-center justify-center gap-2 rounded-lg bg-[#171A20] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="!canPreview || loadingPreview"
+            @click="emit('preview')"
+          >
+            <LoadingCircle v-if="loadingPreview" />
+            {{ loadingPreview ? "Running..." : "Preview" }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -150,13 +201,15 @@ function statusBadgeClass(status: string): string {
           </button>
         </div>
       </div>
-      <div ref="logContainer" class="max-h-72 overflow-auto rounded-lg bg-neutral-900 p-3 font-mono text-xs leading-relaxed">
+      <div ref="logContainer" class="max-h-72 overflow-auto scroll-smooth rounded-lg bg-neutral-900 p-3 font-mono text-xs leading-relaxed">
         <div v-if="!jobLogs.length" class="text-neutral-500">Waiting for log output...</div>
-        <div v-for="(entry, idx) in jobLogs" :key="idx" class="flex gap-2" :class="logLineClass(entry.level)">
-          <span class="shrink-0 text-neutral-500">{{ formatTs(entry.ts) }}</span>
-          <span class="shrink-0 text-neutral-400">[{{ entry.source }}]</span>
-          <span class="break-all whitespace-pre-wrap">{{ entry.message }}</span>
-        </div>
+        <TransitionGroup v-else name="log-line" tag="div" class="grid gap-0.5">
+          <div v-for="(entry, idx) in jobLogs" :key="`${entry.ts}-${idx}`" class="flex gap-2 transition-colors duration-200" :class="logLineClass(entry.level)">
+            <span class="shrink-0 text-neutral-500">{{ formatTs(entry.ts) }}</span>
+            <span class="shrink-0 text-neutral-400">[{{ entry.source }}]</span>
+            <span class="break-all whitespace-pre-wrap">{{ entry.message }}</span>
+          </div>
+        </TransitionGroup>
       </div>
       <p v-if="jobError" class="text-sm text-red-700">{{ jobError }}</p>
     </div>
@@ -382,4 +435,17 @@ function statusBadgeClass(status: string): string {
     </div>
   </section>
 </template>
+
+<style scoped>
+.log-line-enter-active {
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.log-line-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+</style>
 

@@ -36,10 +36,12 @@ services:
       CONTRACK_MASTER_KEY: xzlnGkJaoJwBmT4HwvreZLVYQHtRkoVtjaJe31gnN0ci1f0lLo_x2yae0mRqAtDP
       CONTRACK_HTTP_VERIFY_SSL: "false"
       CONTRACK_GIT_WORKSPACE_ROOT: /var/lib/contrack/git
+      CONTRACK_RELEASE_DIR: /var/lib/contrack/release
     ports:
       - "8009:8009"
     volumes:
       - git_data:/var/lib/contrack/git
+      - ./backend/release:/var/lib/contrack/release
     depends_on:
       postgres:
         condition: service_healthy

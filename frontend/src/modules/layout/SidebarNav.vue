@@ -12,6 +12,7 @@ const emit = defineEmits<{
   select: [value: string];
   toggleUserMenu: [];
   settings: [];
+  checkUpdate: [];
   logout: [];
 }>();
 
@@ -21,33 +22,9 @@ function isActiveTab(currentTab: string, tabKey: string) {
 </script>
 
 <template>
-  <header class="border-b border-neutral-200 bg-white">
-    <div class="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-      <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div class="flex items-center justify-between gap-4">
-          <div>
-            <p class="m-0 text-lg font-semibold tracking-[0.06em] text-[#171A20] uppercase">Contrack</p>
-          </div>
-          <button
-            class="rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 lg:hidden"
-            @click="emit('logout')"
-          >
-            Logout
-          </button>
-        </div>
-        <div class="flex items-center gap-3">
-          <div class="relative">
-            <button class="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-2 text-left" @click="emit('toggleUserMenu')">
-              <p class="text-sm font-medium text-[#171A20]">{{ me.username }}</p>
-            </button>
-            <div v-if="userMenuOpen" class="absolute right-0 z-10 mt-2 w-40 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg">
-              <button class="block w-full px-4 py-2 text-left text-sm text-[#171A20] transition hover:bg-neutral-50" @click="emit('settings')">Settings</button>
-              <button class="block w-full px-4 py-2 text-left text-sm text-[#171A20] transition hover:bg-neutral-50" @click="emit('logout')">Logout</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <nav class="flex flex-wrap gap-2">
+  <header class="sticky top-0 z-20 border-b border-neutral-200 bg-white/95 backdrop-blur">
+    <div class="mx-auto flex w-full max-w-none items-center justify-between gap-3 px-4 py-2 sm:px-6">
+      <nav class="flex min-w-0 flex-1 flex-wrap gap-2">
         <button
           v-for="tab in tabs"
           :key="tab.key"
@@ -58,6 +35,16 @@ function isActiveTab(currentTab: string, tabKey: string) {
           {{ tab.label }}
         </button>
       </nav>
+      <div class="relative shrink-0">
+        <button class="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-2 text-left" @click="emit('toggleUserMenu')">
+          <p class="text-sm font-medium text-[#171A20]">{{ me.username }}</p>
+        </button>
+        <div v-if="userMenuOpen" class="absolute right-0 z-30 mt-2 w-40 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg">
+          <button class="block w-full px-4 py-2 text-left text-sm text-[#171A20] transition hover:bg-neutral-50" @click="emit('settings')">Settings</button>
+          <button class="block w-full px-4 py-2 text-left text-sm text-[#171A20] transition hover:bg-neutral-50" @click="emit('checkUpdate')">Check Update</button>
+          <button class="block w-full px-4 py-2 text-left text-sm text-[#171A20] transition hover:bg-neutral-50" @click="emit('logout')">Logout</button>
+        </div>
+      </div>
     </div>
   </header>
 </template>
