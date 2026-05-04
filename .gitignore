@@ -22,3 +22,4 @@ build_output
 *.dll
 node_modules/
 build_output/
+src_build/
