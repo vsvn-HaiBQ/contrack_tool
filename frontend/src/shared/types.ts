@@ -298,9 +298,14 @@ export type GitEolDiffSide = {
 };
 
 export type GitEolDiffRow = {
-  type: "equal" | "eol" | "replace" | "delete" | "insert" | string;
+  type: "equal" | "eol" | "replace" | "delete" | "insert" | "fold" | string;
   left: GitEolDiffSide | null;
   right: GitEolDiffSide | null;
+  count?: number | null;
+  left_start?: number | null;
+  left_end?: number | null;
+  right_start?: number | null;
+  right_end?: number | null;
 };
 
 export type GitEolStructuredDiff = {

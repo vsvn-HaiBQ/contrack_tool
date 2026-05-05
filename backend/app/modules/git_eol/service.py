@@ -699,7 +699,19 @@ class GitEolService:
         args.append(path)
         return self._git_text(worktree, args)
 
-    def structured_diff(self, *, user: User, session_id: str, path: str) -> dict[str, Any]:
+    def structured_diff(
+        self,
+        *,
+        user: User,
+        session_id: str,
+        path: str,
+        fold_unchanged: bool = False,
+        context: int = 3,
+        left_start: int | None = None,
+        left_end: int | None = None,
+        right_start: int | None = None,
+        right_end: int | None = None,
+    ) -> dict[str, Any]:
         """Compute a side-by-side diff that also tracks EOL differences.
 
         Before a fix, the source side is read from the HEAD blob so checkout EOL
@@ -740,7 +752,23 @@ class GitEolService:
 
         base_lines = self._split_lines(base_bytes)
         source_lines = self._split_lines(source_bytes)
-        rows, stats = self._build_side_by_side_rows(base_lines, source_lines)
+        if any(value is not None for value in (left_start, left_end, right_start, right_end)):
+            rows = self._build_equal_range_rows(
+                base_lines,
+                source_lines,
+                left_start=left_start,
+                left_end=left_end,
+                right_start=right_start,
+                right_end=right_end,
+            )
+            stats = {"added": 0, "removed": 0, "changed": 0, "eol_only": 0}
+        else:
+            rows, stats = self._build_side_by_side_rows(
+                base_lines,
+                source_lines,
+                fold_unchanged=fold_unchanged,
+                context=context,
+            )
         return {
             "path": path,
             "binary": False,
@@ -749,7 +777,12 @@ class GitEolService:
         }
 
     def _build_side_by_side_rows(
-        self, base_lines: list[RawLine], source_lines: list[RawLine]
+        self,
+        base_lines: list[RawLine],
+        source_lines: list[RawLine],
+        *,
+        fold_unchanged: bool = False,
+        context: int = 3,
     ) -> tuple[list[dict[str, Any]], dict[str, int]]:
         matcher = difflib.SequenceMatcher(
             None,
@@ -781,19 +814,54 @@ class GitEolService:
                 return None
             return {"lineno": lineno, "text": render_text(line), "eol": eol_name(line)}
 
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        opcodes = self._display_opcodes(base_lines, source_lines, matcher.get_opcodes())
+        for op_index, (tag, i1, i2, j1, j2) in enumerate(opcodes):
             if tag == "equal":
-                for offset in range(i2 - i1):
-                    base_line = base_lines[i1 + offset]
-                    source_line = source_lines[j1 + offset]
-                    eol_diff = base_line.eol != source_line.eol
-                    if eol_diff:
-                        eol_only += 1
+                count = i2 - i1
+                has_before = op_index > 0
+                has_after = op_index < len(opcodes) - 1
+                head = min(context, count) if fold_unchanged and has_before else 0
+                tail = min(context, count - head) if fold_unchanged and has_after else 0
+                hidden = count - head - tail if fold_unchanged else 0
+                should_fold = hidden > 0 and count >= context * 2 + 1
+
+                def append_equal_rows(start_offset: int, end_offset: int) -> None:
+                    for offset in range(start_offset, end_offset):
+                        base_line = base_lines[i1 + offset]
+                        source_line = source_lines[j1 + offset]
+                        rows.append(
+                            {
+                                "type": "equal",
+                                "left": make_side(base_line, i1 + offset + 1),
+                                "right": make_side(source_line, j1 + offset + 1),
+                            }
+                        )
+
+                if not should_fold:
+                    append_equal_rows(0, count)
+                else:
+                    append_equal_rows(0, head)
                     rows.append(
                         {
-                            "type": "eol" if eol_diff else "equal",
-                            "left": make_side(base_line, i1 + offset + 1),
-                            "right": make_side(source_line, j1 + offset + 1),
+                            "type": "fold",
+                            "left": None,
+                            "right": None,
+                            "count": hidden,
+                            "left_start": i1 + head + 1,
+                            "left_end": i1 + head + hidden,
+                            "right_start": j1 + head + 1,
+                            "right_end": j1 + head + hidden,
+                        }
+                    )
+                    append_equal_rows(head + hidden, count)
+            elif tag == "eol":
+                for offset in range(i2 - i1):
+                    eol_only += 1
+                    rows.append(
+                        {
+                            "type": "eol",
+                            "left": make_side(base_lines[i1 + offset], i1 + offset + 1),
+                            "right": make_side(source_lines[j1 + offset], j1 + offset + 1),
                         }
                     )
             elif tag == "replace":
@@ -836,6 +904,80 @@ class GitEolService:
                     )
         stats = {"added": added, "removed": removed, "changed": changed, "eol_only": eol_only}
         return rows, stats
+
+    def _display_opcodes(
+        self,
+        base_lines: list[RawLine],
+        source_lines: list[RawLine],
+        opcodes: list[tuple[str, int, int, int, int]],
+    ) -> list[tuple[str, int, int, int, int]]:
+        result: list[tuple[str, int, int, int, int]] = []
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag != "equal":
+                result.append((tag, i1, i2, j1, j2))
+                continue
+            offset = 0
+            while offset < i2 - i1:
+                eol_diff = base_lines[i1 + offset].eol != source_lines[j1 + offset].eol
+                start = offset
+                offset += 1
+                while (
+                    offset < i2 - i1
+                    and (base_lines[i1 + offset].eol != source_lines[j1 + offset].eol) == eol_diff
+                ):
+                    offset += 1
+                result.append(("eol" if eol_diff else "equal", i1 + start, i1 + offset, j1 + start, j1 + offset))
+        return result
+
+    def _build_equal_range_rows(
+        self,
+        base_lines: list[RawLine],
+        source_lines: list[RawLine],
+        *,
+        left_start: int | None,
+        left_end: int | None,
+        right_start: int | None,
+        right_end: int | None,
+    ) -> list[dict[str, Any]]:
+        if not all(isinstance(value, int) for value in (left_start, left_end, right_start, right_end)):
+            raise GitEolError("Hidden diff range is invalid")
+        assert left_start is not None and left_end is not None and right_start is not None and right_end is not None
+        if left_end < left_start or right_end < right_start or left_end - left_start != right_end - right_start:
+            raise GitEolError("Hidden diff range is inconsistent")
+        if left_end > len(base_lines) or right_end > len(source_lines):
+            raise GitEolError("Hidden diff range is outside file bounds")
+
+        rows: list[dict[str, Any]] = []
+        for offset in range(left_end - left_start + 1):
+            left_index = left_start - 1 + offset
+            right_index = right_start - 1 + offset
+            left_line = base_lines[left_index]
+            right_line = source_lines[right_index]
+            rows.append(
+                {
+                    "type": "eol" if left_line.eol != right_line.eol else "equal",
+                    "left": {
+                        "lineno": left_index + 1,
+                        "text": left_line.content.decode("utf-8", errors="replace"),
+                        "eol": self._eol_name(left_line),
+                    },
+                    "right": {
+                        "lineno": right_index + 1,
+                        "text": right_line.content.decode("utf-8", errors="replace"),
+                        "eol": self._eol_name(right_line),
+                    },
+                }
+            )
+        return rows
+
+    def _eol_name(self, line: RawLine) -> str:
+        if line.eol == b"\n":
+            return "lf"
+        if line.eol == b"\r\n":
+            return "crlf"
+        if line.eol == b"\r":
+            return "cr"
+        return "none"
 
     def get_session(self, *, user: User, session_id: str) -> dict[str, Any]:
         return self._load_session(session_id, user)

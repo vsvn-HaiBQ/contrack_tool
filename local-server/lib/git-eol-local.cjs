@@ -221,23 +221,71 @@ function opcodes(leftLines, rightLines) {
 function positionalOpcodes(left, right) {
   const n = left.length;
   const m = right.length;
-  const paired = Math.min(n, m);
+  let prefix = 0;
+  while (prefix < n && prefix < m && left[prefix] === right[prefix]) {
+    prefix += 1;
+  }
+
+  let suffix = 0;
+  while (
+    suffix < n - prefix &&
+    suffix < m - prefix &&
+    left[n - suffix - 1] === right[m - suffix - 1]
+  ) {
+    suffix += 1;
+  }
+
   const raw = [];
+  if (prefix > 0) {
+    raw.push({ tag: "equal", i1: 0, i2: prefix, j1: 0, j2: prefix });
+  }
+
+  const middleLeftStart = prefix;
+  const middleRightStart = prefix;
+  const middleLeftEnd = n - suffix;
+  const middleRightEnd = m - suffix;
+  const paired = Math.min(middleLeftEnd - middleLeftStart, middleRightEnd - middleRightStart);
   let index = 0;
   while (index < paired) {
-    const tag = left[index] === right[index] ? "equal" : "replace";
+    const leftIndex = middleLeftStart + index;
+    const rightIndex = middleRightStart + index;
+    const tag = left[leftIndex] === right[rightIndex] ? "equal" : "replace";
     const start = index;
     index += 1;
-    while (index < paired && (left[index] === right[index]) === (tag === "equal")) {
+    while (
+      index < paired &&
+      (left[middleLeftStart + index] === right[middleRightStart + index]) === (tag === "equal")
+    ) {
       index += 1;
     }
-    raw.push({ tag, i1: start, i2: index, j1: start, j2: index });
+    raw.push({
+      tag,
+      i1: middleLeftStart + start,
+      i2: middleLeftStart + index,
+      j1: middleRightStart + start,
+      j2: middleRightStart + index,
+    });
   }
-  if (n > paired) {
-    raw.push({ tag: "delete", i1: paired, i2: n, j1: paired, j2: paired });
+  if (middleLeftEnd - middleLeftStart > paired) {
+    raw.push({
+      tag: "delete",
+      i1: middleLeftStart + paired,
+      i2: middleLeftEnd,
+      j1: middleRightStart + paired,
+      j2: middleRightStart + paired,
+    });
   }
-  if (m > paired) {
-    raw.push({ tag: "insert", i1: paired, i2: paired, j1: paired, j2: m });
+  if (middleRightEnd - middleRightStart > paired) {
+    raw.push({
+      tag: "insert",
+      i1: middleLeftStart + paired,
+      i2: middleLeftStart + paired,
+      j1: middleRightStart + paired,
+      j2: middleRightEnd,
+    });
+  }
+  if (suffix > 0) {
+    raw.push({ tag: "equal", i1: n - suffix, i2: n, j1: m - suffix, j2: m });
   }
   return coalesce(raw);
 }
@@ -362,7 +410,9 @@ function session(sessionId) {
   return value;
 }
 
-function structuredDiff({ sessionId, path: filePath }) {
+function structuredDiff(input = {}) {
+  const sessionId = input.sessionId ?? input.session_id;
+  const filePath = input.path;
   const value = session(sessionId);
   const entry = value.files.find((item) => item.path === filePath);
   if (!entry) {
@@ -386,16 +436,71 @@ function structuredDiff({ sessionId, path: filePath }) {
   }
   const baseLines = splitLines(baseBytes);
   const sourceLines = splitLines(sourceBytes);
+  const range = hiddenRange(input);
+  if (range) {
+    const rows = equalRangeRows(baseLines, sourceLines, range);
+    return { session_id: sessionId, path: filePath, binary: false, rows, stats: { added: 0, removed: 0, changed: 0, eol_only: 0 } };
+  }
+  return {
+    session_id: sessionId,
+    path: filePath,
+    binary: false,
+    ...buildSideBySideRows(baseLines, sourceLines, {
+      foldUnchanged: parseBoolean(input.foldUnchanged ?? input.fold_unchanged, false),
+      context: positiveInt(input.context, 3, 0, 50),
+    }),
+  };
+}
+
+function buildSideBySideRows(baseLines, sourceLines, { foldUnchanged = false, context = 3 } = {}) {
   const rows = [];
   const stats = { added: 0, removed: 0, changed: 0, eol_only: 0 };
-  for (const op of opcodes(baseLines, sourceLines)) {
+  const ops = displayOpcodes(baseLines, sourceLines);
+  for (let opIndex = 0; opIndex < ops.length; opIndex += 1) {
+    const op = ops[opIndex];
     if (op.tag === "equal") {
+      const count = op.i2 - op.i1;
+      const hasBefore = opIndex > 0;
+      const hasAfter = opIndex < ops.length - 1;
+      const head = foldUnchanged && hasBefore ? Math.min(context, count) : 0;
+      const tail = foldUnchanged && hasAfter ? Math.min(context, count - head) : 0;
+      const hidden = foldUnchanged ? count - head - tail : 0;
+      const shouldFold = hidden > 0 && count >= context * 2 + 1;
+
+      const appendEqualRows = (startOffset, endOffset) => {
+        for (let offset = startOffset; offset < endOffset; offset += 1) {
+          const left = baseLines[op.i1 + offset];
+          const right = sourceLines[op.j1 + offset];
+          const eolDiff = left.eol !== right.eol;
+          if (eolDiff) stats.eol_only += 1;
+          rows.push({ type: eolDiff ? "eol" : "equal", left: side(left, op.i1 + offset + 1), right: side(right, op.j1 + offset + 1) });
+        }
+      };
+
+      if (!shouldFold) {
+        appendEqualRows(0, count);
+      } else {
+        appendEqualRows(0, head);
+        rows.push({
+          type: "fold",
+          left: null,
+          right: null,
+          count: hidden,
+          left_start: op.i1 + head + 1,
+          left_end: op.i1 + head + hidden,
+          right_start: op.j1 + head + 1,
+          right_end: op.j1 + head + hidden,
+        });
+        appendEqualRows(head + hidden, count);
+      }
+    } else if (op.tag === "eol") {
       for (let offset = 0; offset < op.i2 - op.i1; offset += 1) {
-        const left = baseLines[op.i1 + offset];
-        const right = sourceLines[op.j1 + offset];
-        const eolDiff = left.eol !== right.eol;
-        if (eolDiff) stats.eol_only += 1;
-        rows.push({ type: eolDiff ? "eol" : "equal", left: side(left, op.i1 + offset + 1), right: side(right, op.j1 + offset + 1) });
+        stats.eol_only += 1;
+        rows.push({
+          type: "eol",
+          left: side(baseLines[op.i1 + offset], op.i1 + offset + 1),
+          right: side(sourceLines[op.j1 + offset], op.j1 + offset + 1),
+        });
       }
     } else if (op.tag === "replace") {
       const count = Math.max(op.i2 - op.i1, op.j2 - op.j1);
@@ -421,7 +526,76 @@ function structuredDiff({ sessionId, path: filePath }) {
       }
     }
   }
-  return { session_id: sessionId, path: filePath, binary: false, rows, stats };
+  return { rows, stats };
+}
+
+function displayOpcodes(baseLines, sourceLines) {
+  const result = [];
+  for (const op of opcodes(baseLines, sourceLines)) {
+    if (op.tag !== "equal") {
+      result.push(op);
+      continue;
+    }
+    let offset = 0;
+    while (offset < op.i2 - op.i1) {
+      const eolDiff = baseLines[op.i1 + offset].eol !== sourceLines[op.j1 + offset].eol;
+      const start = offset;
+      offset += 1;
+      while (
+        offset < op.i2 - op.i1 &&
+        (baseLines[op.i1 + offset].eol !== sourceLines[op.j1 + offset].eol) === eolDiff
+      ) {
+        offset += 1;
+      }
+      result.push({
+        tag: eolDiff ? "eol" : "equal",
+        i1: op.i1 + start,
+        i2: op.i1 + offset,
+        j1: op.j1 + start,
+        j2: op.j1 + offset,
+      });
+    }
+  }
+  return result;
+}
+
+function hiddenRange(input = {}) {
+  const leftStart = Number(input.leftStart ?? input.left_start);
+  const leftEnd = Number(input.leftEnd ?? input.left_end);
+  const rightStart = Number(input.rightStart ?? input.right_start);
+  const rightEnd = Number(input.rightEnd ?? input.right_end);
+  const values = [leftStart, leftEnd, rightStart, rightEnd];
+  if (values.every((value) => Number.isNaN(value))) {
+    return null;
+  }
+  if (!values.every((value) => Number.isInteger(value) && value >= 1)) {
+    throw new Error("Hidden diff range is invalid");
+  }
+  if (leftEnd < leftStart || rightEnd < rightStart || leftEnd - leftStart !== rightEnd - rightStart) {
+    throw new Error("Hidden diff range is inconsistent");
+  }
+  return { leftStart, leftEnd, rightStart, rightEnd };
+}
+
+function equalRangeRows(baseLines, sourceLines, range) {
+  const rows = [];
+  const count = range.leftEnd - range.leftStart + 1;
+  for (let offset = 0; offset < count; offset += 1) {
+    const leftIndex = range.leftStart - 1 + offset;
+    const rightIndex = range.rightStart - 1 + offset;
+    const left = baseLines[leftIndex];
+    const right = sourceLines[rightIndex];
+    if (!left || !right) {
+      throw new Error("Hidden diff range is outside file bounds");
+    }
+    const eolDiff = left.eol !== right.eol;
+    rows.push({
+      type: eolDiff ? "eol" : "equal",
+      left: side(left, leftIndex + 1),
+      right: side(right, rightIndex + 1),
+    });
+  }
+  return rows;
 }
 
 function side(line, lineno) {
@@ -437,6 +611,19 @@ function eolName(eol) {
   if (eol === "\r\n") return "crlf";
   if (eol === "\r") return "cr";
   return "none";
+}
+
+function positiveInt(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const rounded = Math.floor(parsed);
+  return Math.min(Math.max(rounded, min), max);
+}
+
+function parseBoolean(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (value === undefined || value === null || value === "") return fallback;
+  return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
 function fixWorkingTree({ sessionId, files }) {

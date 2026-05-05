@@ -153,10 +153,26 @@ def fetch_diff(
 def fetch_structured_diff(
     session_id: str,
     path: str = Query(..., min_length=1),
+    fold_unchanged: bool = Query(False),
+    context: int = Query(3, ge=0, le=50),
+    left_start: int | None = Query(None, ge=1),
+    left_end: int | None = Query(None, ge=1),
+    right_start: int | None = Query(None, ge=1),
+    right_end: int | None = Query(None, ge=1),
     user: User = Depends(get_current_user),
 ) -> GitEolStructuredDiffResponse:
     try:
-        result = service.structured_diff(user=user, session_id=session_id, path=path)
+        result = service.structured_diff(
+            user=user,
+            session_id=session_id,
+            path=path,
+            fold_unchanged=fold_unchanged,
+            context=context,
+            left_start=left_start,
+            left_end=left_end,
+            right_start=right_start,
+            right_end=right_end,
+        )
     except GitEolError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return GitEolStructuredDiffResponse(session_id=session_id, **result)

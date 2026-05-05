@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import type { GitEolCommitResult, GitEolFixResult, GitEolJobLog, GitEolPreview, GitEolPushResult, GitEolStructuredDiff } from "../../shared/types";
+import type { GitEolCommitResult, GitEolDiffRow, GitEolFixResult, GitEolJobLog, GitEolPreview, GitEolPushResult, GitEolStructuredDiff } from "../../shared/types";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
 import GitEolDiffTable from "./GitEolDiffTable.vue";
 
@@ -32,6 +32,7 @@ const props = defineProps<{
   jobStatus: string;
   jobLogs: GitEolJobLog[];
   jobError: string | null;
+  loadHiddenRows: (path: string, row: GitEolDiffRow) => Promise<GitEolDiffRow[]>;
 }>();
 
 const emit = defineEmits<{
@@ -303,7 +304,11 @@ function statusBadgeClass(status: string): string {
               </tr>
               <tr v-if="expandedFiles[file.path]" class="border-t border-neutral-100 bg-neutral-50">
                 <td colspan="9" class="p-0">
-                  <GitEolDiffTable :diff="diffCache[file.path] ?? null" :loading="diffLoading[file.path] ?? false" />
+                  <GitEolDiffTable
+                    :diff="diffCache[file.path] ?? null"
+                    :loading="diffLoading[file.path] ?? false"
+                    :load-hidden-rows="(row) => loadHiddenRows(file.path, row)"
+                  />
                 </td>
               </tr>
             </template>
@@ -408,7 +413,11 @@ function statusBadgeClass(status: string): string {
                 </tr>
                 <tr v-if="expandedResultFiles[file.path]" class="border-t border-neutral-100">
                   <td colspan="7" class="p-0">
-                    <GitEolDiffTable :diff="resultDiffCache[file.path] ?? null" :loading="resultDiffLoading[file.path] ?? false" />
+                    <GitEolDiffTable
+                      :diff="resultDiffCache[file.path] ?? null"
+                      :loading="resultDiffLoading[file.path] ?? false"
+                      :load-hidden-rows="(row) => loadHiddenRows(file.path, row)"
+                    />
                   </td>
                 </tr>
               </template>

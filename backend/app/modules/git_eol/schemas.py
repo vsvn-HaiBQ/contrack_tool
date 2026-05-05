@@ -117,9 +117,14 @@ class GitEolDiffSide(BaseModel):
 
 
 class GitEolDiffRow(BaseModel):
-    type: str  # equal | eol | replace | delete | insert
+    type: str  # equal | eol | replace | delete | insert | fold
     left: GitEolDiffSide | None = None
     right: GitEolDiffSide | None = None
+    count: int | None = None
+    left_start: int | None = None
+    left_end: int | None = None
+    right_start: int | None = None
+    right_end: int | None = None
 
 
 class GitEolStructuredDiffResponse(BaseModel):

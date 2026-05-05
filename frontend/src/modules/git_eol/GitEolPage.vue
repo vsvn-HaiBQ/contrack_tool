@@ -8,6 +8,7 @@ import { showToast } from "../../shared/toast";
 import { usersApi } from "../users/api";
 import type {
   GitEolCommitResult,
+  GitEolDiffRow,
   GitEolFixResult,
   GitEolJobLog,
   GitEolPreview,
@@ -245,8 +246,8 @@ async function loadDiff(
   loading[path] = true;
   try {
     cache[path] = isWorkingTreeMode.value
-      ? await localServerApi.gitEol.structuredDiff({ sessionId: preview.value.session_id, path })
-      : await gitEolApi.diff(preview.value.session_id, path);
+      ? await localServerApi.gitEol.structuredDiff({ sessionId: preview.value.session_id, path, foldUnchanged: true, context: 3 })
+      : await gitEolApi.diff(preview.value.session_id, path, { foldUnchanged: true, context: 3 });
   } catch (error) {
     cache[path] = {
       session_id: preview.value.session_id,
@@ -259,6 +260,33 @@ async function loadDiff(
   } finally {
     loading[path] = false;
   }
+}
+
+async function loadHiddenRows(path: string, row: GitEolDiffRow): Promise<GitEolDiffRow[]> {
+  if (!preview.value) return [];
+  const leftStart = row.left_start ?? null;
+  const leftEnd = row.left_end ?? null;
+  const rightStart = row.right_start ?? null;
+  const rightEnd = row.right_end ?? null;
+  if (!leftStart || !leftEnd || !rightStart || !rightEnd) {
+    throw new Error("Hidden diff range is missing");
+  }
+  const diff = isWorkingTreeMode.value
+    ? await localServerApi.gitEol.structuredDiff({
+        sessionId: preview.value.session_id,
+        path,
+        leftStart,
+        leftEnd,
+        rightStart,
+        rightEnd
+      })
+    : await gitEolApi.diff(preview.value.session_id, path, {
+        leftStart,
+        leftEnd,
+        rightStart,
+        rightEnd
+      });
+  return diff.rows;
 }
 
 async function toggleFileExpanded(path: string) {
@@ -495,5 +523,6 @@ onMounted(loadLocalPathSetting);
     @toggle-result-file="toggleResultFileExpanded"
     @clear-logs="clearLogs"
     @browse-local-source-folder="browseLocalSourceFolder"
+    :load-hidden-rows="loadHiddenRows"
   />
 </template>
