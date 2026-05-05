@@ -500,7 +500,9 @@ async function route(req, res) {
     return;
   }
   if (req.method === "GET" && pathname === "/document-translation/health") {
-    sendJson(req, res, 200, await documentTranslationHealth());
+    sendJson(req, res, 200, await documentTranslationHealth({
+      openXmlBaseUrl: url.searchParams.get("openXmlBaseUrl") || url.searchParams.get("openxml_base_url") || undefined,
+    }));
     return;
   }
   if (req.method === "GET" && pathname === "/document-translation/models") {

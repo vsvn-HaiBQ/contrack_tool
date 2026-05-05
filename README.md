@@ -109,7 +109,7 @@ Node endpoints:
 
 Frontend route: `/document-translation` (`Translate Docs` tab). The UI translates all visible sheets in `.xlsx` files; there is no sheet selection flow.
 
-Codex CLI must be installed and logged in on the machine running the Node processing server. OpenXML defaults to `http://127.0.0.1:5000`; override it with `CONTRACK_OPENXML_BASE_URL` when needed. See `docs/document-translation-codex-plan.md` for the full flow and environment options.
+Codex CLI must be installed and logged in on the machine running the Node processing server. In the web UI, OpenXML defaults to `http://<current-web-host>:5000`, so a production page opened by IP will call OpenXML on that same IP. Override it with `window.CONTRACK_CONFIG.openXmlBase`, `VITE_OPENXML_BASE`, or `CONTRACK_OPENXML_BASE_URL` when needed. See `docs/document-translation-codex-plan.md` for the full flow and environment options.
 
 ## Build web + local server
 
@@ -134,6 +134,7 @@ The launcher binds to `127.0.0.1:3219` by default and keeps a visible console op
 window.CONTRACK_CONFIG = {
   apiBase: "/api",
   nodeServerBase: "http://127.0.0.1:3219",
+  openXmlBase: `http://${window.location.hostname || "127.0.0.1"}:5000`,
 };
 ```
 

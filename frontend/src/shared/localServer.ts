@@ -1,5 +1,5 @@
 import { HttpError } from "./http";
-import { nodeServerBase } from "./runtimeConfig";
+import { nodeServerBase, openXmlBase } from "./runtimeConfig";
 import type { LocalServerHealth, LocalServerUpdateCheck, LocalServerUpdateInstallResult } from "./types";
 
 export const localServerBase = nodeServerBase;
@@ -79,6 +79,22 @@ function jsonBody(payload: unknown): RequestInit {
   };
 }
 
+function withOpenXmlBase(payload: unknown): Record<string, unknown> {
+  const body = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? { ...(payload as Record<string, unknown>) }
+    : {};
+  const configured = body.openxml_base_url ?? body.openXmlBaseUrl;
+  return {
+    ...body,
+    openxml_base_url: typeof configured === "string" && configured.trim() ? configured : openXmlBase
+  };
+}
+
+function withOpenXmlQuery(path: string): string {
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}openxml_base_url=${encodeURIComponent(openXmlBase)}`;
+}
+
 export const localServerApi = {
   health: () => localHttp<LocalServerHealth>("/health"),
   updates: {
@@ -122,22 +138,22 @@ export const localServerApi = {
         openxml: { ok: boolean; base_url: string; message: string };
         codex: { ok: boolean; command: string; message: string; version?: string };
         defaults: Record<string, unknown>;
-      }>("/document-translation/health"),
+      }>(withOpenXmlQuery("/document-translation/health")),
     models: async () => {
       const response = await localHttp<{ models: CodexModelOption[] }>("/document-translation/models");
       return response.models;
     },
     sheets: async (payload: unknown) => {
-      const response = await localHttp<{ sheets: string[] }>("/document-translation/sheets", jsonBody(payload));
+      const response = await localHttp<{ sheets: string[] }>("/document-translation/sheets", jsonBody(withOpenXmlBase(payload)));
       return response.sheets;
     },
     extract: (payload: unknown) =>
       localHttp<{ file_path: string; extension: string; file_type?: string; sheets: string[]; segment_count: number; segments: string[] }>(
         "/document-translation/extract",
-        jsonBody(payload)
+        jsonBody(withOpenXmlBase(payload))
       ),
     start: (payload: unknown) =>
-      localHttp<import("./types").DocumentTranslationJob>("/document-translation/translate", jsonBody(payload)),
+      localHttp<import("./types").DocumentTranslationJob>("/document-translation/translate", jsonBody(withOpenXmlBase(payload))),
     getJob: (jobId: string) =>
       localHttp<import("./types").DocumentTranslationJob>(`/document-translation/jobs/${encodeURIComponent(jobId)}`)
   },

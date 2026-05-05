@@ -916,6 +916,7 @@ async function checkCodexAvailability(input = {}) {
 
 async function documentTranslationHealth(input = {}) {
   const options = translationOptions(input);
+  const defaults = defaultTranslationConfig();
   const [openxml, codex] = await Promise.all([
     checkOpenXml({ openXmlBaseUrl: options.openXmlBaseUrl }),
     checkCodexAvailability({ codexCommand: options.codexCommand }),
@@ -924,7 +925,10 @@ async function documentTranslationHealth(input = {}) {
     ok: Boolean(openxml.ok && codex.ok),
     openxml,
     codex,
-    defaults: defaultTranslationConfig(),
+    defaults: {
+      ...defaults,
+      openxml_base_url: options.openXmlBaseUrl,
+    },
   };
 }
 
