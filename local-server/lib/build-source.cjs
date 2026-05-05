@@ -1,7 +1,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { getBuildToolDir } = require("./settings.cjs");
 
 const LOG_STORAGE_LIMIT = 1000;
@@ -20,6 +20,8 @@ function startBuildJob(input) {
     logs: [],
     log_seq: 0,
     artifacts: [],
+    cancel_requested: false,
+    children: new Set(),
     target_jobs: {
       ...(buildClient ? { client: createTargetJob(jobId, "client") } : {}),
       ...(buildServer ? { server: createTargetJob(jobId, "server") } : {}),
@@ -42,17 +44,52 @@ function createTargetJob(parentJobId, target) {
     logs: [],
     log_seq: 0,
     artifacts: [],
+    cancel_requested: false,
+    children: new Set(),
     created_at: now,
     updated_at: now,
   };
 }
 
 function getBuildJob(jobId) {
-  const job = jobs.get(jobId);
-  if (!job) {
+  const resolved = resolveBuildJob(jobId);
+  if (!resolved) {
     return null;
   }
-  return snapshot(job);
+  return snapshot(resolved.job);
+}
+
+function cancelBuildJob(jobId) {
+  const resolved = resolveBuildJob(jobId);
+  if (!resolved) {
+    return null;
+  }
+
+  requestCancel(resolved.job);
+  if (resolved.job === resolved.parent) {
+    for (const targetJob of Object.values(resolved.parent.target_jobs || {})) {
+      requestCancel(targetJob);
+    }
+  } else if (allTargetsCancelRequested(resolved.parent)) {
+    requestCancel(resolved.parent);
+  }
+  syncParentStatus(resolved.parent);
+  return snapshot(resolved.job);
+}
+
+function resolveBuildJob(jobId) {
+  const id = String(jobId || "");
+  const parentId = id.includes(":") ? id.split(":", 1)[0] : id;
+  const parent = jobs.get(parentId);
+  if (!parent) {
+    return null;
+  }
+  if (id === parentId) {
+    return { parent, job: parent };
+  }
+  const target = id.slice(parentId.length + 1);
+  const targetJob = parent.target_jobs && parent.target_jobs[target];
+  return targetJob ? { parent, job: targetJob } : null;
 }
 
 function snapshot(job) {
@@ -64,6 +101,7 @@ function snapshot(job) {
     logs: job.logs.slice(-LOG_RESPONSE_LIMIT),
     total_logs: job.log_seq,
     artifacts: job.artifacts,
+    cancel_requested: Boolean(job.cancel_requested),
     target_jobs: snapshotTargets(job.target_jobs),
     created_at: job.created_at,
     updated_at: job.updated_at,
@@ -92,6 +130,10 @@ function log(job, level, source, message) {
 }
 
 function fail(job, error) {
+  if (isCanceledError(error) || job.cancel_requested) {
+    markCanceled(job);
+    return;
+  }
   job.broadcast_targets = false;
   job.status = "failed";
   job.error = error && error.message ? error.message : String(error);
@@ -105,21 +147,91 @@ function fail(job, error) {
 }
 
 function isTerminal(status) {
-  return status === "succeeded" || status === "failed";
+  return status === "succeeded" || status === "failed" || status === "canceled";
 }
 
 function markRunning(job) {
+  throwIfCanceled(job);
   job.status = "running";
   job.updated_at = Date.now() / 1000;
 }
 
 function markSucceeded(job, artifact) {
+  throwIfCanceled(job);
   job.status = "succeeded";
   job.error = null;
   if (artifact) {
     job.artifacts.push(artifact);
   }
   job.updated_at = Date.now() / 1000;
+}
+
+function markCanceled(job) {
+  job.broadcast_targets = false;
+  job.cancel_requested = true;
+  job.status = "canceled";
+  job.error = "Stopped by user";
+  job.updated_at = Date.now() / 1000;
+}
+
+function requestCancel(job) {
+  if (!job || isTerminal(job.status)) {
+    return;
+  }
+  job.cancel_requested = true;
+  job.status = "canceled";
+  job.error = "Stopped by user";
+  log(job, "warn", "system", "Stop requested by user");
+  killJobChildren(job);
+}
+
+function allTargetsCancelRequested(parentJob) {
+  const targetJobs = Object.values(parentJob.target_jobs || {});
+  return Boolean(targetJobs.length && targetJobs.every((targetJob) => targetJob.cancel_requested || targetJob.status === "canceled"));
+}
+
+function createCanceledError() {
+  const error = new Error("Stopped by user");
+  error.name = "CanceledError";
+  return error;
+}
+
+function isCanceledError(error) {
+  return Boolean(error && (error.name === "CanceledError" || error.code === "ERR_CANCELED"));
+}
+
+function throwIfCanceled(job) {
+  if (job && job.cancel_requested) {
+    throw createCanceledError();
+  }
+}
+
+function trackChild(job, child) {
+  if (!job.children) {
+    job.children = new Set();
+  }
+  job.children.add(child);
+}
+
+function untrackChild(job, child) {
+  job.children?.delete(child);
+}
+
+function killJobChildren(job) {
+  for (const child of Array.from(job.children || [])) {
+    terminateChild(child);
+  }
+}
+
+function terminateChild(child) {
+  if (!child || child.killed) {
+    return;
+  }
+  if (process.platform === "win32" && child.pid) {
+    spawnSync("taskkill.exe", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    return;
+  }
+  child.kill("SIGTERM");
 }
 
 function syncParentStatus(job) {
@@ -132,13 +244,16 @@ function syncParentStatus(job) {
     job.status = "running";
   } else if (targetJobs.every((targetJob) => targetJob.status === "succeeded")) {
     job.status = "succeeded";
+  } else if (targetJobs.every((targetJob) => targetJob.status === "canceled")) {
+    markCanceled(job);
+    return;
   } else if (targetJobs.every((targetJob) => targetJob.status === "failed")) {
     job.status = "failed";
   } else {
     job.status = "partial";
   }
   job.error = targetJobs
-    .filter((targetJob) => targetJob.status === "failed" && targetJob.error)
+    .filter((targetJob) => (targetJob.status === "failed" || targetJob.status === "canceled") && targetJob.error)
     .map((targetJob) => `${targetJob.target}: ${targetJob.error}`)
     .join("\n") || null;
   job.updated_at = Date.now() / 1000;
@@ -161,8 +276,11 @@ async function runBuild(job, input) {
   log(job, "info", "system", `Build folder: ${buildFolder}`);
   fs.mkdirSync(buildFolder, { recursive: true });
 
+  throwIfCanceled(job);
   await ensureSource(job, sourceFolder, repo, input.githubToken);
+  throwIfCanceled(job);
   await prepareBranch(job, sourceFolder, targetBranch, input.githubToken);
+  throwIfCanceled(job);
   job.broadcast_targets = false;
 
   const targetTasks = [];
@@ -180,20 +298,31 @@ async function runBuild(job, input) {
 
   await Promise.allSettled(targetTasks);
   syncParentStatus(job);
-  log(job, job.status === "failed" ? "error" : job.status === "partial" ? "warn" : "info", "system", `Build finished with status ${job.status}`);
+  log(job, job.status === "failed" ? "error" : job.status === "partial" || job.status === "canceled" ? "warn" : "info", "system", `Build finished with status ${job.status}`);
 }
 
 async function runTargetBuild(parentJob, target, buildFn) {
   const targetJob = parentJob.target_jobs[target];
-  markRunning(targetJob);
-  syncParentStatus(parentJob);
-  log(targetJob, "info", "system", `${targetLabel(target)} build started`);
+  try {
+    markRunning(targetJob);
+    syncParentStatus(parentJob);
+    log(targetJob, "info", "system", `${targetLabel(target)} build started`);
+  } catch (error) {
+    fail(targetJob, error);
+    syncParentStatus(parentJob);
+    return;
+  }
   try {
     const artifact = await buildFn(targetJob);
     markSucceeded(targetJob, artifact);
     log(targetJob, "info", "system", `${targetLabel(target)} build completed`);
   } catch (error) {
-    fail(targetJob, error);
+    if (isCanceledError(error) || targetJob.cancel_requested) {
+      markCanceled(targetJob);
+      log(targetJob, "warn", "system", `${targetLabel(target)} build stopped`);
+    } else {
+      fail(targetJob, error);
+    }
   } finally {
     syncParentStatus(parentJob);
   }
@@ -544,6 +673,10 @@ function gitEnv(token) {
 
 function run(job, command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    if (job.cancel_requested) {
+      reject(createCanceledError());
+      return;
+    }
     const source = options.source || path.basename(command);
     if (!options.quiet) {
       log(job, "info", source, `$ ${command} ${args.join(" ")}`);
@@ -554,6 +687,10 @@ function run(job, command, args, options = {}) {
       windowsVerbatimArguments: Boolean(options.windowsVerbatimArguments),
       windowsHide: true,
     });
+    trackChild(job, child);
+    if (job.cancel_requested) {
+      terminateChild(child);
+    }
     let stdout = "";
     let tail = [];
 
@@ -575,8 +712,16 @@ function run(job, command, args, options = {}) {
     };
     child.stdout.on("data", handleChunk);
     child.stderr.on("data", handleChunk);
-    child.on("error", reject);
+    child.on("error", (error) => {
+      untrackChild(job, child);
+      reject(job.cancel_requested ? createCanceledError() : error);
+    });
     child.on("close", (code) => {
+      untrackChild(job, child);
+      if (job.cancel_requested) {
+        reject(createCanceledError());
+        return;
+      }
       if (options.returnResult) {
         resolve({ code, stdout });
         return;
@@ -591,6 +736,7 @@ function run(job, command, args, options = {}) {
 }
 
 module.exports = {
+  cancelBuildJob,
   getBuildJob,
   startBuildJob,
 };

@@ -178,72 +178,193 @@ function lineKeys(lines) {
 function opcodes(leftLines, rightLines) {
   const left = lineKeys(leftLines);
   const right = lineKeys(rightLines);
-  const n = left.length;
-  const m = right.length;
-  if (n * m > exactDiffCellLimit) {
-    return positionalOpcodes(left, right);
+  return normalizeOpcodes(diffRangeOpcodes(left, right, 0, left.length, 0, right.length));
+}
+
+function diffRangeOpcodes(left, right, i1, i2, j1, j2) {
+  const raw = [];
+  let prefix = 0;
+  while (i1 + prefix < i2 && j1 + prefix < j2 && left[i1 + prefix] === right[j1 + prefix]) {
+    prefix += 1;
   }
-  const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
-  for (let i = n - 1; i >= 0; i -= 1) {
-    for (let j = m - 1; j >= 0; j -= 1) {
-      dp[i][j] = left[i] === right[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  if (prefix > 0) {
+    raw.push({ tag: "equal", i1, i2: i1 + prefix, j1, j2: j1 + prefix });
+  }
+
+  let suffix = 0;
+  while (
+    i1 + prefix + suffix < i2 &&
+    j1 + prefix + suffix < j2 &&
+    left[i2 - suffix - 1] === right[j2 - suffix - 1]
+  ) {
+    suffix += 1;
+  }
+
+  const middleI1 = i1 + prefix;
+  const middleI2 = i2 - suffix;
+  const middleJ1 = j1 + prefix;
+  const middleJ2 = j2 - suffix;
+  if (middleI1 < middleI2 || middleJ1 < middleJ2) {
+    raw.push(...middleOpcodes(left, right, middleI1, middleI2, middleJ1, middleJ2));
+  }
+
+  if (suffix > 0) {
+    raw.push({ tag: "equal", i1: i2 - suffix, i2, j1: j2 - suffix, j2 });
+  }
+  return normalizeOpcodes(raw);
+}
+
+function middleOpcodes(left, right, i1, i2, j1, j2) {
+  if (i1 >= i2) {
+    return [{ tag: "insert", i1, i2, j1, j2 }];
+  }
+  if (j1 >= j2) {
+    return [{ tag: "delete", i1, i2, j1, j2 }];
+  }
+  if ((i2 - i1) * (j2 - j1) <= exactDiffCellLimit) {
+    return exactOpcodes(left, right, i1, i2, j1, j2);
+  }
+
+  const anchors = uniqueAnchors(left, right, i1, i2, j1, j2);
+  if (!anchors.length) {
+    return positionalOpcodes(left, right, i1, i2, j1, j2);
+  }
+
+  const raw = [];
+  let lastI = i1;
+  let lastJ = j1;
+  for (const anchor of anchors) {
+    raw.push(...diffRangeOpcodes(left, right, lastI, anchor.i, lastJ, anchor.j));
+    raw.push({ tag: "equal", i1: anchor.i, i2: anchor.i + 1, j1: anchor.j, j2: anchor.j + 1 });
+    lastI = anchor.i + 1;
+    lastJ = anchor.j + 1;
+  }
+  raw.push(...diffRangeOpcodes(left, right, lastI, i2, lastJ, j2));
+  return normalizeOpcodes(raw);
+}
+
+function exactOpcodes(left, right, leftStart, leftEnd, rightStart, rightEnd) {
+  const width = rightEnd - rightStart;
+  const height = leftEnd - leftStart;
+  const dp = Array.from({ length: height + 1 }, () => new Uint32Array(width + 1));
+  for (let i = height - 1; i >= 0; i -= 1) {
+    for (let j = width - 1; j >= 0; j -= 1) {
+      dp[i][j] = left[leftStart + i] === right[rightStart + j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
     }
   }
   const raw = [];
   let i = 0;
   let j = 0;
-  while (i < n || j < m) {
-    if (i < n && j < m && left[i] === right[j]) {
-      const i1 = i;
-      const j1 = j;
-      while (i < n && j < m && left[i] === right[j]) {
+  while (i < height || j < width) {
+    if (i < height && j < width && left[leftStart + i] === right[rightStart + j]) {
+      const startI = i;
+      const startJ = j;
+      while (i < height && j < width && left[leftStart + i] === right[rightStart + j]) {
         i += 1;
         j += 1;
       }
-      raw.push({ tag: "equal", i1, i2: i, j1, j2: j });
-    } else if (j >= m || (i < n && dp[i + 1][j] >= dp[i][j + 1])) {
-      const i1 = i;
-      while (i < n && (j >= m || dp[i + 1][j] >= dp[i][j + 1]) && !(j < m && left[i] === right[j])) {
+      raw.push({ tag: "equal", i1: leftStart + startI, i2: leftStart + i, j1: rightStart + startJ, j2: rightStart + j });
+    } else if (j >= width || (i < height && dp[i + 1][j] >= dp[i][j + 1])) {
+      const startI = i;
+      while (
+        i < height &&
+        (j >= width || dp[i + 1][j] >= dp[i][j + 1]) &&
+        !(j < width && left[leftStart + i] === right[rightStart + j])
+      ) {
         i += 1;
       }
-      raw.push({ tag: "delete", i1, i2: i, j1: j, j2: j });
+      raw.push({ tag: "delete", i1: leftStart + startI, i2: leftStart + i, j1: rightStart + j, j2: rightStart + j });
     } else {
-      const j1 = j;
-      while (j < m && (i >= n || dp[i + 1][j] < dp[i][j + 1]) && !(i < n && left[i] === right[j])) {
+      const startJ = j;
+      while (
+        j < width &&
+        (i >= height || dp[i + 1][j] < dp[i][j + 1]) &&
+        !(i < height && left[leftStart + i] === right[rightStart + j])
+      ) {
         j += 1;
       }
-      raw.push({ tag: "insert", i1: i, i2: i, j1, j2: j });
+      raw.push({ tag: "insert", i1: leftStart + i, i2: leftStart + i, j1: rightStart + startJ, j2: rightStart + j });
     }
   }
-  return coalesce(raw);
+  return normalizeOpcodes(raw);
 }
 
-function positionalOpcodes(left, right) {
-  const n = left.length;
-  const m = right.length;
-  let prefix = 0;
-  while (prefix < n && prefix < m && left[prefix] === right[prefix]) {
-    prefix += 1;
+function uniqueAnchors(left, right, i1, i2, j1, j2) {
+  const leftInfo = new Map();
+  const rightInfo = new Map();
+  for (let i = i1; i < i2; i += 1) {
+    const key = left[i];
+    const info = leftInfo.get(key);
+    if (info) {
+      info.count += 1;
+    } else {
+      leftInfo.set(key, { count: 1, pos: i });
+    }
+  }
+  for (let j = j1; j < j2; j += 1) {
+    const key = right[j];
+    const info = rightInfo.get(key);
+    if (info) {
+      info.count += 1;
+    } else {
+      rightInfo.set(key, { count: 1, pos: j });
+    }
   }
 
-  let suffix = 0;
-  while (
-    suffix < n - prefix &&
-    suffix < m - prefix &&
-    left[n - suffix - 1] === right[m - suffix - 1]
-  ) {
-    suffix += 1;
+  const candidates = [];
+  for (let i = i1; i < i2; i += 1) {
+    const key = left[i];
+    const leftMatch = leftInfo.get(key);
+    const rightMatch = rightInfo.get(key);
+    if (leftMatch?.count === 1 && rightMatch?.count === 1) {
+      candidates.push({ i, j: rightMatch.pos });
+    }
+  }
+  return longestIncreasingAnchors(candidates);
+}
+
+function longestIncreasingAnchors(candidates) {
+  if (!candidates.length) {
+    return [];
+  }
+  const tails = [];
+  const tailIndexes = [];
+  const previous = new Array(candidates.length).fill(-1);
+  for (let index = 0; index < candidates.length; index += 1) {
+    const value = candidates[index].j;
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (tails[mid] < value) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    if (low > 0) {
+      previous[index] = tailIndexes[low - 1];
+    }
+    tails[low] = value;
+    tailIndexes[low] = index;
   }
 
+  const result = [];
+  let index = tailIndexes[tails.length - 1];
+  while (index >= 0) {
+    result.push(candidates[index]);
+    index = previous[index];
+  }
+  result.reverse();
+  return result;
+}
+
+function positionalOpcodes(left, right, i1 = 0, i2 = left.length, j1 = 0, j2 = right.length) {
   const raw = [];
-  if (prefix > 0) {
-    raw.push({ tag: "equal", i1: 0, i2: prefix, j1: 0, j2: prefix });
-  }
-
-  const middleLeftStart = prefix;
-  const middleRightStart = prefix;
-  const middleLeftEnd = n - suffix;
-  const middleRightEnd = m - suffix;
+  const middleLeftStart = i1;
+  const middleRightStart = j1;
+  const middleLeftEnd = i2;
+  const middleRightEnd = j2;
   const paired = Math.min(middleLeftEnd - middleLeftStart, middleRightEnd - middleRightStart);
   let index = 0;
   while (index < paired) {
@@ -284,28 +405,43 @@ function positionalOpcodes(left, right) {
       j2: middleRightEnd,
     });
   }
-  if (suffix > 0) {
-    raw.push({ tag: "equal", i1: n - suffix, i2: n, j1: m - suffix, j2: m });
-  }
-  return coalesce(raw);
+  return normalizeOpcodes(raw);
 }
 
-function coalesce(raw) {
+function normalizeOpcodes(raw) {
   const result = [];
   for (let index = 0; index < raw.length; index += 1) {
     const current = raw[index];
+    if (!current || (current.i1 === current.i2 && current.j1 === current.j2)) {
+      continue;
+    }
     const next = raw[index + 1];
     if (current.tag === "delete" && next && next.tag === "insert" && current.i2 === next.i1 && current.j1 === next.j1) {
-      result.push({ tag: "replace", i1: current.i1, i2: current.i2, j1: next.j1, j2: next.j2 });
+      appendOpcode(result, { tag: "replace", i1: current.i1, i2: current.i2, j1: next.j1, j2: next.j2 });
       index += 1;
     } else if (current.tag === "insert" && next && next.tag === "delete" && current.i1 === next.i1 && current.j2 === next.j1) {
-      result.push({ tag: "replace", i1: next.i1, i2: next.i2, j1: current.j1, j2: current.j2 });
+      appendOpcode(result, { tag: "replace", i1: next.i1, i2: next.i2, j1: current.j1, j2: current.j2 });
       index += 1;
     } else {
-      result.push(current);
+      appendOpcode(result, current);
     }
   }
   return result;
+}
+
+function appendOpcode(result, current) {
+  const previous = result[result.length - 1];
+  if (
+    previous &&
+    previous.tag === current.tag &&
+    previous.i2 === current.i1 &&
+    previous.j2 === current.j1
+  ) {
+    previous.i2 = current.i2;
+    previous.j2 = current.j2;
+  } else {
+    result.push({ ...current });
+  }
 }
 
 function diffStats(baseBytes, sourceBytes) {

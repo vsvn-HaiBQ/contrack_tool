@@ -36,9 +36,9 @@ const router = createRouter({
         { path: "tickets/detail/:jpIssueId?", name: "detail", component: TicketDetailPage },
         { path: "logtime", name: "logtime", component: LogtimePage },
         { path: "pull-requests", name: "pull-requests", component: PullRequestPage },
-        { path: "git-eol", name: "git-eol", component: GitEolPage },
-        { path: "build-source", name: "build-source", component: BuildSourcePage },
-        { path: "document-translation", name: "document-translation", component: DocumentTranslationPage },
+        { path: "git-eol", name: "git-eol", component: GitEolPage, meta: { keepAlive: true } },
+        { path: "build-source", name: "build-source", component: BuildSourcePage, meta: { keepAlive: true } },
+        { path: "document-translation", name: "document-translation", component: DocumentTranslationPage, meta: { keepAlive: true } },
       ]
     }
   ]

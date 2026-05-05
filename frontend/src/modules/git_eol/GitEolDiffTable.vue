@@ -107,10 +107,10 @@ function rightTextColor(type: string): string {
 }
 
 function eolGlyph(eol?: string | null): string {
-  if (eol === "lf") return "LF";
-  if (eol === "crlf") return "CRLF";
-  if (eol === "cr") return "CR";
-  if (eol === "none") return "EOF";
+  if (eol === "lf") return "↓";
+  if (eol === "crlf") return "↵";
+  if (eol === "cr") return "␍";
+  if (eol === "none") return "·";
   return "";
 }
 

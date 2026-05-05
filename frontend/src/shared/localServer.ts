@@ -129,7 +129,9 @@ export const localServerApi = {
     localHttp<LocalPathValidation>("/filesystem/validate-path", jsonBody({ path: targetPath, mustBeDirectory })),
   build: {
     start: (payload: unknown) => localHttp<import("./types").BuildJob>("/build/start", jsonBody(payload)),
-    getJob: (jobId: string) => localHttp<import("./types").BuildJob>(`/build/jobs/${encodeURIComponent(jobId)}`)
+    getJob: (jobId: string) => localHttp<import("./types").BuildJob>(`/build/jobs/${encodeURIComponent(jobId)}`),
+    cancelJob: (jobId: string) =>
+      localHttp<import("./types").BuildJob>(`/build/jobs/${encodeURIComponent(jobId)}/cancel`, jsonBody({}))
   },
   documentTranslation: {
     health: () =>
@@ -155,7 +157,9 @@ export const localServerApi = {
     start: (payload: unknown) =>
       localHttp<import("./types").DocumentTranslationJob>("/document-translation/translate", jsonBody(withOpenXmlBase(payload))),
     getJob: (jobId: string) =>
-      localHttp<import("./types").DocumentTranslationJob>(`/document-translation/jobs/${encodeURIComponent(jobId)}`)
+      localHttp<import("./types").DocumentTranslationJob>(`/document-translation/jobs/${encodeURIComponent(jobId)}`),
+    cancelJob: (jobId: string) =>
+      localHttp<import("./types").DocumentTranslationJob>(`/document-translation/jobs/${encodeURIComponent(jobId)}/cancel`, jsonBody({}))
   },
   gitEol: {
     previewWorkingTree: (payload: unknown) =>

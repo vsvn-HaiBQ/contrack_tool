@@ -2,7 +2,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const {
   checkOpenXml,
   defaultOpenXmlBaseUrl,
@@ -144,6 +144,37 @@ function parseBoolean(value, fallback = false) {
   if (typeof value === "boolean") return value;
   if (value === undefined || value === null || value === "") return fallback;
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
+}
+
+function createCanceledError() {
+  const error = new Error("Stopped by user");
+  error.name = "CanceledError";
+  return error;
+}
+
+function isCanceledError(error) {
+  return Boolean(error && (error.name === "CanceledError" || error.code === "ERR_CANCELED"));
+}
+
+function throwIfCanceled(callbacks = {}) {
+  if (callbacks.isCanceled?.()) {
+    throw createCanceledError();
+  }
+}
+
+function isTerminalStatus(status) {
+  return status === "succeeded" || status === "failed" || status === "canceled";
+}
+
+function terminateChild(child) {
+  if (!child || child.killed) {
+    return;
+  }
+  if (process.platform === "win32" && child.pid) {
+    spawnSync("taskkill.exe", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    return;
+  }
+  child.kill("SIGTERM");
 }
 
 function normalizeDirection(input) {
@@ -305,7 +336,8 @@ async function translateFileBaseName(file, options, callbacks = {}) {
     [translatedBaseName] = await translateBatch(
       [{ index: 0, text: originalBaseName }],
       [originalBaseName],
-      { ...options, contextWindow: 0, documentSummary: "Document file name" }
+      { ...options, contextWindow: 0, documentSummary: "Document file name" },
+      callbacks
     );
   }
   return options.direction.key === "ja_to_vi"
@@ -572,6 +604,10 @@ function runInteractiveProcess(command, args, options = {}) {
 
 function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    if (options.isCanceled?.()) {
+      reject(createCanceledError());
+      return;
+    }
     const target = spawnTarget(command, args);
     const child = spawn(target.command, target.args, {
       cwd: options.cwd,
@@ -579,6 +615,10 @@ function runProcess(command, args, options = {}) {
       windowsHide: true,
       windowsVerbatimArguments: target.windowsVerbatimArguments,
     });
+    options.trackChild?.(child);
+    if (options.isCanceled?.()) {
+      terminateChild(child);
+    }
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -587,6 +627,7 @@ function runProcess(command, args, options = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      options.untrackChild?.(child);
       if (error) reject(error);
       else resolve(value);
     };
@@ -594,7 +635,7 @@ function runProcess(command, args, options = {}) {
     const timeoutMs = Math.max(Number(options.timeoutMs || 0), 0);
     const timer = timeoutMs
       ? setTimeout(() => {
-          child.kill("SIGKILL");
+          terminateChild(child);
           finish(new Error(`${command} timed out after ${Math.ceil(timeoutMs / 1000)}s`));
         }, timeoutMs)
       : null;
@@ -607,6 +648,10 @@ function runProcess(command, args, options = {}) {
     });
     child.on("error", finish);
     child.on("close", (code) => {
+      if (options.isCanceled?.()) {
+        finish(createCanceledError());
+        return;
+      }
       if (code === 0) {
         finish(null, { stdout, stderr });
       } else {
@@ -614,6 +659,9 @@ function runProcess(command, args, options = {}) {
       }
     });
 
+    child.stdin.on("error", () => {
+      // The process may have been killed by a user stop request before stdin flushes.
+    });
     if (options.input) {
       child.stdin.write(options.input);
     }
@@ -632,7 +680,8 @@ function cleanupTempFiles(files) {
   }
 }
 
-async function runCodex(prompt, expectedCount, options) {
+async function runCodex(prompt, expectedCount, options, callbacks = {}) {
+  throwIfCanceled(callbacks);
   const runId = crypto.randomUUID();
   const keepFiles = parseBoolean(process.env.CONTRACK_CODEX_KEEP_FILES, false);
   const promptDir = keepFiles ? codexTempRoot("prompts") : null;
@@ -676,7 +725,11 @@ async function runCodex(prompt, expectedCount, options) {
       input: prompt,
       timeoutMs: options.timeoutSeconds * 1000,
       cwd: process.cwd(),
+      isCanceled: callbacks.isCanceled,
+      trackChild: callbacks.trackChild,
+      untrackChild: callbacks.untrackChild,
     });
+    throwIfCanceled(callbacks);
     const output = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : result.stdout;
     return output.trim();
   } catch (error) {
@@ -731,14 +784,16 @@ function parseCodexOutput(output, expectedCount) {
   return translations.map((item) => String(item ?? ""));
 }
 
-async function translateBatch(batch, allSegments, options) {
+async function translateBatch(batch, allSegments, options, callbacks = {}) {
+  throwIfCanceled(callbacks);
   const prompt = buildPrompt({
     batch,
     allSegments,
     firstIndex: batch[0].index,
     options,
   });
-  const output = await runCodex(prompt, batch.length, options);
+  const output = await runCodex(prompt, batch.length, options, callbacks);
+  throwIfCanceled(callbacks);
   return parseCodexOutput(output, batch.length);
 }
 
@@ -769,10 +824,12 @@ async function translateSegments(segments, options, callbacks = {}) {
   }
 
   async function translateBatchAt(batchIndex, workerNumber) {
+    throwIfCanceled(callbacks);
     const batch = batches[batchIndex];
     const workerLabel = workerCount > 1 ? ` worker ${workerNumber}` : "";
     callbacks.log?.("info", "codex", `Translating batch ${batchIndex + 1}/${batches.length}${workerLabel} (${batch.length} segments)`);
-    const translations = await translateBatch(batch, allSegments, options);
+    const translations = await translateBatch(batch, allSegments, options, callbacks);
+    throwIfCanceled(callbacks);
     for (let i = 0; i < batch.length; i += 1) {
       const item = batch[i];
       translatedSegments[item.index] = preserveOuterWhitespace(segments[item.index], translations[i]);
@@ -789,7 +846,7 @@ async function translateSegments(segments, options, callbacks = {}) {
   }
 
   async function worker(workerNumber) {
-    while (!firstError) {
+    while (!firstError && !callbacks.isCanceled?.()) {
       const batchIndex = nextBatchIndex;
       nextBatchIndex += 1;
       if (batchIndex >= batches.length) return;
@@ -802,6 +859,7 @@ async function translateSegments(segments, options, callbacks = {}) {
   }
 
   await Promise.all(Array.from({ length: workerCount }, (_, index) => worker(index + 1)));
+  throwIfCanceled(callbacks);
   if (firstError) {
     throw firstError;
   }
@@ -970,6 +1028,7 @@ async function translateOfficeDocument(input = {}, callbacks = {}) {
   const file = ensureOfficeFile(input.filePath ?? input.file_path);
   const options = translationOptions(input);
 
+  throwIfCanceled(callbacks);
   callbacks.log?.("info", "openxml", `Extracting ${file.fileName}`);
   const openxml = await checkOpenXml({ openXmlBaseUrl: options.openXmlBaseUrl });
   if (!openxml.ok) {
@@ -990,10 +1049,13 @@ async function translateOfficeDocument(input = {}, callbacks = {}) {
     throw new Error("OpenXML extracted no text segments from the document");
   }
 
+  throwIfCanceled(callbacks);
   callbacks.log?.("info", "openxml", `Extracted ${segments.length} segments`);
   const translated = await translateSegments(segments, options, callbacks);
+  throwIfCanceled(callbacks);
   const outputBaseName = options.outputPath ? "" : await translateFileBaseName(file, options, callbacks);
 
+  throwIfCanceled(callbacks);
   callbacks.log?.("info", "openxml", "Writing translated document");
   const outputPath = await exportOfficeFile({
     filePath: file.path,
@@ -1027,6 +1089,7 @@ async function translateTextDocument(input = {}, callbacks = {}) {
   }
   const options = translationOptions(input);
 
+  throwIfCanceled(callbacks);
   callbacks.log?.("info", "file", `Reading ${file.fileName}`);
   const codex = await checkCodexAvailability({ codexCommand: options.codexCommand });
   if (!codex.ok) {
@@ -1038,10 +1101,13 @@ async function translateTextDocument(input = {}, callbacks = {}) {
     throw new Error(`${file.extension} file contains no text segments`);
   }
 
+  throwIfCanceled(callbacks);
   callbacks.log?.("info", "file", `Extracted ${segments.length} segments`);
   const translated = await translateSegments(segments, options, callbacks);
+  throwIfCanceled(callbacks);
   const outputBaseName = options.outputPath ? "" : await translateFileBaseName(file, options, callbacks);
 
+  throwIfCanceled(callbacks);
   callbacks.log?.("info", "file", "Writing translated document");
   const outputPath = file.kind === "markdown"
     ? writeTranslatedMarkdownFile({
@@ -1103,6 +1169,7 @@ function publicJob(job) {
     logs: job.logs,
     progress: job.progress,
     result: job.result,
+    cancel_requested: Boolean(job.cancel_requested),
     created_at: job.created_at,
     updated_at: job.updated_at,
   };
@@ -1116,6 +1183,8 @@ function startDocumentTranslationJob(input = {}) {
     status: "queued",
     error: null,
     logs: [],
+    cancel_requested: false,
+    children: new Set(),
     progress: {
       total_segments: 0,
       translatable_segments: 0,
@@ -1130,22 +1199,34 @@ function startDocumentTranslationJob(input = {}) {
   jobs.set(job.job_id, job);
 
   setImmediate(async () => {
-    job.status = "running";
-    appendLog(job, "info", "job", "Document translation started");
     try {
+      throwIfCanceled({ isCanceled: () => job.cancel_requested });
+      job.status = "running";
+      appendLog(job, "info", "job", "Document translation started");
       job.result = await translateDocument(input, {
         log: (level, source, message) => appendLog(job, level, source, message),
+        isCanceled: () => job.cancel_requested,
+        trackChild: (child) => job.children.add(child),
+        untrackChild: (child) => job.children.delete(child),
         progress: (progress) => {
           job.progress = { ...job.progress, ...progress };
           job.updated_at = nowSeconds();
         },
       });
+      throwIfCanceled({ isCanceled: () => job.cancel_requested });
       job.status = "succeeded";
       appendLog(job, "info", "job", `Document translation completed: ${job.result.output_path}`);
     } catch (error) {
-      job.status = "failed";
-      job.error = error && error.message ? error.message : String(error);
-      appendLog(job, "error", "job", job.error);
+      if (isCanceledError(error) || job.cancel_requested) {
+        job.cancel_requested = true;
+        job.status = "canceled";
+        job.error = "Stopped by user";
+        appendLog(job, "warn", "job", "Document translation stopped");
+      } else {
+        job.status = "failed";
+        job.error = error && error.message ? error.message : String(error);
+        appendLog(job, "error", "job", job.error);
+      }
     } finally {
       job.updated_at = nowSeconds();
     }
@@ -1159,8 +1240,27 @@ function getDocumentTranslationJob(jobId) {
   return job ? publicJob(job) : null;
 }
 
+function cancelDocumentTranslationJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) {
+    return null;
+  }
+  if (!isTerminalStatus(job.status)) {
+    job.cancel_requested = true;
+    job.status = "canceled";
+    job.error = "Stopped by user";
+    appendLog(job, "warn", "job", "Stop requested by user");
+    for (const child of Array.from(job.children || [])) {
+      terminateChild(child);
+    }
+  }
+  job.updated_at = nowSeconds();
+  return publicJob(job);
+}
+
 module.exports = {
   bootstrapCodexCli,
+  cancelDocumentTranslationJob,
   checkCodexAvailability,
   defaultTranslationConfig,
   documentTranslationHealth,

@@ -18,6 +18,7 @@ const form = reactive({
 const job = ref<BuildJob | null>(null);
 const polling = ref<number | null>(null);
 const logContainers: Record<string, HTMLElement | null> = {};
+const stoppingBuildJobs = reactive<Record<string, boolean>>({});
 const autoScroll = ref(true);
 const localServerOnline = ref(false);
 const checkingLocalServer = ref(false);
@@ -77,9 +78,14 @@ function logLineClass(level: string): string {
 function statusBadgeClass(status: string): string {
   if (status === "succeeded") return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
   if (status === "failed") return "bg-red-50 text-red-700 ring-1 ring-red-200";
+  if (status === "canceled") return "bg-red-50 text-red-700 ring-1 ring-red-200";
   if (status === "partial") return "bg-amber-50 text-amber-800 ring-1 ring-amber-200";
   if (status === "running" || status === "queued") return "bg-sky-50 text-sky-700 ring-1 ring-sky-200";
   return "bg-neutral-100 text-[#5C5E62] ring-1 ring-neutral-200";
+}
+
+function canStopWorker(status: string): boolean {
+  return status === "queued" || status === "running";
 }
 
 function formatTs(ts: number): string {
@@ -214,7 +220,7 @@ function startPolling() {
       const next = await localServerApi.build.getJob(job.value.job_id);
       if (next) {
         job.value = next;
-        if (["succeeded", "failed", "partial"].includes(next.status)) {
+        if (["succeeded", "failed", "partial", "canceled"].includes(next.status)) {
           stopPolling();
           showToast(buildStatusMessage(next), next.status === "succeeded" ? "success" : next.status === "partial" ? "warning" : "error");
         }
@@ -228,6 +234,7 @@ function startPolling() {
 
 function buildStatusMessage(next: BuildJob) {
   if (next.status === "succeeded") return "Build completed";
+  if (next.status === "canceled") return "Build stopped";
   if (next.status === "partial") return next.error || "Build completed partially";
   return next.error || "Build failed";
 }
@@ -244,6 +251,24 @@ async function openArtifact(path: string) {
     await localServerApi.openContainingFolder(path);
   } catch (error) {
     showToast((error as Error).message, "error");
+  }
+}
+
+async function stopBuildWorker(jobId: string) {
+  if (!job.value || stoppingBuildJobs[jobId]) return;
+  stoppingBuildJobs[jobId] = true;
+  try {
+    await localServerApi.build.cancelJob(jobId);
+    const next = await localServerApi.build.getJob(job.value.job_id);
+    job.value = next;
+    if (["succeeded", "failed", "partial", "canceled"].includes(next.status)) {
+      stopPolling();
+    }
+    showToast("Build worker stop requested", "warning");
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  } finally {
+    delete stoppingBuildJobs[jobId];
   }
 }
 
@@ -333,8 +358,21 @@ onBeforeUnmount(stopPolling);
     </form>
 
     <div v-if="buildPanels.length" class="grid gap-4 xl:grid-cols-2">
-      <div v-for="panel in buildPanels" :key="panel.key" class="grid gap-3 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
-        <div class="flex flex-wrap items-center justify-between gap-3">
+      <div v-for="panel in buildPanels" :key="panel.key" class="relative grid gap-3 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
+        <button
+          v-if="canStopWorker(panel.job.status)"
+          type="button"
+          class="absolute top-3 right-3 inline-flex size-8 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 disabled:cursor-wait disabled:opacity-60"
+          :disabled="Boolean(stoppingBuildJobs[panel.job.job_id])"
+          title="Stop worker"
+          aria-label="Stop worker"
+          @click="stopBuildWorker(panel.job.job_id)"
+        >
+          <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="6" y="6" width="8" height="8" rx="1" />
+          </svg>
+        </button>
+        <div class="flex flex-wrap items-center justify-between gap-3" :class="canStopWorker(panel.job.status) ? 'pr-10' : ''">
           <div class="flex items-center gap-3">
             <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">{{ panel.title }}</h3>
             <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" :class="statusBadgeClass(panel.job.status)">{{ panel.job.status }}</span>

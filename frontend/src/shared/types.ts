@@ -109,11 +109,12 @@ export type BuildArtifact = {
 export type BuildJob = {
   job_id: string;
   target?: "client" | "server" | string;
-  status: "queued" | "running" | "succeeded" | "failed" | string;
+  status: "queued" | "running" | "succeeded" | "failed" | "canceled" | string;
   error: string | null;
   logs: BuildJobLog[];
   total_logs?: number;
   artifacts: BuildArtifact[];
+  cancel_requested?: boolean;
   created_at: number;
   updated_at: number;
   target_jobs?: Partial<Record<"client" | "server" | string, BuildJob>>;
@@ -144,11 +145,12 @@ export type DocumentTranslationResult = {
 export type DocumentTranslationJob = {
   job_id: string;
   kind: "document-translation" | string;
-  status: "queued" | "running" | "succeeded" | "failed" | string;
+  status: "queued" | "running" | "succeeded" | "failed" | "canceled" | string;
   error: string | null;
   logs: BuildJobLog[];
   progress: DocumentTranslationProgress;
   result: DocumentTranslationResult | null;
+  cancel_requested?: boolean;
   created_at: number;
   updated_at: number;
 };

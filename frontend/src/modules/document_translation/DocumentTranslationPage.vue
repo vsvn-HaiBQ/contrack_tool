@@ -24,6 +24,7 @@ const form = reactive({
 const job = ref<DocumentTranslationJob | null>(null);
 const polling = ref<number | null>(null);
 const logContainer = ref<HTMLElement | null>(null);
+const stoppingTranslation = ref(false);
 const autoScroll = ref(true);
 const localServerOnline = ref(false);
 const checkingHealth = ref(false);
@@ -67,6 +68,7 @@ const modelOptions = computed(() => {
 function statusBadgeClass(status?: string) {
   if (status === "succeeded") return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
   if (status === "failed") return "bg-red-50 text-red-700 ring-1 ring-red-200";
+  if (status === "canceled") return "bg-red-50 text-red-700 ring-1 ring-red-200";
   if (status === "running" || status === "queued") return "bg-sky-50 text-sky-700 ring-1 ring-sky-200";
   return "bg-neutral-100 text-[#5C5E62] ring-1 ring-neutral-200";
 }
@@ -79,6 +81,10 @@ function logLineClass(level: string) {
   if (level === "error") return "text-red-300";
   if (level === "warn") return "text-amber-300";
   return "text-neutral-100";
+}
+
+function canStopWorker(status?: string): boolean {
+  return status === "queued" || status === "running";
 }
 
 function formatTs(ts: number) {
@@ -225,9 +231,12 @@ function startPolling() {
     try {
       const next = await localServerApi.documentTranslation.getJob(job.value.job_id);
       job.value = next;
-      if (["succeeded", "failed"].includes(next.status)) {
+      if (["succeeded", "failed", "canceled"].includes(next.status)) {
         stopPolling();
-        showToast(next.status === "succeeded" ? "Document translated" : next.error || "Translation failed", next.status === "succeeded" ? "success" : "error");
+        showToast(
+          next.status === "succeeded" ? "Document translated" : next.status === "canceled" ? "Translation stopped" : next.error || "Translation failed",
+          next.status === "succeeded" ? "success" : "error"
+        );
       }
     } catch (error) {
       stopPolling();
@@ -284,6 +293,20 @@ async function openOutput() {
     await localServerApi.openContainingFolder(result.value.output_path);
   } catch (error) {
     showToast((error as Error).message, "error");
+  }
+}
+
+async function stopTranslationWorker() {
+  if (!job.value || stoppingTranslation.value) return;
+  stoppingTranslation.value = true;
+  try {
+    job.value = await localServerApi.documentTranslation.cancelJob(job.value.job_id);
+    stopPolling();
+    showToast("Translation worker stop requested", "warning");
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  } finally {
+    stoppingTranslation.value = false;
   }
 }
 
@@ -491,8 +514,21 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="job" class="grid gap-3 rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
-      <div class="flex flex-wrap items-center justify-between gap-3">
+    <div v-if="job" class="relative grid gap-3 rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
+      <button
+        v-if="canStopWorker(job.status)"
+        type="button"
+        class="absolute top-3 right-3 inline-flex size-8 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 disabled:cursor-wait disabled:opacity-60"
+        :disabled="stoppingTranslation"
+        title="Stop worker"
+        aria-label="Stop worker"
+        @click="stopTranslationWorker"
+      >
+        <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="6" y="6" width="8" height="8" rx="1" />
+        </svg>
+      </button>
+      <div class="flex flex-wrap items-center justify-between gap-3" :class="canStopWorker(job.status) ? 'pr-10' : ''">
         <h3 class="m-0 text-xl leading-tight font-medium text-[#171A20]">Log</h3>
         <label class="flex items-center gap-2 text-xs text-[#5C5E62]">
           <input v-model="autoScroll" type="checkbox" class="size-3.5 accent-[#3E6AE1]" />

@@ -194,10 +194,11 @@ onBeforeUnmount(() => {
       class="mx-auto grid w-full gap-8 px-4 py-6 sm:px-6 lg:px-8"
       :class="$route.path.startsWith('/git-eol') ? 'max-w-none' : 'max-w-7xl'"
     >
-      <RouterView v-slot="{ Component }">
+      <RouterView v-slot="{ Component, route }">
         <KeepAlive>
-          <component :is="Component" />
+          <component :is="Component" v-if="route.meta.keepAlive" :key="route.name ?? route.fullPath" />
         </KeepAlive>
+        <component :is="Component" v-if="!route.meta.keepAlive" :key="route.fullPath" />
       </RouterView>
     </main>
   </div>

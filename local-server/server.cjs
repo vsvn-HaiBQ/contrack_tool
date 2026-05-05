@@ -14,9 +14,10 @@ function requireLocalModule(fileName) {
   return require(found);
 }
 
-const { getBuildJob, startBuildJob } = requireLocalModule("build-source.cjs");
+const { cancelBuildJob, getBuildJob, startBuildJob } = requireLocalModule("build-source.cjs");
 const {
   bootstrapCodexCli,
+  cancelDocumentTranslationJob,
   defaultTranslationConfig,
   documentTranslationHealth,
   extractDocumentText,
@@ -527,6 +528,16 @@ async function route(req, res) {
     sendJson(req, res, 200, startDocumentTranslationJob(await readJson(req)));
     return;
   }
+  if (req.method === "POST" && pathname.startsWith("/document-translation/jobs/") && pathname.endsWith("/cancel")) {
+    const jobId = decodeURIComponent(pathname.slice("/document-translation/jobs/".length, -"/cancel".length));
+    const job = cancelDocumentTranslationJob(jobId);
+    if (!job) {
+      sendJson(req, res, 404, { message: "Document translation job not found" });
+      return;
+    }
+    sendJson(req, res, 200, job);
+    return;
+  }
   if (req.method === "GET" && pathname.startsWith("/document-translation/jobs/")) {
     const jobId = decodeURIComponent(pathname.slice("/document-translation/jobs/".length));
     const job = getDocumentTranslationJob(jobId);
@@ -539,6 +550,16 @@ async function route(req, res) {
   }
   if (req.method === "POST" && pathname === "/build/start") {
     sendJson(req, res, 200, startBuildJob(await readJson(req)));
+    return;
+  }
+  if (req.method === "POST" && pathname.startsWith("/build/jobs/") && pathname.endsWith("/cancel")) {
+    const jobId = decodeURIComponent(pathname.slice("/build/jobs/".length, -"/cancel".length));
+    const job = cancelBuildJob(jobId);
+    if (!job) {
+      sendJson(req, res, 404, { message: "Build job not found" });
+      return;
+    }
+    sendJson(req, res, 200, job);
     return;
   }
   if (req.method === "GET" && pathname.startsWith("/build/jobs/")) {
