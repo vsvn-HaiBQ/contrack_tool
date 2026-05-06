@@ -28,11 +28,6 @@ function apiCallbackPath(): string {
   return `${basePath}/box/oauth/callback`;
 }
 
-function apiBackendBase(): string {
-  const url = resolvedApiUrl();
-  return `${url.protocol}//${url.host}`;
-}
-
 function defaultNodeServerBase(): string {
   return "http://127.0.0.1:3219";
 }
@@ -71,4 +66,4 @@ const _boxRedirectBase = normalizeBase(
 
 export const boxOAuthRedirectUri = _boxRedirectBase
   ? new URL(apiCallbackPath(), `${_boxRedirectBase}/`).toString()
-  : `${nodeServerBase}/box/oauth/callback?backend=${encodeURIComponent(apiBackendBase())}&callback=${encodeURIComponent(apiCallbackPath())}`;
+  : `${nodeServerBase}/box/oauth/callback`;
