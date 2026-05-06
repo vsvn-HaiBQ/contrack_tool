@@ -1,4 +1,22 @@
+FROM node:22-slim AS build
+
+WORKDIR /app
+
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends ca-certificates \
+	&& rm -rf /var/lib/apt/lists/*
+ENV NODE_OPTIONS=--use-openssl-ca
+RUN npm config set cafile /etc/ssl/certs/ca-certificates.crt \
+	&& npm install -g pnpm@10.33.2 \
+	&& pnpm config set manage-package-manager-versions false
+
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY . ./
+RUN pnpm build
+
 FROM nginx:1.27-alpine
 
-COPY dist /usr/share/nginx/html
+COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf

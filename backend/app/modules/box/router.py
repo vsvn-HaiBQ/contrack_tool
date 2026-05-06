@@ -39,8 +39,9 @@ def _resolve_redirect_url(request: Request, explicit_redirect_uri: str | None) -
         parsed = urlparse(redirect_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise HTTPException(status_code=400, detail="redirect_uri must be a valid http/https URL")
-        if not parsed.path.rstrip("/").endswith("/api/box/oauth/callback"):
-            raise HTTPException(status_code=400, detail="redirect_uri must point to /api/box/oauth/callback")
+        if not (parsed.path.rstrip("/").endswith("/api/box/oauth/callback") or
+                parsed.path.rstrip("/").endswith("/box/oauth/callback")):
+            raise HTTPException(status_code=400, detail="redirect_uri must point to /api/box/oauth/callback or /box/oauth/callback")
         return redirect_url
     return str(request.url_for("box_oauth_callback"))
 

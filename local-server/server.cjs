@@ -40,6 +40,7 @@ const { localServerVersion } = requireLocalModule("version.cjs");
 
 const host = process.env.CONTRACK_LOCAL_SERVER_HOST || "127.0.0.1";
 const port = Number(process.env.CONTRACK_LOCAL_SERVER_PORT || 3219);
+const backendUrl = (process.env.CONTRACK_BACKEND_URL || "http://127.0.0.1:8009").replace(/\/$/, "");
 const maxBodyBytes = 1024 * 1024 * 5;
 const allowedOrigins = (process.env.CONTRACK_ALLOWED_ORIGINS || process.env.CONTRACK_CORS_ORIGINS || "")
   .split(",")
@@ -445,6 +446,37 @@ async function route(req, res) {
   }
   if (req.method === "GET" && pathname === "/updates/status") {
     sendJson(req, res, 200, updateStatus(null));
+    return;
+  }
+  // Box OAuth callback proxy — Box redirects the popup here (localhost is always
+  // accepted). The Node server forwards code+state to the backend and returns the
+  // resulting HTML so the popup can close itself.
+  if (req.method === "GET" && pathname === "/box/oauth/callback") {
+    const targetUrl = new URL("/api/box/oauth/callback", backendUrl);
+    for (const [k, v] of url.searchParams) {
+      targetUrl.searchParams.set(k, v);
+    }
+    await new Promise((resolve) => {
+      const proxyReq = http.get(targetUrl.toString(), (proxyRes) => {
+        const chunks = [];
+        proxyRes.on("data", (chunk) => chunks.push(chunk));
+        proxyRes.on("end", () => {
+          const body = Buffer.concat(chunks);
+          const headers = { "content-type": proxyRes.headers["content-type"] || "text/html; charset=utf-8" };
+          res.writeHead(proxyRes.statusCode || 200, headers);
+          res.end(body);
+          resolve();
+        });
+        proxyRes.on("error", (err) => {
+          sendError(req, res, 502, err);
+          resolve();
+        });
+      });
+      proxyReq.on("error", (err) => {
+        sendError(req, res, 502, err);
+        resolve();
+      });
+    });
     return;
   }
   if (req.method === "POST" && pathname === "/updates/check") {

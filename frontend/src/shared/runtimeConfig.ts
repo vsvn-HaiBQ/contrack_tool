@@ -2,6 +2,7 @@ type RuntimeConfig = {
   apiBase?: string;
   nodeServerBase?: string;
   openXmlBase?: string;
+  boxRedirectBase?: string;
 };
 
 declare global {
@@ -44,3 +45,16 @@ export const openXmlBase = normalizeBase(
     configured(import.meta.env.VITE_OPENXML_BASE) ??
     defaultOpenXmlBase()
 );
+
+// If an explicit HTTPS public base is set (hosted deployment), use it for the
+// Box OAuth callback. Otherwise use the local Node server which runs on
+// http://127.0.0.1 and is always accepted by Box as a valid redirect target.
+const _boxRedirectBase = normalizeBase(
+  configured(window.CONTRACK_CONFIG?.boxRedirectBase) ??
+    configured(import.meta.env.VITE_BOX_REDIRECT_BASE) ??
+    ""
+);
+
+export const boxOAuthRedirectUri = _boxRedirectBase
+  ? new URL(`${apiBase}/box/oauth/callback`, _boxRedirectBase).toString()
+  : `${nodeServerBase}/box/oauth/callback`;
