@@ -4,7 +4,7 @@ import LoadingCircle from "../../shared/LoadingCircle.vue";
 import { copyText } from "../../shared/clipboard";
 import { HttpError } from "../../shared/http";
 import { localServerApi, localServerBase } from "../../shared/localServer";
-import { apiBase } from "../../shared/runtimeConfig";
+import { boxOAuthRedirectUri } from "../../shared/runtimeConfig";
 import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
 import { boxApi } from "../box/api";
@@ -237,8 +237,7 @@ function wait(ms: number) {
 async function connectBoxFromBuildSource(): Promise<boolean> {
   const popup = window.open("", "contrack_box_oauth", "width=720,height=760,popup=yes");
   try {
-    const redirectUri = new URL(`${apiBase}/box/oauth/callback`, window.location.origin).toString();
-    const response = await boxApi.startOAuth({ redirect_uri: redirectUri });
+    const response = await boxApi.startOAuth({ redirect_uri: boxOAuthRedirectUri });
     if (popup && !popup.closed) {
       popup.opener = null;
       popup.location.href = response.authorize_url;

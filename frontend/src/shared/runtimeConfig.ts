@@ -19,6 +19,20 @@ function normalizeBase(value: string): string {
   return value.replace(/\/$/, "");
 }
 
+function resolvedApiUrl(): URL {
+  return new URL(apiBase, window.location.origin);
+}
+
+function apiCallbackPath(): string {
+  const basePath = resolvedApiUrl().pathname.replace(/\/$/, "");
+  return `${basePath}/box/oauth/callback`;
+}
+
+function apiBackendBase(): string {
+  const url = resolvedApiUrl();
+  return `${url.protocol}//${url.host}`;
+}
+
 function defaultNodeServerBase(): string {
   return "http://127.0.0.1:3219";
 }
@@ -56,5 +70,5 @@ const _boxRedirectBase = normalizeBase(
 );
 
 export const boxOAuthRedirectUri = _boxRedirectBase
-  ? new URL(`${apiBase}/box/oauth/callback`, _boxRedirectBase).toString()
-  : `${nodeServerBase}/box/oauth/callback`;
+  ? new URL(apiCallbackPath(), `${_boxRedirectBase}/`).toString()
+  : `${nodeServerBase}/box/oauth/callback?backend=${encodeURIComponent(apiBackendBase())}&callback=${encodeURIComponent(apiCallbackPath())}`;

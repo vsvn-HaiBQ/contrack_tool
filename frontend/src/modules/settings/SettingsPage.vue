@@ -6,7 +6,6 @@ import { showToast } from "../../shared/toast";
 import { boxApi } from "../box/api";
 import { settingsApi } from "./api";
 import { usersApi } from "../users/api";
-import { apiBase } from "../../shared/runtimeConfig";
 import type { BoxSettings, IntegrationStatus } from "../../shared/types";
 
 const integrationStatuses = ref<IntegrationStatus[]>([]);
@@ -18,7 +17,6 @@ const loadingTrackers = ref(false);
 const showCreateUserRow = ref(false);
 const changingPassword = ref(false);
 const savingBoxSettings = ref(false);
-const connectingBox = ref(false);
 const createUserForm = reactive({
   username: "",
   password: "",
@@ -32,8 +30,6 @@ const boxSettings = reactive({
   shared_link_access: "company"
 });
 const boxClientSecretConfigured = ref(false);
-const boxConnected = ref(false);
-const boxTokenExpiresAt = ref<string | null>(null);
 const passwordDrafts = reactive<Record<number, string>>({});
 const passwordForm = reactive({
   current_password: "",
@@ -70,12 +66,8 @@ async function loadBoxSettings() {
 async function loadBoxUserStatus() {
   try {
     const status = await boxApi.status();
-    boxConnected.value = status.connected;
-    boxTokenExpiresAt.value = status.token_expires_at ?? null;
     boxClientSecretConfigured.value = status.configured;
   } catch (error) {
-    boxConnected.value = false;
-    boxTokenExpiresAt.value = null;
     showToast((error as Error).message, "error");
   }
 }
@@ -93,41 +85,12 @@ async function saveBoxSettings() {
       payload.client_secret = boxSettings.client_secret.trim();
     }
     applyBoxSettings(await boxApi.updateSettings(payload));
-    await loadBoxUserStatus();
     await loadIntegrationStatuses();
     showToast("Box settings saved", "success");
   } catch (error) {
     showToast((error as Error).message, "error");
   } finally {
     savingBoxSettings.value = false;
-  }
-}
-
-async function connectBox() {
-  connectingBox.value = true;
-  const popup = window.open("", "contrack_box_oauth", "width=720,height=760,popup=yes");
-  try {
-    const redirectUri = new URL(`${apiBase}/box/oauth/callback`, window.location.origin).toString();
-    const response = await boxApi.startOAuth({ redirect_uri: redirectUri });
-    if (popup && !popup.closed) {
-      popup.opener = null;
-      popup.location.href = response.authorize_url;
-      showToast("Box authorization opened", "success");
-      void loadBoxUserStatus();
-      return;
-    }
-    if (!popup) {
-      window.location.href = response.authorize_url;
-      return;
-    }
-    showToast("Box authorization window was closed", "warning");
-  } catch (error) {
-    if (popup && !popup.closed) {
-      popup.close();
-    }
-    showToast((error as Error).message, "error");
-  } finally {
-    connectingBox.value = false;
   }
 }
 
@@ -320,10 +283,7 @@ onMounted(async () => {
     :password-form="passwordForm"
     :box-settings="boxSettings"
     :box-client-secret-configured="boxClientSecretConfigured"
-    :box-connected="boxConnected"
-    :box-token-expires-at="boxTokenExpiresAt"
     :saving-box-settings="savingBoxSettings"
-    :connecting-box="connectingBox"
     @save-user-settings="saveUserSettings"
     @change-password="changePassword"
     @load-redmine-assignees="loadRedmineAssigneeCache"
@@ -332,7 +292,6 @@ onMounted(async () => {
     @load-redmine-trackers="loadRedmineTrackerCache"
     @save-system-settings="saveSystemSettings"
     @save-box-settings="saveBoxSettings"
-    @connect-box="connectBox"
     @create-user="createUser"
     @reset-password="resetPassword"
     @delete-user="deleteUser"

@@ -79,6 +79,29 @@ function isAllowedOrigin(origin, hostHeader) {
   }
 }
 
+function resolveBoxOAuthProxyTarget(url) {
+  const hintedBackend = String(url.searchParams.get("backend") || "").trim();
+  const hintedCallback = String(url.searchParams.get("callback") || "").trim();
+
+  let base = backendUrl;
+  if (hintedBackend) {
+    try {
+      const parsed = new URL(hintedBackend);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        base = `${parsed.protocol}//${parsed.host}`;
+      }
+    } catch {
+      // Ignore invalid backend hint and keep configured default.
+    }
+  }
+
+  let callbackPath = "/api/box/oauth/callback";
+  if (hintedCallback.startsWith("/") && hintedCallback.endsWith("/box/oauth/callback")) {
+    callbackPath = hintedCallback;
+  }
+  return new URL(callbackPath, base);
+}
+
 function applyCors(req, res) {
   const origin = req.headers.origin;
   if (isAllowedOrigin(origin, req.headers.host)) {
@@ -452,8 +475,9 @@ async function route(req, res) {
   // accepted). The Node server forwards code+state to the backend and returns the
   // resulting HTML so the popup can close itself.
   if (req.method === "GET" && pathname === "/box/oauth/callback") {
-    const targetUrl = new URL("/api/box/oauth/callback", backendUrl);
+    const targetUrl = resolveBoxOAuthProxyTarget(url);
     for (const [k, v] of url.searchParams) {
+      if (k === "backend" || k === "callback") continue;
       targetUrl.searchParams.set(k, v);
     }
     await new Promise((resolve) => {
