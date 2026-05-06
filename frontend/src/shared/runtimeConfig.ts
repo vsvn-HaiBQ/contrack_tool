@@ -28,13 +28,6 @@ function apiCallbackPath(): string {
   return `${basePath}/box/oauth/callback`;
 }
 
-export const apiBackendBase = (() => {
-  const url = resolvedApiUrl();
-  return `${url.protocol}//${url.host}`;
-})();
-
-export const apiBoxOAuthCallbackPath = apiCallbackPath();
-
 function defaultNodeServerBase(): string {
   return "http://127.0.0.1:3219";
 }
@@ -49,6 +42,13 @@ export const apiBase = normalizeBase(
     configured(import.meta.env.VITE_API_BASE) ??
     "/api"
 );
+
+export const apiBackendBase = (() => {
+  const url = resolvedApiUrl();
+  return `${url.protocol}//${url.host}`;
+})();
+
+export const apiBoxOAuthCallbackPath = apiCallbackPath();
 
 export const nodeServerBase = normalizeBase(
   configured(window.CONTRACK_CONFIG?.nodeServerBase) ??
