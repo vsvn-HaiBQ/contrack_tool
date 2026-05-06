@@ -400,7 +400,7 @@ async function prepareBranch(job, sourceFolder, targetBranch, githubToken) {
   log(job, "info", "git", `Checking out ${targetBranch}`);
   await run(job, "git", ["checkout", "--force", "-B", targetBranch, `origin/${targetBranch}`], {
     cwd: sourceFolder,
-    source: "git",y
+    source: "git",
   });
   await run(job, "git", ["pull", "--ff-only", "origin", targetBranch], {
     cwd: sourceFolder,
@@ -412,6 +412,36 @@ async function prepareBranch(job, sourceFolder, targetBranch, githubToken) {
     await run(job, "git", ["stash", "pop"], { cwd: sourceFolder, source: "git" });
   }
   await resetDocumentParserFromOrigin(job, sourceFolder, targetBranch);
+  await verifyCurrentBranchBeforeBuild(job, sourceFolder, targetBranch);
+}
+
+async function verifyCurrentBranchBeforeBuild(job, sourceFolder, targetBranch) {
+  log(job, "info", "git", `Checking branch before build: ${targetBranch}`);
+  const currentBranch = (await run(job, "git", ["branch", "--show-current"], {
+    cwd: sourceFolder,
+    source: "git",
+    quiet: true,
+    captureOutput: true,
+  })).trim();
+  if (currentBranch !== targetBranch) {
+    throw new Error(`Branch check failed before build. Expected ${targetBranch}, got ${currentBranch || "(detached HEAD)"}`);
+  }
+  const headCommit = (await run(job, "git", ["rev-parse", "HEAD"], {
+    cwd: sourceFolder,
+    source: "git",
+    quiet: true,
+    captureOutput: true,
+  })).trim();
+  const originCommit = (await run(job, "git", ["rev-parse", `origin/${targetBranch}^{commit}`], {
+    cwd: sourceFolder,
+    source: "git",
+    quiet: true,
+    captureOutput: true,
+  })).trim();
+  if (headCommit !== originCommit) {
+    throw new Error(`Branch check failed before build. ${targetBranch} is not aligned with origin/${targetBranch}`);
+  }
+  log(job, "info", "git", `Branch check passed: ${targetBranch} (${headCommit.slice(0, 12)})`);
 }
 
 async function resetDocumentParserFromOrigin(job, sourceFolder, targetBranch) {
