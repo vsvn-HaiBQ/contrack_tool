@@ -39,7 +39,6 @@ const checkingLocalServer = ref(false);
 const uploadingToBox = ref(false);
 const uploadCompletedJobId = ref<string | null>(null);
 const boxUploadStatus = ref<BoxUploadStatus>("idle");
-const boxUploadStatusMessage = ref("");
 const lastAutoTargetBranch = ref("");
 
 const running = computed(() =>
@@ -143,9 +142,8 @@ function statusLabel(status: string): string {
   return status === "succeeded" ? "success" : status;
 }
 
-function setBoxUploadStatus(status: BoxUploadStatus, message = "") {
+function setBoxUploadStatus(status: BoxUploadStatus) {
   boxUploadStatus.value = status;
-  boxUploadStatusMessage.value = message;
 }
 
 function boxUploadStatusLabel(): string {
@@ -222,7 +220,7 @@ async function loadBoxStatus() {
     boxStatus.value = status;
     form.uploadToBox = status.configured && status.connected;
     if (!form.uploadToBox && boxUploadStatus.value !== "idle") {
-      setBoxUploadStatus("idle", "");
+      setBoxUploadStatus("idle");
     }
   } catch (error) {
     boxStatus.value = { configured: false, connected: false, message: (error as Error).message };
@@ -250,7 +248,7 @@ async function connectBoxFromBuildSource(): Promise<boolean> {
     if (popup && !popup.closed) {
       popup.opener = null;
       popup.location.href = response.authorize_url;
-      setBoxUploadStatus("pending", "Complete Box authorization in the popup window");
+      setBoxUploadStatus("pending");
     } else if (!popup) {
       window.location.href = response.authorize_url;
       return false;
@@ -282,13 +280,13 @@ async function connectBoxFromBuildSource(): Promise<boolean> {
 
 async function handleAutoUploadToggle() {
   if (!form.uploadToBox) {
-    setBoxUploadStatus("idle", "");
+    setBoxUploadStatus("idle");
     return;
   }
   await loadBoxStatus();
   if (!boxStatus.value?.configured) {
     form.uploadToBox = false;
-    setBoxUploadStatus("failed", boxStatus.value?.message || "Box settings are incomplete");
+    setBoxUploadStatus("failed");
     showToast(boxStatus.value?.message || "Box settings are incomplete", "warning");
     return;
   }
@@ -298,11 +296,11 @@ async function handleAutoUploadToggle() {
     await loadBoxStatus();
     form.uploadToBox = connected && Boolean(boxStatus.value?.connected);
     if (form.uploadToBox) {
-      setBoxUploadStatus("pending", "Box upload will start automatically after each selected target finishes");
+      setBoxUploadStatus("pending");
     }
     return;
   }
-  setBoxUploadStatus("pending", "Box upload will start automatically after each selected target finishes");
+  setBoxUploadStatus("pending");
 }
 
 async function validateDirectory(path: string, label: string) {
@@ -381,10 +379,7 @@ async function startBuild() {
     uploadCompletedJobId.value = null;
     for (const key of Object.keys(uploadingBoxJobIds)) delete uploadingBoxJobIds[key];
     for (const key of Object.keys(uploadedBoxJobIds)) delete uploadedBoxJobIds[key];
-    setBoxUploadStatus(
-      form.uploadToBox ? "pending" : "idle",
-      form.uploadToBox ? "Box upload will start automatically after each selected target finishes" : ""
-    );
+    setBoxUploadStatus(form.uploadToBox ? "pending" : "idle");
     form.sourceFolder = await validateDirectory(form.sourceFolder, "Source folder");
     form.buildFolder = await validateDirectory(form.buildFolder, "Build folder");
     await usersApi.updateLocalPaths({
@@ -429,7 +424,7 @@ function startPolling() {
             uploadCompletedTargets(next);
           }
           if (form.uploadToBox && ["failed", "canceled"].includes(next.status)) {
-            setBoxUploadStatus("skipped", "Box upload skipped because the build did not complete");
+            setBoxUploadStatus("skipped");
           }
         }
       }
@@ -467,21 +462,21 @@ async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
   const ticketIds = parseTicketIds();
   if (!ticketIds.length) {
     appendBoxUploadLog(targetJob, "error", "JP ticket is required before uploading build links");
-    setBoxUploadStatus("failed", "JP ticket is required before uploading build links");
+    setBoxUploadStatus("failed");
     showToast("JP ticket is required before uploading build links", "warning");
     return;
   }
   const artifactsToUpload = targetJob.artifacts ?? [];
   if (!artifactsToUpload.length) {
     appendBoxUploadLog(targetJob, "warn", "No build artifacts to upload");
-    setBoxUploadStatus("skipped", "No build artifacts to upload");
+    setBoxUploadStatus("skipped");
     showToast("No build artifacts to upload", "warning");
     return;
   }
   uploadingBoxJobIds[targetJob.job_id] = true;
   refreshUploadingToBox();
   appendBoxUploadLog(targetJob, "info", `Uploading ${artifactsToUpload.length} ${targetJob.target ?? "build"} artifact(s) to Box`);
-  setBoxUploadStatus("uploading", `Uploading ${targetJob.target ?? "build"} artifact(s) to Box`);
+  setBoxUploadStatus("uploading");
   try {
     const uploadAccess = await boxApi.uploadAccess();
     const result = await localServerApi.box.uploadArtifacts({
@@ -526,12 +521,12 @@ async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
       : skippedLinkCount || failedLinkCount
         ? "ticket link attach skipped"
         : "no ticket links attached";
-    setBoxUploadStatus("succeeded", `Uploaded ${result.items.length} artifact(s); ${linkMessage}`);
-    showToast(`Uploaded ${result.items.length} artifact(s) to Box`, "success");
+    setBoxUploadStatus("succeeded");
+    showToast(`Uploaded ${result.items.length} artifact(s) to Box; ${linkMessage}`, "success");
   } catch (error) {
     uploadedBoxJobIds[targetJob.job_id] = true;
     appendBoxUploadLog(targetJob, "error", (error as Error).message);
-    setBoxUploadStatus("failed", (error as Error).message);
+    setBoxUploadStatus("failed");
     showToast((error as Error).message, "error");
   } finally {
     delete uploadingBoxJobIds[targetJob.job_id];
@@ -648,7 +643,7 @@ onBeforeUnmount(stopPolling);
               Auto upload to Box
             </label>
             <span v-if="showBoxUploadStatus" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1" :class="boxUploadStatusClass()">{{ boxUploadStatusLabel() }}</span>
-            <span class="text-xs text-[#5C5E62]">{{ boxUploadStatusMessage || boxStatus?.message || "Checking Box" }}</span>
+            <span class="text-xs text-[#5C5E62]">{{ boxStatus?.message || "Checking Box" }}</span>
           </div>
         </div>
         <div class="grid gap-2">
@@ -738,7 +733,6 @@ onBeforeUnmount(stopPolling);
         <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Artifacts</h3>
         <span v-if="showBoxUploadStatus" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1" :class="boxUploadStatusClass()">{{ boxUploadStatusLabel() }}</span>
       </div>
-      <p v-if="boxUploadStatusMessage" class="m-0 text-sm text-[#5C5E62]">{{ boxUploadStatusMessage }}</p>
       <button
         v-for="artifact in artifacts"
         :key="artifact.path"

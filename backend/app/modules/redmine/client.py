@@ -364,17 +364,14 @@ class RedmineClient:
             raise RedmineClientError(f"Unknown activity: {activity_name}")
         current_user = self.current_user()
         existing_entries = self.get_time_entries(spent_on, user_id=current_user["id"])
-        matched = next(
-            (
-                entry
-                for entry in existing_entries
-                if entry.get("issue", {}).get("id") == issue_id and entry.get("activity", {}).get("name") == activity_name
-            ),
-            None,
-        )
+        matched_entries = [entry for entry in existing_entries if entry.get("issue", {}).get("id") == issue_id]
         payload = {"time_entry": {"issue_id": issue_id, "hours": hours, "activity_id": activity["id"], "spent_on": spent_on}}
-        if matched:
-            self._request("PUT", f"/time_entries/{matched['id']}.json", json=payload)
+        if matched_entries:
+            self._request("PUT", f"/time_entries/{matched_entries[0]['id']}.json", json=payload)
+            for duplicate in matched_entries[1:]:
+                duplicate_id = duplicate.get("id")
+                if duplicate_id:
+                    self._request("DELETE", f"/time_entries/{duplicate_id}.json")
             return
         self._request("POST", "/time_entries.json", json=payload)
 
