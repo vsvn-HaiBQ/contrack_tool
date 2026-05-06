@@ -15,6 +15,7 @@ from app.core.middleware import RateLimitMiddleware, RequestIDMiddleware
 from app.db import SessionLocal, engine, ensure_database_exists
 from app.migrations import apply_sql_migrations
 from app.modules.auth.router import router as auth_router
+from app.modules.box.router import router as box_router
 from app.modules.git_eol.router import router as git_eol_router
 from app.modules.health.router import router as health_router
 from app.modules.local_server_updates.router import router as local_server_updates_router
@@ -76,6 +77,7 @@ app.add_middleware(RequestIDMiddleware)
 app.include_router(health_router, prefix=settings.api_prefix)
 app.include_router(local_server_updates_router, prefix=settings.api_prefix)
 app.include_router(auth_router, prefix=settings.api_prefix)
+app.include_router(box_router, prefix=settings.api_prefix)
 app.include_router(users_router, prefix=settings.api_prefix)
 app.include_router(settings_router, prefix=settings.api_prefix)
 app.include_router(tickets_router, prefix=settings.api_prefix)

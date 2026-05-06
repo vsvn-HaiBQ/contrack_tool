@@ -3,9 +3,11 @@ import { onMounted, reactive, ref } from "vue";
 import SettingsView from "./SettingsView.vue";
 import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
+import { boxApi } from "../box/api";
 import { settingsApi } from "./api";
 import { usersApi } from "../users/api";
-import type { IntegrationStatus } from "../../shared/types";
+import { apiBase } from "../../shared/runtimeConfig";
+import type { BoxSettings, IntegrationStatus } from "../../shared/types";
 
 const integrationStatuses = ref<IntegrationStatus[]>([]);
 const testingService = ref<string | null>(null);
@@ -15,11 +17,23 @@ const loadingStatuses = ref(false);
 const loadingTrackers = ref(false);
 const showCreateUserRow = ref(false);
 const changingPassword = ref(false);
+const savingBoxSettings = ref(false);
+const connectingBox = ref(false);
 const createUserForm = reactive({
   username: "",
   password: "",
   role: "user"
 });
+const boxSettings = reactive({
+  client_id: "",
+  client_secret: "",
+  server_folder_id: "",
+  client_folder_id: "",
+  shared_link_access: "company"
+});
+const boxClientSecretConfigured = ref(false);
+const boxConnected = ref(false);
+const boxTokenExpiresAt = ref<string | null>(null);
 const passwordDrafts = reactive<Record<number, string>>({});
 const passwordForm = reactive({
   current_password: "",
@@ -33,6 +47,87 @@ async function loadIntegrationStatuses() {
   } catch (error) {
     integrationStatuses.value = [];
     showToast((error as Error).message, "error");
+  }
+}
+
+function applyBoxSettings(settings: BoxSettings) {
+  boxSettings.client_id = settings.client_id ?? "";
+  boxSettings.client_secret = "";
+  boxSettings.server_folder_id = settings.server_folder_id ?? "";
+  boxSettings.client_folder_id = settings.client_folder_id ?? "";
+  boxSettings.shared_link_access = settings.shared_link_access ?? "company";
+  boxClientSecretConfigured.value = settings.client_secret_configured;
+}
+
+async function loadBoxSettings() {
+  try {
+    applyBoxSettings(await boxApi.settings());
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  }
+}
+
+async function loadBoxUserStatus() {
+  try {
+    const status = await boxApi.status();
+    boxConnected.value = status.connected;
+    boxTokenExpiresAt.value = status.token_expires_at ?? null;
+    boxClientSecretConfigured.value = status.configured;
+  } catch (error) {
+    boxConnected.value = false;
+    boxTokenExpiresAt.value = null;
+    showToast((error as Error).message, "error");
+  }
+}
+
+async function saveBoxSettings() {
+  savingBoxSettings.value = true;
+  try {
+    const payload: Record<string, string> = {
+      client_id: boxSettings.client_id.trim(),
+      server_folder_id: boxSettings.server_folder_id.trim(),
+      client_folder_id: boxSettings.client_folder_id.trim(),
+      shared_link_access: boxSettings.shared_link_access
+    };
+    if (boxSettings.client_secret.trim()) {
+      payload.client_secret = boxSettings.client_secret.trim();
+    }
+    applyBoxSettings(await boxApi.updateSettings(payload));
+    await loadBoxUserStatus();
+    await loadIntegrationStatuses();
+    showToast("Box settings saved", "success");
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  } finally {
+    savingBoxSettings.value = false;
+  }
+}
+
+async function connectBox() {
+  connectingBox.value = true;
+  const popup = window.open("", "contrack_box_oauth", "width=720,height=760,popup=yes");
+  try {
+    const redirectUri = new URL(`${apiBase}/box/oauth/callback`, window.location.origin).toString();
+    const response = await boxApi.startOAuth({ redirect_uri: redirectUri });
+    if (popup && !popup.closed) {
+      popup.opener = null;
+      popup.location.href = response.authorize_url;
+      showToast("Box authorization opened", "success");
+      void loadBoxUserStatus();
+      return;
+    }
+    if (!popup) {
+      window.location.href = response.authorize_url;
+      return;
+    }
+    showToast("Box authorization window was closed", "warning");
+  } catch (error) {
+    if (popup && !popup.closed) {
+      popup.close();
+    }
+    showToast((error as Error).message, "error");
+  } finally {
+    connectingBox.value = false;
   }
 }
 
@@ -197,6 +292,10 @@ async function testIntegration(serviceName: string) {
 
 onMounted(async () => {
   await loadIntegrationStatuses();
+  if (sessionState.me?.role === "admin") {
+    await loadBoxSettings();
+  }
+  await loadBoxUserStatus();
 });
 </script>
 
@@ -219,6 +318,12 @@ onMounted(async () => {
     :show-create-user-row="showCreateUserRow"
     :password-drafts="passwordDrafts"
     :password-form="passwordForm"
+    :box-settings="boxSettings"
+    :box-client-secret-configured="boxClientSecretConfigured"
+    :box-connected="boxConnected"
+    :box-token-expires-at="boxTokenExpiresAt"
+    :saving-box-settings="savingBoxSettings"
+    :connecting-box="connectingBox"
     @save-user-settings="saveUserSettings"
     @change-password="changePassword"
     @load-redmine-assignees="loadRedmineAssigneeCache"
@@ -226,6 +331,8 @@ onMounted(async () => {
     @load-redmine-statuses="loadRedmineStatusCache"
     @load-redmine-trackers="loadRedmineTrackerCache"
     @save-system-settings="saveSystemSettings"
+    @save-box-settings="saveBoxSettings"
+    @connect-box="connectBox"
     @create-user="createUser"
     @reset-password="resetPassword"
     @delete-user="deleteUser"

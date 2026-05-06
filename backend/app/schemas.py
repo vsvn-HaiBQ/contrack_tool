@@ -131,6 +131,47 @@ class IntegrationTestResponse(BaseModel):
     message: str
 
 
+class BoxSettingsIn(BaseModel):
+    client_id: str | None = None
+    client_secret: str | None = None
+    server_folder_id: str | None = None
+    client_folder_id: str | None = None
+    shared_link_access: str | None = None
+
+
+class BoxSettingsOut(BaseModel):
+    client_id: str | None = None
+    client_secret_configured: bool = False
+    server_folder_id: str | None = None
+    client_folder_id: str | None = None
+    shared_link_access: str = "company"
+    updated_by: str | None = None
+
+
+class BoxStatusResponse(BaseModel):
+    configured: bool
+    connected: bool
+    message: str
+    token_expires_at: datetime | None = None
+
+
+class BoxOAuthStartResponse(BaseModel):
+    authorize_url: str
+    redirect_url: str
+
+
+class BoxOAuthStartRequest(BaseModel):
+    redirect_uri: str | None = None
+
+
+class BoxUploadAccessResponse(BaseModel):
+    access_token: str
+    expires_at: datetime | None = None
+    client_folder_id: str
+    server_folder_id: str
+    shared_link_access: str
+
+
 class AssigneeOption(BaseModel):
     id: int
     name: str

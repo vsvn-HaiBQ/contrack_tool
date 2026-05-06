@@ -15,6 +15,7 @@ function requireLocalModule(fileName) {
 }
 
 const { cancelBuildJob, getBuildJob, startBuildJob } = requireLocalModule("build-source.cjs");
+const { uploadArtifactsToBox } = requireLocalModule("box-upload.cjs");
 const {
   bootstrapCodexCli,
   cancelDocumentTranslationJob,
@@ -550,6 +551,10 @@ async function route(req, res) {
   }
   if (req.method === "POST" && pathname === "/build/start") {
     sendJson(req, res, 200, startBuildJob(await readJson(req)));
+    return;
+  }
+  if (req.method === "POST" && pathname === "/box/upload-artifacts") {
+    sendJson(req, res, 200, await uploadArtifactsToBox(await readJson(req)));
     return;
   }
   if (req.method === "POST" && pathname.startsWith("/build/jobs/") && pathname.endsWith("/cancel")) {

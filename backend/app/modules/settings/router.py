@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.dependencies import get_admin_user, get_current_user, request_meta
 from app.models import SystemSetting, User, UserSettings
+from app.modules.box import service as box
 from app.modules.github import provider as github
 from app.modules.redmine import provider as redmine
 from app.modules.users.dependencies import get_current_user_settings
@@ -68,6 +69,8 @@ def get_integration_status(
     db: Session = Depends(get_db),
 ) -> IntegrationStatusResponse:
     settings = get_system_settings_map(db)
+    box_settings = box.get_box_settings_row(db)
+    box_status = box.status(box_settings, user_settings)
     items = [
         IntegrationStatusItem(
             service="redmine_jp",
@@ -86,6 +89,12 @@ def get_integration_status(
             configured=bool(settings.get("git_repo") and user_settings.github_token_enc),
             connected=False,
             message="Ready to test" if settings.get("git_repo") and user_settings.github_token_enc else "Missing repo or token",
+        ),
+        IntegrationStatusItem(
+            service="box",
+            configured=box_status["configured"],
+            connected=box_status["connected"],
+            message=box_status["message"],
         ),
     ]
     return IntegrationStatusResponse(items=items)
@@ -106,8 +115,17 @@ def test_integration(
             message = redmine.test_connection(settings.get("redmine_vn_host"), user_settings.redmine_vn_api_key_enc)
         elif service_name == "github":
             message = github.test_connection(settings.get("git_repo"), user_settings.github_token_enc)
+        elif service_name == "box":
+            message = box.test_connection(db, user_settings)
         else:
             raise HTTPException(status_code=404, detail="Unknown integration service")
-    except (redmine.IntegrationConfigError, redmine.RedmineClientError, github.IntegrationConfigError, github.GitHubClientError) as exc:
+    except (
+        redmine.IntegrationConfigError,
+        redmine.RedmineClientError,
+        github.IntegrationConfigError,
+        github.GitHubClientError,
+        box.BoxConfigError,
+        box.BoxClientError,
+    ) as exc:
         return IntegrationTestResponse(service=service_name, success=False, message=str(exc))
     return IntegrationTestResponse(service=service_name, success=True, message=message)

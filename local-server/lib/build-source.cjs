@@ -8,6 +8,8 @@ const LOG_STORAGE_LIMIT = 1000;
 const LOG_RESPONSE_LIMIT = 300;
 
 const jobs = new Map();
+let zipQueue = Promise.resolve();
+let zipQueueDepth = 0;
 
 function startBuildJob(input) {
   const jobId = crypto.randomBytes(16).toString("hex");
@@ -381,6 +383,7 @@ async function prepareBranch(job, sourceFolder, targetBranch, githubToken) {
     source: "git",
     env: gitEnv(githubToken),
     allowFailure: true,
+    captureOutput: true,
   });
   const hasStash = !/No local changes to save/i.test(stashOutput);
 
@@ -397,7 +400,7 @@ async function prepareBranch(job, sourceFolder, targetBranch, githubToken) {
   log(job, "info", "git", `Checking out ${targetBranch}`);
   await run(job, "git", ["checkout", "--force", "-B", targetBranch, `origin/${targetBranch}`], {
     cwd: sourceFolder,
-    source: "git",
+    source: "git",y
   });
   await run(job, "git", ["pull", "--ff-only", "origin", targetBranch], {
     cwd: sourceFolder,
@@ -617,19 +620,91 @@ function quoteWindowsArg(value) {
   return `"${text}"`;
 }
 
+function commandLineForLog(command, args) {
+  const safeArgs = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = String(args[index]);
+    safeArgs.push(arg);
+    if (arg.toLowerCase() === "-encodedcommand" && index + 1 < args.length) {
+      safeArgs.push("<encoded-command>");
+      index += 1;
+    }
+  }
+  return `$ ${command} ${safeArgs.join(" ")}`;
+}
+
 async function compressArchive(job, sourcePattern, destination) {
   if (!sourcePattern || !destination) {
     throw new Error(`Invalid zip paths. Source: ${sourcePattern || "(empty)"}, destination: ${destination || "(empty)"}`);
   }
+  const archiveRoot = archiveRootForPattern(sourcePattern);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
+  await runZipExclusive(job, () => streamZipArchive(job, sourcePattern, archiveRoot, destination));
+}
+
+async function runZipExclusive(job, work) {
+  const previous = zipQueue;
+  let releaseZipSlot = () => {};
+  zipQueue = new Promise((resolve) => {
+    releaseZipSlot = resolve;
+  });
+  if (zipQueueDepth > 0) {
+    log(job, "info", "zip", "Waiting for other archive task to finish");
+  }
+  zipQueueDepth += 1;
+  await previous.catch(() => {});
+  try {
+    return await work();
+  } finally {
+    zipQueueDepth -= 1;
+    releaseZipSlot();
+  }
+}
+
+function archiveRootForPattern(sourcePattern) {
+  const text = String(sourcePattern);
+  const wildcardIndex = text.search(/[*?\[]/);
+  if (wildcardIndex === -1) {
+    return fs.existsSync(text) && fs.statSync(text).isDirectory() ? text : path.dirname(text);
+  }
+  const beforeWildcard = text.slice(0, wildcardIndex);
+  const separatorIndex = Math.max(beforeWildcard.lastIndexOf("\\"), beforeWildcard.lastIndexOf("/"));
+  return separatorIndex >= 0 ? beforeWildcard.slice(0, separatorIndex) : process.cwd();
+}
+
+async function streamZipArchive(job, sourcePattern, archiveRoot, destination) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
     "$sourcePath = $env:CONTRACK_ARCHIVE_SOURCE",
+    "$archiveRoot = $env:CONTRACK_ARCHIVE_ROOT",
     "$destinationPath = $env:CONTRACK_ARCHIVE_DESTINATION",
     "if ([string]::IsNullOrWhiteSpace($sourcePath)) { throw 'Archive source path is empty' }",
+    "if ([string]::IsNullOrWhiteSpace($archiveRoot)) { throw 'Archive root path is empty' }",
     "if ([string]::IsNullOrWhiteSpace($destinationPath)) { throw 'Archive destination path is empty' }",
-    "Compress-Archive -Path $sourcePath -DestinationPath $destinationPath -Force",
+    "Add-Type -AssemblyName System.IO.Compression",
+    "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+    "$resolvedRoot = (Resolve-Path -LiteralPath $archiveRoot).Path.TrimEnd('\\') + '\\'",
+    "$items = @(Get-ChildItem -Path $sourcePath -Force)",
+    "if (-not $items.Count) { throw \"Archive source has no files: $sourcePath\" }",
+    "$files = @()",
+    "foreach ($item in $items) {",
+    "  if ($item.PSIsContainer) { $files += Get-ChildItem -LiteralPath $item.FullName -Force -Recurse -File }",
+    "  else { $files += $item }",
+    "}",
+    "if (-not $files.Count) { throw \"Archive source has no files: $sourcePath\" }",
+    "if (Test-Path -LiteralPath $destinationPath) { Remove-Item -LiteralPath $destinationPath -Force }",
+    "$rootUri = [Uri]::new($resolvedRoot)",
+    "$archive = [System.IO.Compression.ZipFile]::Open($destinationPath, [System.IO.Compression.ZipArchiveMode]::Create)",
+    "try {",
+    "  foreach ($file in $files) {",
+    "    $fileUri = [Uri]::new($file.FullName)",
+    "    $entryName = [Uri]::UnescapeDataString($rootUri.MakeRelativeUri($fileUri).ToString())",
+    "    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entryName, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null",
+    "  }",
+    "}",
+    "finally { $archive.Dispose() }",
+    "Write-Output (\"Archived {0} file(s)\" -f $files.Count)",
   ].join("\r\n");
   await run(
     job,
@@ -647,6 +722,7 @@ async function compressArchive(job, sourcePattern, destination) {
       env: {
         ...process.env,
         CONTRACK_ARCHIVE_SOURCE: sourcePattern,
+        CONTRACK_ARCHIVE_ROOT: archiveRoot,
         CONTRACK_ARCHIVE_DESTINATION: destination,
       },
     }
@@ -679,7 +755,7 @@ function run(job, command, args, options = {}) {
     }
     const source = options.source || path.basename(command);
     if (!options.quiet) {
-      log(job, "info", source, `$ ${command} ${args.join(" ")}`);
+      log(job, "info", source, commandLineForLog(command, args));
     }
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -691,12 +767,15 @@ function run(job, command, args, options = {}) {
     if (job.cancel_requested) {
       terminateChild(child);
     }
+    const captureOutput = Boolean(options.captureOutput || options.returnResult);
     let stdout = "";
     let tail = [];
 
     const handleChunk = (chunk) => {
       const text = chunk.toString();
-      stdout += text;
+      if (captureOutput) {
+        stdout += text;
+      }
       for (const raw of text.split(/\r?\n/)) {
         const line = raw.trimEnd();
         if (!line) continue;

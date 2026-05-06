@@ -53,7 +53,7 @@ const emit = defineEmits<{
   deleteLink: [linkId: number];
 }>();
 
-const linkTypes = ["spec", "thread", "build", "pr"];
+const linkTypes = ["spec", "thread", "client", "server", "pr"];
 const showClosedIssues = ref(false);
 const quickCreateTrackerOptions = computed(() => {
   if (props.trackerOptions.length) {
@@ -239,7 +239,7 @@ function isClosedLike(status: string | null | undefined) {
         </div>
       </div>
       <div class="flex flex-wrap items-end gap-3">
-        <div class="min-w-[260px] flex-1">
+        <div class="min-w-65 flex-1">
           <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-[#5C5E62]">JP issue ID or URL</label>
           <div class="relative">
             <span class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-[#9CA0A6]">
@@ -303,16 +303,16 @@ function isClosedLike(status: string | null | undefined) {
           </div>
           <div class="grid gap-1">
             <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Subject</span>
-            <span class="break-words text-sm text-[#171A20]">{{ item.subject }}</span>
+            <span class="wrap-break-word text-sm text-[#171A20]">{{ item.subject }}</span>
           </div>
           <div class="grid gap-1">
             <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Status</span>
-            <span class="break-words text-sm text-[#5C5E62]">{{ item.status }}</span>
+            <span class="wrap-break-word text-sm text-[#5C5E62]">{{ item.status }}</span>
           </div>
           <div class="grid gap-1">
             <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Assignee</span>
             <div class="flex items-center justify-between gap-2">
-              <span class="break-words text-sm text-[#5C5E62]">{{ item.assignee || "Unassigned" }}</span>
+              <span class="wrap-break-word text-sm text-[#5C5E62]">{{ item.assignee || "Unassigned" }}</span>
               <div class="flex items-center gap-2">
                 <span
                   role="button"
@@ -429,17 +429,17 @@ function isClosedLike(status: string | null | undefined) {
             </div>
             <div class="grid gap-1">
               <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Subject</span>
-              <a :href="ticketDetail.parent.url" target="_blank" rel="noreferrer" class="break-words text-sm text-[#171A20] hover:text-[#3E6AE1] hover:underline">
+              <a :href="ticketDetail.parent.url" target="_blank" rel="noreferrer" class="wrap-break-word text-sm text-[#171A20] hover:text-[#3E6AE1] hover:underline">
                 {{ ticketDetail.parent.subject }}
               </a>
             </div>
             <div class="grid gap-1">
               <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Status</span>
-              <span class="break-words text-sm text-[#5C5E62]">{{ ticketDetail.parent.status }}</span>
+              <span class="wrap-break-word text-sm text-[#5C5E62]">{{ ticketDetail.parent.status }}</span>
             </div>
             <div class="grid gap-1">
               <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Assignee</span>
-              <span class="break-words text-sm text-[#5C5E62]">{{ ticketDetail.parent.assignee || "Unassigned" }}</span>
+              <span class="wrap-break-word text-sm text-[#5C5E62]">{{ ticketDetail.parent.assignee || "Unassigned" }}</span>
             </div>
           </div>
 
@@ -469,7 +469,7 @@ function isClosedLike(status: string | null | undefined) {
                   :href="row.issue.url"
                   target="_blank"
                   rel="noreferrer"
-                  class="flex items-start gap-2 break-words text-sm hover:text-[#3E6AE1] hover:underline"
+                  class="flex items-start gap-2 wrap-break-word text-sm hover:text-[#3E6AE1] hover:underline"
                   :class="row.isClosed ? 'text-[#7A7D81]' : row.kind === 'story' ? 'font-medium text-[#171A20]' : 'text-[#171A20]'"
                 >
                   <span v-if="row.kind === 'child'" class="select-none font-mono text-xs leading-5 text-[#9CA0A6]">{{ row.last ? "L-" : "|-" }}</span>
@@ -629,7 +629,7 @@ function isClosedLike(status: string | null | undefined) {
         <div class="flex flex-wrap items-center justify-end gap-3 pt-2">
           <button
             type="button"
-            class="inline-flex min-h-10 min-w-[160px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-5 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+            class="inline-flex min-h-10 min-w-40 items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-5 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="saving"
             @click="emit('saveAll')"
           >
@@ -666,7 +666,7 @@ function isClosedLike(status: string | null | undefined) {
                 </div>
                 <div class="grid gap-1">
                   <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Subject</span>
-                  <span class="break-words" :class="rel.isClosed ? 'text-[#7A7D81]' : 'text-[#171A20]'">{{ rel.subject }}</span>
+                  <span class="wrap-break-word" :class="rel.isClosed ? 'text-[#7A7D81]' : 'text-[#171A20]'">{{ rel.subject }}</span>
                 </div>
                 <div class="grid gap-1">
                   <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Status</span>
@@ -722,7 +722,7 @@ function isClosedLike(status: string | null | undefined) {
               :key="link.key"
               class="flex items-center gap-3 rounded-xl border border-neutral-200 p-2 text-sm text-[#171A20] transition hover:bg-neutral-50"
             >
-              <span class="inline-flex min-w-[64px] justify-center rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-[#5C5E62]">{{ link.source }}</span>
+              <span class="inline-flex min-w-16 justify-center rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-[#5C5E62]">{{ link.source }}</span>
               <template v-if="link.canManage && link.id && editingLinkId === link.id">
                 <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                   <div class="flex flex-wrap gap-2">
@@ -737,7 +737,7 @@ function isClosedLike(status: string | null | undefined) {
                       {{ type }}
                     </button>
                   </div>
-                  <input v-model="linkForm.url" placeholder="https://..." class="min-w-[260px] flex-1 rounded-lg border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+                  <input v-model="linkForm.url" placeholder="https://..." class="min-w-65 flex-1 rounded-lg border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
                   <button
                     type="button"
                     class="flex size-10 items-center justify-center rounded-lg bg-[#3E6AE1] text-white transition hover:brightness-95"

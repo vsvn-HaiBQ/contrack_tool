@@ -16,19 +16,42 @@ set "VERSION_ARG=%~1"
 set "DEPLOY_CHOICE=%~2"
 if /i "%VERSION_ARG%"=="--no-pause" set "VERSION_ARG="
 if /i "%DEPLOY_CHOICE%"=="--no-pause" set "DEPLOY_CHOICE="
+if /i "%VERSION_ARG%"=="--deploy" (
+  set "DEPLOY_CHOICE=--deploy"
+  set "VERSION_ARG="
+)
+if /i "%VERSION_ARG%"=="deploy" (
+  set "DEPLOY_CHOICE=deploy"
+  set "VERSION_ARG="
+)
+if /i "%VERSION_ARG%"=="--no-deploy" (
+  set "DEPLOY_CHOICE=--no-deploy"
+  set "VERSION_ARG="
+)
+if /i "%VERSION_ARG%"=="no-deploy" (
+  set "DEPLOY_CHOICE=no-deploy"
+  set "VERSION_ARG="
+)
 
 if "%VERSION_ARG%"=="" (
   echo.
   echo Enter new version or bump type.
   echo Examples: patch, minor, major, 0.2.0
-  set /p "VERSION_ARG=Version [patch]: "
-  if "!VERSION_ARG!"=="" set "VERSION_ARG=patch"
+  echo Press Enter to rebuild the current version without changing package.json.
+  set /p "VERSION_ARG=Version [rebuild current]: "
 )
+
+set "REBUILD_ONLY=0"
+if "%VERSION_ARG%"=="" set "REBUILD_ONLY=1"
 
 echo.
 echo Contrack local server release
 echo =============================
-echo Version argument: %VERSION_ARG%
+if "%REBUILD_ONLY%"=="1" (
+  echo Version argument: current version ^(rebuild only^)
+) else (
+  echo Version argument: %VERSION_ARG%
+)
 echo.
 
 where npm >nul 2>nul
@@ -37,9 +60,13 @@ if errorlevel 1 (
   goto failed
 )
 
-echo Updating package version...
-call npm version %VERSION_ARG% --no-git-tag-version
-if errorlevel 1 goto failed
+if "%REBUILD_ONLY%"=="1" (
+  echo Skipping package version update...
+) else (
+  echo Updating package version...
+  call npm version %VERSION_ARG% --no-git-tag-version
+  if errorlevel 1 goto failed
+)
 
 for /f "usebackq delims=" %%v in (`node -p "require('./package.json').version"`) do set "NEW_VERSION=%%v"
 if "%NEW_VERSION%"=="" (
@@ -88,12 +115,16 @@ goto success
 
 :usage
 echo Usage:
+echo   create-version.bat [--deploy^|--no-deploy]
 echo   create-version.bat patch [--deploy^|--no-deploy]
 echo   create-version.bat minor [--deploy^|--no-deploy]
 echo   create-version.bat major [--deploy^|--no-deploy]
 echo   create-version.bat 0.1.1 [--deploy^|--no-deploy]
 echo.
+echo Press Enter at the version prompt to rebuild the current version without bumping it.
+echo.
 echo Examples:
+echo   create-version.bat
 echo   create-version.bat patch
 echo   create-version.bat 0.2.0 --deploy
 goto success

@@ -264,7 +264,7 @@ fs.rmSync(staleTrayLauncher, { force: true });
 copyFile(path.join(repoRoot, "local-server", "server.cjs"), path.join(localServerOut, "server.cjs"));
 
 const libOut = path.join(localServerOut, "lib");
-for (const file of ["build-source.cjs", "codex-translation.cjs", "git-eol-local.cjs", "openxml-client.cjs", "settings.cjs", "updater.cjs", "version.cjs"]) {
+for (const file of ["box-upload.cjs", "build-source.cjs", "codex-translation.cjs", "git-eol-local.cjs", "openxml-client.cjs", "settings.cjs", "updater.cjs", "version.cjs"]) {
   copyFile(path.join(repoRoot, "local-server", "lib", file), path.join(libOut, file));
 }
 

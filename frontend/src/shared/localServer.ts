@@ -133,6 +133,9 @@ export const localServerApi = {
     cancelJob: (jobId: string) =>
       localHttp<import("./types").BuildJob>(`/build/jobs/${encodeURIComponent(jobId)}/cancel`, jsonBody({}))
   },
+  box: {
+    uploadArtifacts: (payload: unknown) => localHttp<import("./types").BoxUploadResult>("/box/upload-artifacts", jsonBody(payload))
+  },
   documentTranslation: {
     health: () =>
       localHttp<{

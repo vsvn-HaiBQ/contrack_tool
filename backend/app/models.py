@@ -33,6 +33,9 @@ class UserSettings(Base):
     redmine_jp_api_key_enc: Mapped[str | None] = mapped_column(Text)
     redmine_vn_api_key_enc: Mapped[str | None] = mapped_column(Text)
     github_token_enc: Mapped[str | None] = mapped_column(Text)
+    box_access_token_enc: Mapped[str | None] = mapped_column(Text)
+    box_refresh_token_enc: Mapped[str | None] = mapped_column(Text)
+    box_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     default_assignee_id: Mapped[int | None] = mapped_column(Integer)
     build_source_folder: Mapped[str | None] = mapped_column(Text)
     build_output_folder: Mapped[str | None] = mapped_column(Text)
@@ -60,6 +63,22 @@ class SystemSetting(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    updated_by: Mapped[str | None] = mapped_column(String(100))
+
+
+class BoxIntegrationSetting(Base):
+    __tablename__ = "box_integration_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    client_id: Mapped[str | None] = mapped_column(Text)
+    client_secret_enc: Mapped[str | None] = mapped_column(Text)
+    server_folder_id: Mapped[str | None] = mapped_column(String(100))
+    client_folder_id: Mapped[str | None] = mapped_column(String(100))
+    shared_link_access: Mapped[str | None] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
@@ -107,7 +126,7 @@ class TicketLink(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     managed_ticket_id: Mapped[int] = mapped_column(ForeignKey("managed_tickets.id", ondelete="CASCADE"), nullable=False)
-    type: Mapped[str] = mapped_column(Enum("spec", "thread", "build", "pr", name="ticket_link_type"), nullable=False)
+    type: Mapped[str] = mapped_column(Enum("spec", "thread", "build", "client", "server", "pr", name="ticket_link_type"), nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

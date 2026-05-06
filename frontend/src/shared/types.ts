@@ -71,6 +71,30 @@ export type IntegrationStatus = {
   message?: string | null;
 };
 
+export type BoxSettings = {
+  client_id?: string | null;
+  client_secret_configured: boolean;
+  server_folder_id?: string | null;
+  client_folder_id?: string | null;
+  shared_link_access: "open" | "company" | "collaborators" | string;
+  updated_by?: string | null;
+};
+
+export type BoxStatus = {
+  configured: boolean;
+  connected: boolean;
+  message: string;
+  token_expires_at?: string | null;
+};
+
+export type BoxUploadAccess = {
+  access_token: string;
+  expires_at?: string | null;
+  client_folder_id: string;
+  server_folder_id: string;
+  shared_link_access: string;
+};
+
 export type BuildJobLog = {
   seq?: number;
   ts: number;
@@ -104,6 +128,22 @@ export type BuildArtifact = {
   type: string;
   path: string;
   file_name: string;
+};
+
+export type BoxUploadedItem = {
+  type: string;
+  fileName: string;
+  sourcePath: string;
+  parentFolderId: string;
+  dateFolderId: string;
+  dateFolderName: string;
+  boxFileId: string;
+  sharedLink: string;
+};
+
+export type BoxUploadResult = {
+  date_folder_name: string;
+  items: BoxUploadedItem[];
 };
 
 export type BuildJob = {

@@ -7,7 +7,7 @@ END $$;
 
 DO $$
 BEGIN
-    CREATE TYPE ticket_link_type AS ENUM ('spec', 'thread', 'build', 'pr');
+    CREATE TYPE ticket_link_type AS ENUM ('spec', 'thread', 'build', 'client', 'server', 'pr');
 EXCEPTION
     WHEN duplicate_object THEN NULL;
 END $$;
@@ -105,6 +105,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_ticket_links_thread_per_ticket
 CREATE UNIQUE INDEX IF NOT EXISTS uq_ticket_links_pr_per_ticket
     ON ticket_links (managed_ticket_id)
     WHERE type = 'pr';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ticket_links_client_per_ticket
+    ON ticket_links (managed_ticket_id)
+    WHERE type = 'client';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ticket_links_server_per_ticket
+    ON ticket_links (managed_ticket_id)
+    WHERE type = 'server';
 
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_user_id
     ON audit_logs (actor_user_id);

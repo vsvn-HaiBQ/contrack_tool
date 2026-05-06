@@ -26,10 +26,38 @@ const props = defineProps<{
     current_password: string;
     new_password: string;
   };
+  boxSettings: {
+    client_id: string;
+    client_secret: string;
+    server_folder_id: string;
+    client_folder_id: string;
+    shared_link_access: string;
+  };
+  boxClientSecretConfigured: boolean;
+  boxConnected: boolean;
+  boxTokenExpiresAt: string | null;
+  savingBoxSettings: boolean;
+  connectingBox: boolean;
 }>();
 
 function integrationStatus(service: string) {
   return props.integrationStatuses.find((item) => item.service === service);
+}
+
+function boxStatusLabel() {
+  if (props.boxConnected) return "Connected";
+  if (props.boxClientSecretConfigured) return "Authorization required";
+  return "Not configured";
+}
+
+function boxStatusClass() {
+  if (props.boxConnected) return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (props.boxClientSecretConfigured) return "bg-amber-50 text-amber-800 ring-amber-200";
+  return "bg-neutral-100 text-[#5C5E62] ring-neutral-200";
+}
+
+function formatDateTime(value: string | null) {
+  return value ? new Date(value).toLocaleString() : "";
 }
 
 const emit = defineEmits<{
@@ -40,6 +68,8 @@ const emit = defineEmits<{
   loadRedmineStatuses: [];
   loadRedmineTrackers: [];
   saveSystemSettings: [];
+  saveBoxSettings: [];
+  connectBox: [];
   createUser: [];
   resetPassword: [userId: number];
   deleteUser: [userId: number];
@@ -112,7 +142,30 @@ const emit = defineEmits<{
         </div>
       </div>
       <div class="flex items-center gap-3 pt-2">
-        <button class="min-h-10 min-w-[200px] rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95" @click="emit('saveUserSettings')">Save User Settings</button>
+        <button class="min-h-10 min-w-50 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95" @click="emit('saveUserSettings')">Save User Settings</button>
+      </div>
+
+      <div class="grid gap-4 rounded-xl border border-neutral-200 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h4 class="text-base font-semibold text-[#171A20]">Box Access</h4>
+            <p class="mt-1 text-sm text-[#5C5E62]">Box authorization is stored per user.</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1" :class="boxStatusClass()">{{ boxStatusLabel() }}</span>
+            <span v-if="boxTokenExpiresAt" class="text-xs text-[#5C5E62]">{{ formatDateTime(boxTokenExpiresAt) }}</span>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <button class="inline-flex min-h-10 min-w-40 items-center justify-center gap-2 rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60" :disabled="connectingBox || !boxClientSecretConfigured" @click="emit('connectBox')">
+            <LoadingCircle v-if="connectingBox" class="text-current" />
+            {{ connectingBox ? "Opening..." : boxConnected ? "Reconnect Box" : "Connect Box" }}
+          </button>
+          <button class="inline-flex min-h-10 min-w-30 items-center justify-center gap-2 rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60" :disabled="testingService === 'box' || !boxConnected" @click="emit('testIntegration', 'box')">
+            <LoadingCircle v-if="testingService === 'box'" class="text-current" />
+            {{ testingService === 'box' ? "Testing..." : "Test Box" }}
+          </button>
+        </div>
       </div>
 
       <div class="grid gap-4 rounded-xl border border-neutral-200 p-4">
@@ -132,7 +185,7 @@ const emit = defineEmits<{
         </div>
         <div class="flex items-center gap-3">
           <button
-            class="min-h-10 min-w-[200px] rounded-lg border border-[#171A20] bg-[#171A20] px-4 py-2 text-sm font-medium text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
+            class="min-h-10 min-w-50 rounded-lg border border-[#171A20] bg-[#171A20] px-4 py-2 text-sm font-medium text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="changingPassword"
             @click="emit('changePassword')"
           >
@@ -167,7 +220,51 @@ const emit = defineEmits<{
         </div>
       </div>
       <div class="flex items-center gap-3 pt-2">
-        <button class="min-h-10 min-w-[200px] rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95" @click="emit('saveSystemSettings')">Save System Settings</button>
+        <button class="min-h-10 min-w-50 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95" @click="emit('saveSystemSettings')">Save System Settings</button>
+      </div>
+
+      <div class="grid gap-4 rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h4 class="text-base font-semibold text-[#171A20]">Box Upload</h4>
+          <span class="text-sm text-[#5C5E62]">Shared Box app and destination folders</span>
+        </div>
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-[#393C41]">Box Client ID</label>
+            <input v-model="boxSettings.client_id" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+          </div>
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-[#393C41]">Box Client Secret</label>
+            <input
+              v-model="boxSettings.client_secret"
+              type="password"
+              :placeholder="boxClientSecretConfigured ? 'Configured' : ''"
+              class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+            />
+          </div>
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-[#393C41]">Client Folder ID</label>
+            <input v-model="boxSettings.client_folder_id" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+          </div>
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-[#393C41]">Server Folder ID</label>
+            <input v-model="boxSettings.server_folder_id" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+          </div>
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-[#393C41]">Shared Link Access</label>
+            <select v-model="boxSettings.shared_link_access" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
+              <option value="company">company</option>
+              <option value="open">open</option>
+              <option value="collaborators">collaborators</option>
+            </select>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-3 pt-2">
+          <button class="inline-flex min-h-10 min-w-45 items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60" :disabled="savingBoxSettings" @click="emit('saveBoxSettings')">
+            <LoadingCircle v-if="savingBoxSettings" />
+            {{ savingBoxSettings ? "Saving..." : "Save Box Settings" }}
+          </button>
+        </div>
       </div>
 
       <div class="grid gap-4 rounded-xl border border-neutral-200 bg-neutral-50 p-4">

@@ -1,6 +1,6 @@
 {
   "name": "ct_tool",
-  "version": "1.0.5",
+  "version": "1.1.2",
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "build": "pnpm run build:web && pnpm run build:local-server",

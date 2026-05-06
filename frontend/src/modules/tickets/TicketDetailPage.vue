@@ -289,7 +289,8 @@ async function copyTeamThread() {
   const optionalSections = [
     { label: "Spec:", url: findLink("spec") },
     { label: "Pull request:", url: findLink("pr") },
-    { label: "Build:", url: findLink("build") }
+    { label: "Client build:", url: findLink("client") },
+    { label: "Server build:", url: findLink("server") }
   ].filter((item) => item.url);
 
   for (const section of optionalSections) {

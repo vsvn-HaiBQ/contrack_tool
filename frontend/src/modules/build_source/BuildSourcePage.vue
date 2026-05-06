@@ -1,27 +1,46 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
+import { copyText } from "../../shared/clipboard";
+import { HttpError } from "../../shared/http";
 import { localServerApi, localServerBase } from "../../shared/localServer";
+import { apiBase } from "../../shared/runtimeConfig";
 import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
+import { boxApi } from "../box/api";
+import { ticketsApi } from "../tickets/api";
 import { usersApi } from "../users/api";
-import type { BuildJob, BuildJobLog } from "../../shared/types";
+import type { BoxStatus, BoxUploadedItem, BuildJob, BuildJobLog } from "../../shared/types";
+
+type BoxUploadStatus = "idle" | "pending" | "uploading" | "succeeded" | "failed" | "skipped";
 
 const form = reactive({
   targetBranch: "",
   sourceFolder: "",
   buildFolder: "",
-  buildClient: true,
-  buildServer: true,
+  jpIssueId: "",
+  buildClient: false,
+  buildServer: false,
+  uploadToBox: false,
 });
 
 const job = ref<BuildJob | null>(null);
+const boxStatus = ref<BoxStatus | null>(null);
+const uploadedBoxItems = ref<BoxUploadedItem[]>([]);
+const boxUploadLogs = ref<Record<string, BuildJobLog[]>>({});
 const polling = ref<number | null>(null);
 const logContainers: Record<string, HTMLElement | null> = {};
 const stoppingBuildJobs = reactive<Record<string, boolean>>({});
+const uploadingBoxJobIds = reactive<Record<string, boolean>>({});
+const uploadedBoxJobIds = reactive<Record<string, boolean>>({});
 const autoScroll = ref(true);
 const localServerOnline = ref(false);
 const checkingLocalServer = ref(false);
+const uploadingToBox = ref(false);
+const uploadCompletedJobId = ref<string | null>(null);
+const boxUploadStatus = ref<BoxUploadStatus>("idle");
+const boxUploadStatusMessage = ref("");
+const lastAutoTargetBranch = ref("");
 
 const running = computed(() =>
   job.value?.status === "queued" ||
@@ -29,8 +48,16 @@ const running = computed(() =>
   buildPanels.value.some((panel) => panel.job.status === "queued" || panel.job.status === "running")
 );
 const canBuild = computed(() =>
-  Boolean(form.targetBranch.trim() && form.sourceFolder.trim() && form.buildFolder.trim() && (form.buildClient || form.buildServer))
+  Boolean(
+    form.targetBranch.trim() &&
+      form.sourceFolder.trim() &&
+      form.buildFolder.trim() &&
+      (form.buildClient || form.buildServer) &&
+      (!form.uploadToBox || parseTicketIds().length > 0)
+  )
 );
+const boxReady = computed(() => Boolean(boxStatus.value?.configured && boxStatus.value?.connected));
+const showBoxUploadStatus = computed(() => form.uploadToBox || boxUploadStatus.value !== "idle");
 
 const buildPanels = computed(() => {
   const current = job.value;
@@ -55,14 +82,42 @@ const lastLogKey = computed(() =>
 );
 
 function buildPanel(key: string, title: string, targetJob: BuildJob) {
-  const logs = targetJob.logs ?? [];
+  const buildLogs = targetJob.logs ?? [];
+  const logs = [...buildLogs, ...(boxUploadLogs.value[targetJob.job_id] ?? [])];
   return {
     key,
     title,
     job: targetJob,
     logs,
-    hiddenLogCount: Math.max((targetJob.total_logs ?? logs.length) - logs.length, 0),
+    hiddenLogCount: Math.max((targetJob.total_logs ?? buildLogs.length) - buildLogs.length, 0),
   };
+}
+
+function parseTicketIds(): string[] {
+  return form.jpIssueId
+    .split(/[\s,]+/)
+    .map((value) => value.replace(/\D/g, ""))
+    .filter(Boolean);
+}
+
+function buildAutoTargetBranch(): string {
+  const defaultBaseBranch = sessionState.systemSettings.default_base_branch?.trim();
+  const tickets = parseTicketIds();
+  if (!defaultBaseBranch || !tickets.length) return "";
+  return `${defaultBaseBranch}_${tickets.map((ticket) => `#${ticket}`).join("_")}`;
+}
+
+function appendBoxUploadLog(targetJob: BuildJob, level: BuildJobLog["level"], message: string) {
+  const key = targetJob.job_id;
+  const existing = boxUploadLogs.value[key] ?? [];
+  boxUploadLogs.value = {
+    ...boxUploadLogs.value,
+    [key]: [...existing, { ts: Date.now() / 1000, level, source: "box", message }]
+  };
+}
+
+function refreshUploadingToBox() {
+  uploadingToBox.value = Object.keys(uploadingBoxJobIds).length > 0;
 }
 
 function setLogContainer(key: string, el: unknown) {
@@ -84,6 +139,32 @@ function statusBadgeClass(status: string): string {
   return "bg-neutral-100 text-[#5C5E62] ring-1 ring-neutral-200";
 }
 
+function statusLabel(status: string): string {
+  return status === "succeeded" ? "success" : status;
+}
+
+function setBoxUploadStatus(status: BoxUploadStatus, message = "") {
+  boxUploadStatus.value = status;
+  boxUploadStatusMessage.value = message;
+}
+
+function boxUploadStatusLabel(): string {
+  if (boxUploadStatus.value === "pending") return "Pending";
+  if (boxUploadStatus.value === "uploading") return "Uploading";
+  if (boxUploadStatus.value === "succeeded") return "Success";
+  if (boxUploadStatus.value === "failed") return "Failed";
+  if (boxUploadStatus.value === "skipped") return "Skipped";
+  return boxReady.value ? "Ready" : "Not ready";
+}
+
+function boxUploadStatusClass(): string {
+  if (boxUploadStatus.value === "succeeded") return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (boxUploadStatus.value === "failed") return "bg-red-50 text-red-700 ring-red-200";
+  if (boxUploadStatus.value === "skipped") return "bg-amber-50 text-amber-800 ring-amber-200";
+  if (boxUploadStatus.value === "pending" || boxUploadStatus.value === "uploading") return "bg-sky-50 text-sky-700 ring-sky-200";
+  return boxReady.value ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-neutral-100 text-[#5C5E62] ring-neutral-200";
+}
+
 function canStopWorker(status: string): boolean {
   return status === "queued" || status === "running";
 }
@@ -92,8 +173,30 @@ function formatTs(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString([], { hour12: false });
 }
 
+function boxLinkType(type: string): "client" | "server" {
+  return type === "server" ? "server" : "client";
+}
+
+function boxTypeLabel(type: string): string {
+  return boxLinkType(type) === "server" ? "Server" : "Client";
+}
+
+function boxTicketLinkLabel(item: BoxUploadedItem): string {
+  return `${boxTypeLabel(item.type)} build ${item.dateFolderName} - ${item.fileName}`;
+}
+
+async function copyUploadedBoxLink(url: string) {
+  try {
+    await copyText(url);
+    showToast("Box link copied", "success");
+  } catch {
+    showToast("Cannot copy Box link", "error");
+  }
+}
+
 async function loadDefaults() {
   await refreshLocalServerStatus();
+  await loadBoxStatus();
   let defaults: { sourceFolder: string; buildFolder: string };
   try {
     defaults = await localServerApi.defaultPaths();
@@ -111,6 +214,87 @@ async function loadDefaults() {
   }
   form.sourceFolder = await validDirectoryOrFallback(savedPaths.build_source_folder, defaults.sourceFolder, "Saved source folder");
   form.buildFolder = await validDirectoryOrFallback(savedPaths.build_output_folder, defaults.buildFolder, "Saved build folder");
+}
+
+async function loadBoxStatus() {
+  try {
+    const status = await boxApi.status();
+    boxStatus.value = status;
+    form.uploadToBox = status.configured && status.connected;
+    if (!form.uploadToBox && boxUploadStatus.value !== "idle") {
+      setBoxUploadStatus("idle", "");
+    }
+  } catch (error) {
+    boxStatus.value = { configured: false, connected: false, message: (error as Error).message };
+    form.uploadToBox = false;
+  }
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function connectBoxFromBuildSource(): Promise<boolean> {
+  const popup = window.open("", "contrack_box_oauth", "width=720,height=760,popup=yes");
+  try {
+    const redirectUri = new URL(`${apiBase}/box/oauth/callback`, window.location.origin).toString();
+    const response = await boxApi.startOAuth({ redirect_uri: redirectUri });
+    if (popup && !popup.closed) {
+      popup.opener = null;
+      popup.location.href = response.authorize_url;
+      setBoxUploadStatus("pending", "Complete Box authorization in the popup window");
+    } else if (!popup) {
+      window.location.href = response.authorize_url;
+      return false;
+    } else {
+      showToast("Box authorization window was closed", "warning");
+      return false;
+    }
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline) {
+      await wait(2000);
+      const status = await boxApi.status();
+      boxStatus.value = status;
+      if (status.configured && status.connected) {
+        showToast("Box connected", "success");
+        return true;
+      }
+      if (popup.closed) break;
+    }
+    showToast("Box authorization is not complete yet", "warning");
+    return false;
+  } catch (error) {
+    if (popup && !popup.closed) {
+      popup.close();
+    }
+    showToast((error as Error).message, "error");
+    return false;
+  }
+}
+
+async function handleAutoUploadToggle() {
+  if (!form.uploadToBox) {
+    setBoxUploadStatus("idle", "");
+    return;
+  }
+  await loadBoxStatus();
+  if (!boxStatus.value?.configured) {
+    form.uploadToBox = false;
+    setBoxUploadStatus("failed", boxStatus.value?.message || "Box settings are incomplete");
+    showToast(boxStatus.value?.message || "Box settings are incomplete", "warning");
+    return;
+  }
+  if (!boxStatus.value.connected) {
+    form.uploadToBox = false;
+    const connected = await connectBoxFromBuildSource();
+    await loadBoxStatus();
+    form.uploadToBox = connected && Boolean(boxStatus.value?.connected);
+    if (form.uploadToBox) {
+      setBoxUploadStatus("pending", "Box upload will start automatically after each selected target finishes");
+    }
+    return;
+  }
+  setBoxUploadStatus("pending", "Box upload will start automatically after each selected target finishes");
 }
 
 async function validateDirectory(path: string, label: string) {
@@ -180,10 +364,19 @@ async function browseBuild() {
 
 async function startBuild() {
   if (!canBuild.value) {
-    showToast("Enter branch, source folder, build folder, and select at least one target", "warning");
+    showToast("Enter branch, source folder, build folder, target, and JP ticket when Box upload is enabled", "warning");
     return;
   }
   try {
+    uploadedBoxItems.value = [];
+    boxUploadLogs.value = {};
+    uploadCompletedJobId.value = null;
+    for (const key of Object.keys(uploadingBoxJobIds)) delete uploadingBoxJobIds[key];
+    for (const key of Object.keys(uploadedBoxJobIds)) delete uploadedBoxJobIds[key];
+    setBoxUploadStatus(
+      form.uploadToBox ? "pending" : "idle",
+      form.uploadToBox ? "Box upload will start automatically after each selected target finishes" : ""
+    );
     form.sourceFolder = await validateDirectory(form.sourceFolder, "Source folder");
     form.buildFolder = await validateDirectory(form.buildFolder, "Build folder");
     await usersApi.updateLocalPaths({
@@ -220,9 +413,16 @@ function startPolling() {
       const next = await localServerApi.build.getJob(job.value.job_id);
       if (next) {
         job.value = next;
+        uploadCompletedTargets(next);
         if (["succeeded", "failed", "partial", "canceled"].includes(next.status)) {
           stopPolling();
           showToast(buildStatusMessage(next), next.status === "succeeded" ? "success" : next.status === "partial" ? "warning" : "error");
+          if (form.uploadToBox) {
+            uploadCompletedTargets(next);
+          }
+          if (form.uploadToBox && ["failed", "canceled"].includes(next.status)) {
+            setBoxUploadStatus("skipped", "Box upload skipped because the build did not complete");
+          }
         }
       }
     } catch (error) {
@@ -251,6 +451,96 @@ async function openArtifact(path: string) {
     await localServerApi.openContainingFolder(path);
   } catch (error) {
     showToast((error as Error).message, "error");
+  }
+}
+
+async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
+  if (!targetJob || uploadingBoxJobIds[targetJob.job_id] || uploadedBoxJobIds[targetJob.job_id]) return;
+  const ticketIds = parseTicketIds();
+  if (!ticketIds.length) {
+    appendBoxUploadLog(targetJob, "error", "JP ticket is required before uploading build links");
+    setBoxUploadStatus("failed", "JP ticket is required before uploading build links");
+    showToast("JP ticket is required before uploading build links", "warning");
+    return;
+  }
+  const artifactsToUpload = targetJob.artifacts ?? [];
+  if (!artifactsToUpload.length) {
+    appendBoxUploadLog(targetJob, "warn", "No build artifacts to upload");
+    setBoxUploadStatus("skipped", "No build artifacts to upload");
+    showToast("No build artifacts to upload", "warning");
+    return;
+  }
+  uploadingBoxJobIds[targetJob.job_id] = true;
+  refreshUploadingToBox();
+  appendBoxUploadLog(targetJob, "info", `Uploading ${artifactsToUpload.length} ${targetJob.target ?? "build"} artifact(s) to Box`);
+  setBoxUploadStatus("uploading", `Uploading ${targetJob.target ?? "build"} artifact(s) to Box`);
+  try {
+    const uploadAccess = await boxApi.uploadAccess();
+    const result = await localServerApi.box.uploadArtifacts({
+      accessToken: uploadAccess.access_token,
+      clientFolderId: uploadAccess.client_folder_id,
+      serverFolderId: uploadAccess.server_folder_id,
+      sharedLinkAccess: uploadAccess.shared_link_access,
+      artifacts: artifactsToUpload,
+    });
+    let linkedCount = 0;
+    let skippedLinkCount = 0;
+    let failedLinkCount = 0;
+    for (const item of result.items) {
+      if (!item.sharedLink) {
+        throw new Error(`Box did not return a shared link for ${item.fileName}`);
+      }
+      for (const ticketId of ticketIds) {
+        try {
+          await ticketsApi.upsertLink(Number(ticketId), {
+            type: boxLinkType(item.type),
+            label: boxTicketLinkLabel(item),
+            url: item.sharedLink,
+          });
+          linkedCount += 1;
+        } catch (error) {
+          if (error instanceof HttpError && error.status === 404) {
+            skippedLinkCount += 1;
+            appendBoxUploadLog(targetJob, "warn", `Skipped JP #${ticketId}: managed ticket not found`);
+          } else {
+            failedLinkCount += 1;
+            appendBoxUploadLog(targetJob, "warn", `Could not attach Box link to JP #${ticketId}: ${(error as Error).message}`);
+          }
+        }
+      }
+      appendBoxUploadLog(targetJob, "info", `Uploaded ${item.fileName} to Box: ${item.sharedLink}`);
+    }
+    uploadedBoxItems.value = [...uploadedBoxItems.value, ...result.items];
+    uploadedBoxJobIds[targetJob.job_id] = true;
+    uploadCompletedJobId.value = targetJob.job_id;
+    const linkMessage = linkedCount
+      ? `linked ${linkedCount} ticket link(s)`
+      : skippedLinkCount || failedLinkCount
+        ? "ticket link attach skipped"
+        : "no ticket links attached";
+    setBoxUploadStatus("succeeded", `Uploaded ${result.items.length} artifact(s); ${linkMessage}`);
+    showToast(`Uploaded ${result.items.length} artifact(s) to Box`, "success");
+  } catch (error) {
+    uploadedBoxJobIds[targetJob.job_id] = true;
+    appendBoxUploadLog(targetJob, "error", (error as Error).message);
+    setBoxUploadStatus("failed", (error as Error).message);
+    showToast((error as Error).message, "error");
+  } finally {
+    delete uploadingBoxJobIds[targetJob.job_id];
+    refreshUploadingToBox();
+  }
+}
+
+function uploadCompletedTargets(parentJob: BuildJob) {
+  if (!form.uploadToBox) return;
+  const targets = Object.values(parentJob.target_jobs ?? {});
+  for (const targetJob of targets) {
+    if (targetJob?.status === "succeeded" && targetJob.artifacts?.length) {
+      void uploadBuildArtifacts(targetJob);
+    } else if (targetJob && ["failed", "canceled"].includes(targetJob.status) && !uploadedBoxJobIds[targetJob.job_id]) {
+      uploadedBoxJobIds[targetJob.job_id] = true;
+      appendBoxUploadLog(targetJob, "warn", "Box upload skipped because this build target did not complete");
+    }
   }
 }
 
@@ -283,6 +573,24 @@ watch(
   }
 );
 
+watch(
+  () => [form.jpIssueId, sessionState.systemSettings.default_base_branch],
+  () => {
+    const nextBranch = buildAutoTargetBranch();
+    if (!nextBranch) {
+      if (form.targetBranch === lastAutoTargetBranch.value) {
+        form.targetBranch = "";
+      }
+      lastAutoTargetBranch.value = "";
+      return;
+    }
+    if (!form.targetBranch.trim() || form.targetBranch === lastAutoTargetBranch.value) {
+      form.targetBranch = nextBranch;
+      lastAutoTargetBranch.value = nextBranch;
+    }
+  }
+);
+
 onMounted(loadDefaults);
 onBeforeUnmount(stopPolling);
 </script>
@@ -308,12 +616,32 @@ onBeforeUnmount(stopPolling);
 
       <div class="grid gap-4 lg:grid-cols-2">
         <div class="grid gap-2">
+          <label class="text-sm font-medium text-[#393C41]">JP Ticket ID</label>
+          <input
+            v-model="form.jpIssueId"
+            inputmode="numeric"
+            class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+            placeholder="12345"
+          />
+        </div>
+        <div class="grid gap-2">
           <label class="text-sm font-medium text-[#393C41]">Target Branch</label>
           <input
             v-model="form.targetBranch"
             class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
             placeholder="feature/example"
           />
+        </div>
+        <div class="grid gap-2">
+          <label class="text-sm font-medium text-[#393C41]">Box Upload</label>
+          <div class="flex min-h-10 flex-wrap items-center gap-3 rounded border border-[#D0D1D2] px-3 py-2">
+            <label class="flex items-center gap-2 text-sm text-[#393C41]" :class="!boxReady ? 'opacity-60' : ''">
+              <input v-model="form.uploadToBox" type="checkbox" class="size-4 accent-[#3E6AE1]" @change="handleAutoUploadToggle" />
+              Auto upload to Box
+            </label>
+            <span v-if="showBoxUploadStatus" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1" :class="boxUploadStatusClass()">{{ boxUploadStatusLabel() }}</span>
+            <span class="text-xs text-[#5C5E62]">{{ boxUploadStatusMessage || boxStatus?.message || "Checking Box" }}</span>
+          </div>
         </div>
         <div class="grid gap-2">
           <label class="text-sm font-medium text-[#393C41]">Build Target</label>
@@ -347,13 +675,13 @@ onBeforeUnmount(stopPolling);
       <div class="flex flex-wrap items-center gap-3">
         <button
           type="submit"
-          class="inline-flex min-h-10 min-w-[180px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
-          :disabled="!canBuild || running"
+          class="inline-flex min-h-10 min-w-45 items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+          :disabled="!canBuild || running || uploadingToBox"
         >
-          <LoadingCircle v-if="running" />
-          {{ running ? "Building..." : "Start Build" }}
+          <LoadingCircle v-if="running || uploadingToBox" />
+          {{ uploadingToBox ? "Uploading..." : running ? "Building..." : "Start Build" }}
         </button>
-        <span v-if="job" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" :class="statusBadgeClass(job.status)">{{ job.status }}</span>
+        <span v-if="job" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" :class="statusBadgeClass(job.status)">{{ statusLabel(job.status) }}</span>
       </div>
     </form>
 
@@ -375,7 +703,7 @@ onBeforeUnmount(stopPolling);
         <div class="flex flex-wrap items-center justify-between gap-3" :class="canStopWorker(panel.job.status) ? 'pr-10' : ''">
           <div class="flex items-center gap-3">
             <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">{{ panel.title }}</h3>
-            <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" :class="statusBadgeClass(panel.job.status)">{{ panel.job.status }}</span>
+            <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" :class="statusBadgeClass(panel.job.status)">{{ statusLabel(panel.job.status) }}</span>
             <span v-if="panel.hiddenLogCount" class="text-xs text-[#5C5E62]">showing last {{ panel.logs.length }} of {{ panel.job.total_logs }} lines</span>
           </div>
           <label class="flex items-center gap-2 text-xs text-[#5C5E62]">
@@ -383,13 +711,13 @@ onBeforeUnmount(stopPolling);
             Auto-scroll
           </label>
         </div>
-        <div :ref="(el) => setLogContainer(panel.key, el)" class="build-log-output max-h-[30rem] overflow-auto scroll-smooth rounded-lg bg-neutral-950 p-3">
+        <div :ref="(el) => setLogContainer(panel.key, el)" class="build-log-output max-h-120 overflow-auto scroll-smooth rounded-lg bg-neutral-950 p-3">
           <div v-if="!panel.logs.length" class="text-neutral-500">Waiting for log output...</div>
           <div v-else class="grid gap-1">
             <div v-for="(entry, idx) in (panel.logs as BuildJobLog[])" :key="entry.seq ?? `${entry.ts}-${idx}`" class="flex gap-2" :class="logLineClass(entry.level)">
               <span class="shrink-0 text-neutral-500">{{ formatTs(entry.ts) }}</span>
               <span class="shrink-0 text-neutral-400">[{{ entry.source }}]</span>
-              <span class="min-w-0 whitespace-pre-wrap break-words">{{ entry.message }}</span>
+              <span class="min-w-0 whitespace-pre-wrap wrap-break-word">{{ entry.message }}</span>
             </div>
           </div>
         </div>
@@ -398,7 +726,11 @@ onBeforeUnmount(stopPolling);
     </div>
 
     <div v-if="artifacts.length" class="grid gap-3 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
-      <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Artifacts</h3>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Artifacts</h3>
+        <span v-if="showBoxUploadStatus" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1" :class="boxUploadStatusClass()">{{ boxUploadStatusLabel() }}</span>
+      </div>
+      <p v-if="boxUploadStatusMessage" class="m-0 text-sm text-[#5C5E62]">{{ boxUploadStatusMessage }}</p>
       <button
         v-for="artifact in artifacts"
         :key="artifact.path"
@@ -411,6 +743,34 @@ onBeforeUnmount(stopPolling);
         </span>
         <span class="rounded bg-white px-2 py-1 text-xs font-medium text-[#393C41] ring-1 ring-neutral-200">{{ artifact.type }}</span>
       </button>
+      <div v-if="uploadedBoxItems.length" class="grid gap-2 rounded border border-emerald-200 bg-emerald-50 p-3">
+        <div
+          v-for="item in uploadedBoxItems"
+          :key="item.boxFileId"
+          class="flex items-center justify-between gap-3 rounded bg-white px-3 py-2 text-sm text-[#171A20] ring-1 ring-emerald-100 transition hover:bg-emerald-50"
+        >
+          <span class="min-w-0 flex-1">
+            <span class="flex min-w-0 flex-wrap items-center gap-2">
+              <span class="min-w-0 truncate font-medium">{{ item.fileName }}</span>
+              <button
+                type="button"
+                class="inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100"
+                title="Copy Box link"
+                @click="copyUploadedBoxLink(item.sharedLink)"
+              >
+                <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="7" y="7" width="9" height="9" rx="2"></rect>
+                  <path d="M4 13V5a2 2 0 0 1 2-2h8"></path>
+                </svg>
+              </button>
+            </span>
+            <a :href="item.sharedLink" target="_blank" rel="noreferrer" class="block break-all text-xs text-[#3E6AE1] hover:underline">
+              {{ item.sharedLink }}
+            </a>
+          </span>
+          <span class="shrink-0 rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">{{ boxTypeLabel(item.type) }}</span>
+        </div>
+      </div>
     </div>
   </section>
 </template>

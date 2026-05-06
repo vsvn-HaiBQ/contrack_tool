@@ -539,7 +539,7 @@ def upsert_ticket_link(
     if duplicate:
         raise HTTPException(status_code=400, detail="URL already exists")
     link = None
-    if payload.type in {"thread", "pr"}:
+    if payload.type in {"thread", "pr", "client", "server"}:
         link = db.query(TicketLink).filter(TicketLink.managed_ticket_id == managed.id, TicketLink.type == payload.type).first()
     if not link:
         link = db.query(TicketLink).filter(TicketLink.managed_ticket_id == managed.id, TicketLink.url == payload.url).first()
