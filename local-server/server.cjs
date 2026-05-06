@@ -82,11 +82,14 @@ function isAllowedOrigin(origin, hostHeader) {
 function resolveBoxOAuthProxyTarget(url) {
   const hintedBackend = String(url.searchParams.get("backend") || "").trim();
   const hintedCallback = String(url.searchParams.get("callback") || "").trim();
+  const persistedBackend = String(getSetting("box.oauth.backend_base") || "").trim();
+  const persistedCallback = String(getSetting("box.oauth.callback_path") || "").trim();
 
   let base = backendUrl;
-  if (hintedBackend) {
+  const candidateBackend = hintedBackend || persistedBackend;
+  if (candidateBackend) {
     try {
-      const parsed = new URL(hintedBackend);
+      const parsed = new URL(candidateBackend);
       if (parsed.protocol === "http:" || parsed.protocol === "https:") {
         base = `${parsed.protocol}//${parsed.host}`;
       }
@@ -96,8 +99,9 @@ function resolveBoxOAuthProxyTarget(url) {
   }
 
   let callbackPath = "/api/box/oauth/callback";
-  if (hintedCallback.startsWith("/") && hintedCallback.endsWith("/box/oauth/callback")) {
-    callbackPath = hintedCallback;
+  const candidateCallback = hintedCallback || persistedCallback;
+  if (candidateCallback.startsWith("/") && candidateCallback.endsWith("/box/oauth/callback")) {
+    callbackPath = candidateCallback;
   }
   return new URL(callbackPath, base);
 }

@@ -28,6 +28,13 @@ function apiCallbackPath(): string {
   return `${basePath}/box/oauth/callback`;
 }
 
+export const apiBackendBase = (() => {
+  const url = resolvedApiUrl();
+  return `${url.protocol}//${url.host}`;
+})();
+
+export const apiBoxOAuthCallbackPath = apiCallbackPath();
+
 function defaultNodeServerBase(): string {
   return "http://127.0.0.1:3219";
 }
