@@ -45,11 +45,10 @@ Frontend:
 ## Run with Docker
 
 ```bash
-pnpm build
 docker compose up --build
 ```
 
-Docker images consume the prebuilt frontend and local-server artifacts from `frontend/dist` and `build_output` so image builds do not need to download pnpm packages inside Docker.
+The backend image builds the frontend and local-server release artifacts inside Docker, then copies them into the Python runtime image. A clean Linux server does not need a pre-existing `build_output` directory before running Docker Compose.
 
 Services:
 
