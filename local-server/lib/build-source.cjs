@@ -768,9 +768,14 @@ function gitEnv(token) {
     return process.env;
   }
   const encoded = Buffer.from(`x-access-token:${token}`, "utf8").toString("base64");
+  // Use NUL/dev/null for GIT_CONFIG_GLOBAL to bypass user git config that may contain
+  // url insteadOf rules converting https://github.com/ to git@github.com: (SSH).
+  const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
   return {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: nullDevice,
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
     GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${encoded}`,
