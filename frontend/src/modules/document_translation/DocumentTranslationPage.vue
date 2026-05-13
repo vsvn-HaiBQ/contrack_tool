@@ -7,10 +7,34 @@ import { showToast } from "../../shared/toast";
 import { usersApi } from "../users/api";
 import type { BuildJobLog, DocumentTranslationJob, DocumentTranslationSettings } from "../../shared/types";
 
+const LANGUAGE_OPTIONS = ["Japanese", "Vietnamese", "English"] as const;
+
+const LANGUAGE_CODE_MAP: Record<string, string> = {
+  Japanese: "ja",
+  Vietnamese: "vi",
+  English: "en",
+};
+
+const LANGUAGE_NAME_MAP: Record<string, string> = {
+  ja: "Japanese",
+  vi: "Vietnamese",
+  en: "English",
+};
+
+function langToKey(lang: string): string {
+  const trimmed = lang.trim();
+  return LANGUAGE_CODE_MAP[trimmed] ?? trimmed.toLowerCase().replace(/\s+/g, "_");
+}
+
+function keyToLang(code: string): string {
+  return LANGUAGE_NAME_MAP[code] ?? code;
+}
+
 const form = reactive({
   filePath: "",
   outputDirectory: "",
-  direction: "ja_to_vi",
+  fromLang: "Japanese" as string,
+  toLang: "Vietnamese" as string,
   model: "gpt-5.4",
   reasoningEffort: "low",
   fastMode: false,
@@ -43,6 +67,12 @@ const fallbackModels: CodexModelOption[] = [
   { slug: "gpt-5.3-codex", display_name: "gpt-5.3-codex" },
   { slug: "gpt-5.2", display_name: "gpt-5.2" }
 ];
+
+const direction = computed(() => {
+  const from = langToKey(form.fromLang || "Japanese");
+  const to = langToKey(form.toLang || "Vietnamese");
+  return `${from}_to_${to}`;
+});
 
 const running = computed(() => job.value?.status === "queued" || job.value?.status === "running");
 const progress = computed(() => job.value?.progress ?? null);
@@ -104,7 +134,7 @@ function normalizeNumber(value: number, fallback: number, min: number, max: numb
 function translationSettingsPayload(): DocumentTranslationSettings {
   return {
     output_directory: form.outputDirectory.trim() || null,
-    direction: form.direction,
+    direction: direction.value,
     model: form.model.trim() || null,
     reasoning_effort: form.reasoningEffort,
     timeout_seconds: normalizeNumber(form.timeoutSeconds, 120, 5, 3600),
@@ -119,7 +149,10 @@ function translationSettingsPayload(): DocumentTranslationSettings {
 function applySavedTranslationSettings() {
   const saved = sessionState.userSettings.document_translation ?? {};
   form.outputDirectory = saved.output_directory ?? "";
-  form.direction = saved.direction === "vi_to_ja" ? "vi_to_ja" : "ja_to_vi";
+  const savedDir = saved.direction ?? "ja_to_vi";
+  const [fromCode, toCode] = savedDir.split("_to_");
+  form.fromLang = keyToLang(fromCode ?? "ja");
+  form.toLang = keyToLang(toCode ?? "vi");
   form.model = saved.model?.trim() || form.model;
   form.reasoningEffort = saved.reasoning_effort?.trim() || form.reasoningEffort;
   form.fastMode = Boolean(saved.fast_mode);
@@ -271,7 +304,7 @@ async function startTranslation() {
     job.value = await localServerApi.documentTranslation.start({
       filePath: form.filePath,
       outputDirectory: form.outputDirectory || undefined,
-      direction: form.direction,
+      direction: direction.value,
       model: form.model.trim() || undefined,
       reasoningEffort: form.reasoningEffort,
       fastMode: form.fastMode,
@@ -395,21 +428,23 @@ onBeforeUnmount(() => {
 
         <div class="grid gap-2">
           <label class="text-sm font-medium text-[#393C41]">Direction</label>
-          <div class="grid grid-cols-2 rounded border border-[#D0D1D2] bg-neutral-50 p-1">
-            <button
-              class="rounded px-3 py-2 text-sm font-medium transition"
-              :class="form.direction === 'ja_to_vi' ? 'bg-[#3E6AE1] text-white' : 'text-[#393C41] hover:bg-white'"
-              @click="form.direction = 'ja_to_vi'"
-            >
-              JA to VI
-            </button>
-            <button
-              class="rounded px-3 py-2 text-sm font-medium transition"
-              :class="form.direction === 'vi_to_ja' ? 'bg-[#3E6AE1] text-white' : 'text-[#393C41] hover:bg-white'"
-              @click="form.direction = 'vi_to_ja'"
-            >
-              VI to JA
-            </button>
+          <div class="flex items-center gap-2">
+            <datalist id="lang-options">
+              <option v-for="lang in LANGUAGE_OPTIONS" :key="lang" :value="lang" />
+            </datalist>
+            <input
+              v-model="form.fromLang"
+              list="lang-options"
+              placeholder="From"
+              class="flex-1 rounded border border-[#D0D1D2] bg-white px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+            />
+            <span class="shrink-0 text-sm text-[#5C5E62]">&rarr;</span>
+            <input
+              v-model="form.toLang"
+              list="lang-options"
+              placeholder="To"
+              class="flex-1 rounded border border-[#D0D1D2] bg-white px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+            />
           </div>
         </div>
       </div>

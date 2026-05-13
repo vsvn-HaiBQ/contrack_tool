@@ -182,23 +182,39 @@ function normalizeDirection(input) {
   const text = String(value ?? "ja_to_vi").trim().toLowerCase();
 
   if (value === 0 || text === "0" || text === "ja_to_vi" || text === "jp_to_vi" || text === "japanese_to_vietnamese") {
-    return {
-      key: "ja_to_vi",
-      label: "Japanese to Vietnamese",
-      source: "Japanese",
-      target: "Vietnamese",
-    };
+    return { key: "ja_to_vi", label: "Japanese to Vietnamese", source: "Japanese", target: "Vietnamese" };
   }
   if (value === 1 || text === "1" || text === "vi_to_ja" || text === "vi_to_jp" || text === "vietnamese_to_japanese") {
-    return {
-      key: "vi_to_ja",
-      label: "Vietnamese to Japanese",
-      source: "Vietnamese",
-      target: "Japanese",
-    };
+    return { key: "vi_to_ja", label: "Vietnamese to Japanese", source: "Vietnamese", target: "Japanese" };
+  }
+  if (text === "ja_to_en" || text === "jp_to_en" || text === "japanese_to_english") {
+    return { key: "ja_to_en", label: "Japanese to English", source: "Japanese", target: "English" };
+  }
+  if (text === "en_to_ja" || text === "en_to_jp" || text === "english_to_japanese") {
+    return { key: "en_to_ja", label: "English to Japanese", source: "English", target: "Japanese" };
+  }
+  if (text === "vi_to_en" || text === "vietnamese_to_english") {
+    return { key: "vi_to_en", label: "Vietnamese to English", source: "Vietnamese", target: "English" };
+  }
+  if (text === "en_to_vi" || text === "english_to_vietnamese") {
+    return { key: "en_to_vi", label: "English to Vietnamese", source: "English", target: "Vietnamese" };
   }
 
-  throw new Error("direction must be ja_to_vi, vi_to_ja, 0, or 1");
+  // Generic free-form: "french_to_spanish", "chinese to japanese", etc.
+  const separator = text.includes("_to_") ? "_to_" : text.includes(" to ") ? " to " : null;
+  if (separator) {
+    const idx = text.indexOf(separator);
+    const rawSource = text.slice(0, idx).trim().replace(/_/g, " ");
+    const rawTarget = text.slice(idx + separator.length).trim().replace(/_/g, " ");
+    const source = rawSource.slice(0, 1).toUpperCase() + rawSource.slice(1);
+    const target = rawTarget.slice(0, 1).toUpperCase() + rawTarget.slice(1);
+    if (source && target) {
+      const key = `${rawSource.replace(/\s+/g, "_")}_to_${rawTarget.replace(/\s+/g, "_")}`;
+      return { key, label: `${source} to ${target}`, source, target };
+    }
+  }
+
+  throw new Error(`Invalid direction: "${value}". Expected format: "SourceLanguage to TargetLanguage" (e.g. "Japanese to Vietnamese")`);
 }
 
 function normalizeGlossary(value) {
@@ -286,10 +302,18 @@ function containsVietnamese(text) {
   return /[A-Za-z\u00c0-\u1ef9]{2,}/u.test(text);
 }
 
+function containsEnglish(text) {
+  return /[A-Za-z]{2,}/.test(text);
+}
+
 function shouldTranslate(text, direction) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return false;
-  return direction.key === "ja_to_vi" ? containsJapanese(trimmed) : containsVietnamese(trimmed);
+  const src = direction.source;
+  if (src === "Japanese") return containsJapanese(trimmed);
+  if (src === "Vietnamese") return containsVietnamese(trimmed);
+  if (src === "English") return containsEnglish(trimmed);
+  return containsJapanese(trimmed);
 }
 
 function stripVietnameseDiacritics(input) {
@@ -328,6 +352,19 @@ function normalizeJapaneseFileName(input) {
   return `${cleanFileBaseName(withoutSuffix.replace(/\s+/g, ""))}_JP`;
 }
 
+function normalizeEnglishFileName(input) {
+  const withoutSuffix = cleanFileBaseName(input).replace(/_(VN|JP)$/i, "");
+  const clean = withoutSuffix.replace(/\s+/g, "_");
+  return `${cleanFileBaseName(clean)}_EN`;
+}
+
+function normalizeTargetFileName(translatedBaseName, direction) {
+  if (direction.target === "Vietnamese") return normalizeVietnameseFileName(translatedBaseName);
+  if (direction.target === "Japanese") return normalizeJapaneseFileName(translatedBaseName);
+  if (direction.target === "English") return normalizeEnglishFileName(translatedBaseName);
+  return normalizeVietnameseFileName(translatedBaseName);
+}
+
 async function translateFileBaseName(file, options, callbacks = {}) {
   const originalBaseName = path.basename(file.path, file.extension);
   let translatedBaseName = originalBaseName;
@@ -340,9 +377,7 @@ async function translateFileBaseName(file, options, callbacks = {}) {
       callbacks
     );
   }
-  return options.direction.key === "ja_to_vi"
-    ? normalizeVietnameseFileName(translatedBaseName)
-    : normalizeJapaneseFileName(translatedBaseName);
+  return normalizeTargetFileName(translatedBaseName, options.direction);
 }
 
 function preserveOuterWhitespace(original, translated) {
