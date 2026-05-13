@@ -3,7 +3,6 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "packageManager": "pnpm@10.10.0",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -11,11 +10,14 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.3",
+    "quill": "^2.0.3",
+    "sortablejs": "^1.15.7",
     "tailwindcss": "^4.2.3",
     "vue": "^3.5.18",
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
+    "@types/sortablejs": "^1.15.9",
     "@vitejs/plugin-vue": "^6.0.1",
     "typescript": "^5.8.3",
     "vite": "^7.1.2"

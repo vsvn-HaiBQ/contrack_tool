@@ -30,6 +30,7 @@ const tabs = [
   { key: "/build-source", label: "Build Source", requiresNode: true },
   { key: "/document-translation", label: "Translate Docs", requiresNode: true },
   { key: "/logtime", label: "Logtime" },
+  { key: "/notes", label: "Notes" },
 ];
 
 const nodeOnlyRoutes = new Set(["/git-eol", "/build-source", "/document-translation"]);

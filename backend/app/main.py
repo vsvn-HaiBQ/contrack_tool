@@ -18,6 +18,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.box.router import router as box_router
 from app.modules.git_eol.router import router as git_eol_router
 from app.modules.health.router import router as health_router
+from app.modules.notes.router import router as notes_router
 from app.modules.local_server_updates.router import router as local_server_updates_router
 from app.modules.logtime.router import router as logtime_router
 from app.modules.pull_requests.router import router as pull_requests_router
@@ -84,6 +85,7 @@ app.include_router(tickets_router, prefix=settings.api_prefix)
 app.include_router(logtime_router, prefix=settings.api_prefix)
 app.include_router(pull_requests_router, prefix=settings.api_prefix)
 app.include_router(git_eol_router, prefix=settings.api_prefix)
+app.include_router(notes_router, prefix=settings.api_prefix)
 
 
 def find_frontend_dist() -> Path | None:

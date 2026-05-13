@@ -11,15 +11,14 @@ RUN npm config set cafile /etc/ssl/certs/ca-certificates.crt
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 ENV PATH=/src/node_modules/.bin:$PATH
-RUN pnpm config set manage-package-manager-versions false
 
-COPY frontend/package.json frontend/pnpm-lock.yaml ./frontend/
-RUN pnpm --dir frontend install --frozen-lockfile
+COPY frontend/package.json frontend/package-lock.json ./frontend/
+RUN npm ci --prefix frontend
 
 COPY frontend ./frontend
 COPY local-server ./local-server
 COPY build ./build
-RUN pnpm --dir frontend build && node local-server/scripts/build.cjs
+RUN npm run build --prefix frontend && node local-server/scripts/build.cjs
 
 FROM python:3.12-slim
 

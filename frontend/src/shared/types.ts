@@ -1,5 +1,16 @@
 export type User = { id: number; username: string; role: string };
 
+export type Note = {
+  id: number;
+  title: string;
+  content: string;
+  locked: boolean;
+  position: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type SetupStatus = { needs_setup: boolean; user_count: number };
 
 export type LocalServerHealth = {

@@ -9,6 +9,7 @@ import PullRequestPage from "./modules/pull_requests/PullRequestPage.vue";
 import GitEolPage from "./modules/git_eol/GitEolPage.vue";
 import BuildSourcePage from "./modules/build_source/BuildSourcePage.vue";
 import DocumentTranslationPage from "./modules/document_translation/DocumentTranslationPage.vue";
+import NotesPage from "./modules/notes/NotesPage.vue";
 import { hasRequiredRedmineKeys, sessionReady, sessionState } from "./shared/session";
 import { localServerApi } from "./shared/localServer";
 
@@ -39,6 +40,7 @@ const router = createRouter({
         { path: "git-eol", name: "git-eol", component: GitEolPage, meta: { keepAlive: true } },
         { path: "build-source", name: "build-source", component: BuildSourcePage, meta: { keepAlive: true } },
         { path: "document-translation", name: "document-translation", component: DocumentTranslationPage, meta: { keepAlive: true } },
+        { path: "notes", name: "notes", component: NotesPage },
       ]
     }
   ]

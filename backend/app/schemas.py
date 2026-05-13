@@ -253,6 +253,33 @@ class ManagedTicketListItem(BaseModel):
     is_following: bool = False
 
 
+class NoteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    content: str
+    locked: bool
+    position: int
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class NoteCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    content: str = Field(default="")
+
+
+class NoteUpdateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    content: str = Field(default="")
+
+
+class NoteReorderRequest(BaseModel):
+    ids: list[int]
+
+
 class TicketLinkIn(BaseModel):
     type: str
     label: str | None = None

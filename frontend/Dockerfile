@@ -7,14 +7,13 @@ RUN apt-get update \
 	&& rm -rf /var/lib/apt/lists/*
 ENV NODE_OPTIONS=--use-openssl-ca
 RUN npm config set cafile /etc/ssl/certs/ca-certificates.crt \
-	&& npm install -g pnpm@10.33.2 \
-	&& pnpm config set manage-package-manager-versions false
+	&& npm config set strict-ssl false
 
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY . ./
-RUN pnpm build
+RUN npm run build
 
 FROM nginx:1.27-alpine
 
