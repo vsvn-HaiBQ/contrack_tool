@@ -1,6 +1,7 @@
 import re
 
 from sqlalchemy.orm import Session
+from urllib.parse import urlparse
 
 from app.core.security import decrypt_secret, encrypt_secret, hash_password
 from app.models import User, UserSettings
@@ -26,6 +27,7 @@ def serialize_user_settings(settings: UserSettings) -> UserSettingsOut:
         redmine_jp_api_key=decrypt_secret(settings.redmine_jp_api_key_enc),
         redmine_vn_api_key=decrypt_secret(settings.redmine_vn_api_key_enc),
         github_token=decrypt_secret(settings.github_token_enc),
+        team_automate_url=decrypt_secret(settings.team_automate_url_enc),
         default_assignee_id=settings.default_assignee_id,
         document_translation=serialize_document_translation_settings(settings),
     )
@@ -52,6 +54,7 @@ def apply_user_settings(
     redmine_jp_api_key: object = _UNSET,
     redmine_vn_api_key: object = _UNSET,
     github_token: object = _UNSET,
+    team_automate_url: object = _UNSET,
     default_assignee_id: object = _UNSET,
 ) -> None:
     if redmine_jp_api_key is not _UNSET:
@@ -60,6 +63,8 @@ def apply_user_settings(
         settings.redmine_vn_api_key_enc = encrypt_secret(redmine_vn_api_key if isinstance(redmine_vn_api_key, str) else None)
     if github_token is not _UNSET:
         settings.github_token_enc = encrypt_secret(github_token if isinstance(github_token, str) else None)
+    if team_automate_url is not _UNSET:
+        settings.team_automate_url_enc = encrypt_secret(team_automate_url if isinstance(team_automate_url, str) else None)
     if default_assignee_id is not _UNSET:
         settings.default_assignee_id = default_assignee_id if isinstance(default_assignee_id, int) else None
 
@@ -163,6 +168,7 @@ def validate_user_settings_input(
     redmine_jp_api_key: object = _UNSET,
     redmine_vn_api_key: object = _UNSET,
     github_token: object = _UNSET,
+    team_automate_url: object = _UNSET,
     default_assignee_id: object = _UNSET,
 ) -> dict[str, str | int | None | object]:
     if (
@@ -178,6 +184,13 @@ def validate_user_settings_input(
         validated["redmine_vn_api_key"] = redmine_vn_api_key.strip() if isinstance(redmine_vn_api_key, str) and redmine_vn_api_key.strip() else None
     if github_token is not _UNSET:
         validated["github_token"] = github_token.strip() if isinstance(github_token, str) and github_token.strip() else None
+    if team_automate_url is not _UNSET:
+        value = team_automate_url.strip() if isinstance(team_automate_url, str) and team_automate_url.strip() else None
+        if value:
+            parsed = urlparse(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError("team_automate_url must be a valid http or https URL")
+        validated["team_automate_url"] = value
     if default_assignee_id is not _UNSET:
         validated["default_assignee_id"] = default_assignee_id
     return validated

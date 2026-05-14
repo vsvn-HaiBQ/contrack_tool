@@ -131,6 +131,7 @@ export type UserSettings = {
   redmine_jp_api_key: string;
   redmine_vn_api_key: string;
   github_token: string;
+  team_automate_url: string;
   default_assignee_id: number | null;
   document_translation: DocumentTranslationSettings;
 };

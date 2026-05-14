@@ -51,8 +51,7 @@ const canBuild = computed(() =>
     form.targetBranch.trim() &&
       form.sourceFolder.trim() &&
       form.buildFolder.trim() &&
-      (form.buildClient || form.buildServer) &&
-      (!form.uploadToBox || parseTicketIds().length > 0)
+      (form.buildClient || form.buildServer)
   )
 );
 const boxReady = computed(() => Boolean(boxStatus.value?.configured && boxStatus.value?.connected));
@@ -370,7 +369,7 @@ async function browseBuild() {
 
 async function startBuild() {
   if (!canBuild.value) {
-    showToast("Enter branch, source folder, build folder, target, and JP ticket when Box upload is enabled", "warning");
+    showToast("Enter branch, source folder, build folder, and target", "warning");
     return;
   }
   try {
@@ -460,12 +459,6 @@ async function openArtifact(path: string) {
 async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
   if (!targetJob || uploadingBoxJobIds[targetJob.job_id] || uploadedBoxJobIds[targetJob.job_id]) return;
   const ticketIds = parseTicketIds();
-  if (!ticketIds.length) {
-    appendBoxUploadLog(targetJob, "error", "JP ticket is required before uploading build links");
-    setBoxUploadStatus("failed");
-    showToast("JP ticket is required before uploading build links", "warning");
-    return;
-  }
   const artifactsToUpload = targetJob.artifacts ?? [];
   if (!artifactsToUpload.length) {
     appendBoxUploadLog(targetJob, "warn", "No build artifacts to upload");
@@ -489,6 +482,9 @@ async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
     let linkedCount = 0;
     let skippedLinkCount = 0;
     let failedLinkCount = 0;
+    if (!ticketIds.length) {
+      appendBoxUploadLog(targetJob, "warn", "No JP ticket entered; Box links will not be attached to tickets");
+    }
     for (const item of result.items) {
       if (!item.sharedLink) {
         throw new Error(`Box did not return a shared link for ${item.fileName}`);
@@ -619,7 +615,7 @@ onBeforeUnmount(stopPolling);
 
       <div class="grid gap-4 lg:grid-cols-2">
         <div class="grid gap-2">
-          <label class="text-sm font-medium text-[#393C41]">JP Ticket ID</label>
+          <label class="text-sm font-medium text-[#393C41]">JP Ticket ID (optional)</label>
           <input
             v-model="form.jpIssueId"
             inputmode="numeric"

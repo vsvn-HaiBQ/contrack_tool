@@ -10,7 +10,7 @@ RUN npm config set cafile /etc/ssl/certs/ca-certificates.crt \
 	&& npm config set strict-ssl false
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --registry=https://registry.npmjs.org/
 
 COPY . ./
 RUN npm run build

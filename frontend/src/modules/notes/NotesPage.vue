@@ -320,6 +320,7 @@ function toggleExpand(id: number) {
 /* ── Quill content rendered in note cards ─────────────────────────────────── */
 .ql-content { font-size: 14px; line-height: 1.65; color: #393C41; }
 .ql-content p:last-child { margin-bottom: 0; }
+.ql-content p:empty { min-height: 1em; }
 .ql-content h1 { font-size: 1.5em; font-weight: 700; margin: 0.75em 0 0.35em; }
 .ql-content h2 { font-size: 1.25em; font-weight: 700; margin: 0.75em 0 0.35em; }
 .ql-content h3 { font-size: 1.1em; font-weight: 700; margin: 0.75em 0 0.35em; }

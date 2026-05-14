@@ -33,6 +33,7 @@ class UserSettings(Base):
     redmine_jp_api_key_enc: Mapped[str | None] = mapped_column(Text)
     redmine_vn_api_key_enc: Mapped[str | None] = mapped_column(Text)
     github_token_enc: Mapped[str | None] = mapped_column(Text)
+    team_automate_url_enc: Mapped[str | None] = mapped_column(Text)
     box_access_token_enc: Mapped[str | None] = mapped_column(Text)
     box_refresh_token_enc: Mapped[str | None] = mapped_column(Text)
     box_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

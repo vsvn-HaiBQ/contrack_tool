@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     redmine_jp_api_key_enc TEXT,
     redmine_vn_api_key_enc TEXT,
     github_token_enc TEXT,
+    team_automate_url_enc TEXT,
     default_assignee_id INTEGER,
     build_source_folder TEXT,
     build_output_folder TEXT,

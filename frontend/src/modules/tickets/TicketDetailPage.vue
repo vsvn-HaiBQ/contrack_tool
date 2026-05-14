@@ -28,6 +28,7 @@ const saving = ref(false);
 const deletingManagedJpIssueId = ref<number | null>(null);
 const suggestSyncJpIssueId = ref<number | null>(null);
 const creatingChild = ref(false);
+const postingTeams = ref(false);
 type QuickCreateDraft = {
   id: number;
   tracker: string;
@@ -326,6 +327,31 @@ async function copyTeamThread() {
   }
 }
 
+async function postToTeams() {
+  if (!ticketDetail.value) {
+    showToast("Load a managed ticket first", "warning");
+    return;
+  }
+  if (!sessionState.userSettings.team_automate_url?.trim()) {
+    showToast("Team Automate URL is not configured", "warning");
+    return;
+  }
+  if (!window.confirm(`Post JP #${ticketDetail.value.jp_issue_id} to Teams?`)) {
+    return;
+  }
+
+  postingTeams.value = true;
+  try {
+    const result = await ticketsApi.postTeamThread(ticketDetail.value.jp_issue_id);
+    ticketDetail.value.links = result.links;
+    showToast("Posted to Teams and saved thread link", "success");
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  } finally {
+    postingTeams.value = false;
+  }
+}
+
 function openQuickCreate(issueId?: number) {
   if (!ticketDetail.value) {
     showToast("Load a managed ticket first", "warning");
@@ -525,6 +551,8 @@ onBeforeUnmount(() => {
     :is-admin="sessionState.me?.role === 'admin'"
     :deleting-managed-jp-issue-id="deletingManagedJpIssueId"
     :saving="saving"
+    :can-post-to-teams="Boolean(sessionState.userSettings.team_automate_url?.trim())"
+    :posting-teams="postingTeams"
     @update:ticket-search="ticketSearch = $event"
     @update:managed-scope="managedScope = $event"
     @search-ticket="load"
@@ -539,6 +567,7 @@ onBeforeUnmount(() => {
     @add-link="addLink"
     @copy-link="copyLink"
     @copy-team-thread="copyTeamThread"
+    @post-to-teams="postToTeams"
     @edit-link="startEditLink"
     @cancel-edit-link="cancelEditLink"
     @delete-link="deleteLink"

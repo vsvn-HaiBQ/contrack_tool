@@ -112,6 +112,14 @@ const emit = defineEmits<{
             </div>
           </div>
           <div class="grid gap-2">
+            <label class="text-sm font-medium text-[#393C41]">Team Automate URL</label>
+            <input
+              v-model="userSettings.team_automate_url"
+              placeholder="https://..."
+              class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+            />
+          </div>
+          <div class="grid gap-2">
             <label class="text-sm font-medium text-[#393C41]">Default Assignee</label>
             <select v-model="userSettings.default_assignee_id" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
               <option v-for="assignee in assignees" :key="assignee.id" :value="assignee.id">

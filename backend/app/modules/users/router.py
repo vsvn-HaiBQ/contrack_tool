@@ -166,7 +166,7 @@ def update_my_settings(
         db.add(settings)
     try:
         raw_payload = payload.model_dump(exclude_unset=True)
-        settings_keys = ("redmine_jp_api_key", "redmine_vn_api_key", "github_token", "default_assignee_id")
+        settings_keys = ("redmine_jp_api_key", "redmine_vn_api_key", "github_token", "team_automate_url", "default_assignee_id")
         validated = validate_user_settings_input(
             **{key: raw_payload[key] for key in settings_keys if key in raw_payload}
         )

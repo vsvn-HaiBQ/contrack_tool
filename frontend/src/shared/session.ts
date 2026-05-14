@@ -14,6 +14,7 @@ export const sessionState = reactive({
     redmine_jp_api_key: "",
     redmine_vn_api_key: "",
     github_token: "",
+    team_automate_url: "",
     default_assignee_id: null,
     document_translation: {}
   } as UserSettings,
@@ -52,6 +53,7 @@ export async function bootstrapSession() {
   sessionState.userSettings.redmine_jp_api_key = mySettings.redmine_jp_api_key ?? "";
   sessionState.userSettings.redmine_vn_api_key = mySettings.redmine_vn_api_key ?? "";
   sessionState.userSettings.github_token = mySettings.github_token ?? "";
+  sessionState.userSettings.team_automate_url = mySettings.team_automate_url ?? "";
   sessionState.userSettings.document_translation = mySettings.document_translation ?? {};
   try {
     sessionState.assignees = await usersApi.assignees();
@@ -79,6 +81,7 @@ export function clearSession() {
   sessionState.userSettings.redmine_jp_api_key = "";
   sessionState.userSettings.redmine_vn_api_key = "";
   sessionState.userSettings.github_token = "";
+  sessionState.userSettings.team_automate_url = "";
   sessionState.userSettings.default_assignee_id = null;
   sessionState.userSettings.document_translation = {};
   Object.keys(sessionState.systemSettings).forEach((key) => {

@@ -17,6 +17,8 @@ export const ticketsApi = {
   unfollow: (jpIssueId: number) => http(`/tickets/${jpIssueId}/follow`, { method: "DELETE" }),
   createChild: (jpIssueId: number, payload: unknown) =>
     http<SyncIssueSummary>(`/tickets/${jpIssueId}/child`, { method: "POST", body: JSON.stringify(payload) }),
+  postTeamThread: (jpIssueId: number) =>
+    http<{ url: string; links: TicketDetail["links"] }>(`/tickets/${jpIssueId}/team-thread`, { method: "POST" }),
   updateTicket: (jpIssueId: number, payload: unknown) =>
     http(`/tickets/${jpIssueId}/status-assignee`, { method: "PUT", body: JSON.stringify(payload) }),
   updateIssue: (issueId: number, payload: unknown) =>

@@ -30,6 +30,8 @@ const props = defineProps<{
   isAdmin?: boolean;
   deletingManagedJpIssueId?: number | null;
   saving?: boolean;
+  canPostToTeams?: boolean;
+  postingTeams?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -48,6 +50,7 @@ const emit = defineEmits<{
   addLink: [];
   copyLink: [url: string];
   copyTeamThread: [];
+  postToTeams: [];
   editLink: [linkId: number, type: string, url: string];
   cancelEditLink: [];
   deleteLink: [linkId: number];
@@ -699,6 +702,22 @@ function isClosedLike(status: string | null | undefined) {
                 <path d="M4 13V5a2 2 0 0 1 2-2h8"></path>
               </svg>
               Copy Team Thread
+            </button>
+            <button
+              v-if="canPostToTeams"
+              type="button"
+              class="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-3 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="postingTeams"
+              @click="emit('postToTeams')"
+            >
+              <LoadingCircle v-if="postingTeams" />
+              <svg v-else viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 5.5h12"></path>
+                <path d="M4 10h8"></path>
+                <path d="M4 14.5h5"></path>
+                <path d="m12.5 13.5 2 2 3-4"></path>
+              </svg>
+              {{ postingTeams ? "Posting..." : "Post to Teams" }}
             </button>
             <button
               type="button"

@@ -5,6 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 import re
 from urllib.parse import urlparse
 
+import httpx
+
+from app.core.security import decrypt_secret
 from app.db import get_db
 from app.dependencies import get_admin_user, get_current_user, request_meta
 from app.models import ManagedTicket, TicketLink, User, UserManagedTicketFollow, UserSettings
@@ -23,6 +26,7 @@ from app.schemas import (
     TicketLinkIn,
     TicketLinkOut,
     TicketStatusAssigneeUpdate,
+    TeamThreadPostResponse,
     VerifySyncRequest,
     VerifySyncResponse,
     VNTicketReference,
@@ -60,6 +64,26 @@ def _derive_link_label(link_type: str, url: str, explicit_label: str | None) -> 
     compact_path = path if len(path) <= 80 else f"{path[:77]}..."
     label = f"{link_type.upper()} | {host}{compact_path}"
     return label[:255]
+
+
+def _upsert_ticket_link(db: Session, managed: ManagedTicket, payload: TicketLinkIn) -> TicketLink:
+    duplicate = db.query(TicketLink).filter(TicketLink.url == payload.url, TicketLink.managed_ticket_id != managed.id).first()
+    if duplicate:
+        raise HTTPException(status_code=400, detail="URL already exists")
+    link = None
+    if payload.type in {"thread", "pr", "client", "server"}:
+        link = db.query(TicketLink).filter(TicketLink.managed_ticket_id == managed.id, TicketLink.type == payload.type).first()
+    if not link:
+        link = db.query(TicketLink).filter(TicketLink.managed_ticket_id == managed.id, TicketLink.url == payload.url).first()
+    derived_label = _derive_link_label(payload.type, payload.url, payload.label)
+    if link:
+        link.label = derived_label
+        link.url = payload.url
+        link.type = payload.type
+    else:
+        link = TicketLink(managed_ticket_id=managed.id, type=payload.type, label=derived_label, url=payload.url)
+        db.add(link)
+    return link
 
 
 @router.get("/search")
@@ -362,6 +386,82 @@ def get_ticket_detail(jp_issue_id: int, user: User = Depends(get_current_user), 
     )
 
 
+@router.post("/{jp_issue_id}/team-thread", response_model=TeamThreadPostResponse)
+def post_team_thread(
+    jp_issue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TeamThreadPostResponse:
+    managed = db.query(ManagedTicket).filter(ManagedTicket.jp_issue_id == jp_issue_id).first()
+    if not managed:
+        raise HTTPException(status_code=404, detail="Managed ticket not found")
+
+    user_settings = db.get(UserSettings, user.id)
+    team_automate_url = decrypt_secret(user_settings.team_automate_url_enc) if user_settings else None
+    if not team_automate_url:
+        raise HTTPException(status_code=400, detail="Team Automate URL is not configured")
+
+    settings = get_system_settings_map(db)
+    try:
+        detail = redmine.build_ticket_detail(
+            jp_issue_id=managed.jp_issue_id,
+            vn_issue_id=managed.vn_issue_id,
+            jp_host=settings.get("redmine_jp_host"),
+            jp_api_key_enc=user_settings.redmine_jp_api_key_enc if user_settings else None,
+            vn_host=settings.get("redmine_vn_host"),
+            vn_api_key_enc=user_settings.redmine_vn_api_key_enc if user_settings else None,
+        )
+    except (redmine.IntegrationConfigError, redmine.RedmineClientError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    link_map = {link.type: link.url for link in managed.links}
+    body = {
+        "subject": detail["jp"].subject,
+        "ticketJP": detail["jp"].url,
+        "ticketVN": detail["story"].url,
+    }
+    optional_fields = {
+        "pull_request": link_map.get("pr"),
+        "client_build": link_map.get("client"),
+        "server_build": link_map.get("server"),
+    }
+    body.update({key: value for key, value in optional_fields.items() if value})
+
+    try:
+        response = httpx.post(team_automate_url, json=body, timeout=20)
+        response.raise_for_status()
+        response_body = response.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=f"Team Automate request failed: HTTP {exc.response.status_code}") from exc
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"Team Automate request failed: {exc}") from exc
+
+    thread_url = response_body.get("url") if isinstance(response_body, dict) else None
+    if not isinstance(thread_url, str) or not thread_url.strip():
+        raise HTTPException(status_code=502, detail="Team Automate response must include url")
+
+    link_payload = TicketLinkIn(type="thread", label="Teams Thread", url=thread_url.strip())
+    _upsert_ticket_link(db, managed, link_payload)
+
+    meta = request_meta(request)
+    write_audit_log(
+        db,
+        actor=user,
+        action="post_team_thread",
+        target_type="managed_ticket",
+        target_id=str(managed.id),
+        payload_after=body,
+        **meta,
+    )
+    db.commit()
+    db.refresh(managed)
+    return TeamThreadPostResponse(
+        url=thread_url.strip(),
+        links=[TicketLinkOut.model_validate(link) for link in managed.links],
+    )
+
+
 @router.delete("/{jp_issue_id}", response_model=MessageResponse)
 def delete_managed_ticket(
     jp_issue_id: int,
@@ -535,22 +635,7 @@ def upsert_ticket_link(
     managed = db.query(ManagedTicket).filter(ManagedTicket.jp_issue_id == jp_issue_id).first()
     if not managed:
         raise HTTPException(status_code=404, detail="Managed ticket not found")
-    duplicate = db.query(TicketLink).filter(TicketLink.url == payload.url, TicketLink.managed_ticket_id != managed.id).first()
-    if duplicate:
-        raise HTTPException(status_code=400, detail="URL already exists")
-    link = None
-    if payload.type in {"thread", "pr", "client", "server"}:
-        link = db.query(TicketLink).filter(TicketLink.managed_ticket_id == managed.id, TicketLink.type == payload.type).first()
-    if not link:
-        link = db.query(TicketLink).filter(TicketLink.managed_ticket_id == managed.id, TicketLink.url == payload.url).first()
-    derived_label = _derive_link_label(payload.type, payload.url, payload.label)
-    if link:
-        link.label = derived_label
-        link.url = payload.url
-        link.type = payload.type
-    else:
-        link = TicketLink(managed_ticket_id=managed.id, type=payload.type, label=derived_label, url=payload.url)
-        db.add(link)
+    _upsert_ticket_link(db, managed, payload)
     meta = request_meta(request)
     write_audit_log(
         db,

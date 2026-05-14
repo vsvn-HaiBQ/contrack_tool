@@ -82,6 +82,7 @@ class UserSettingsIn(BaseModel):
     redmine_jp_api_key: str | None = None
     redmine_vn_api_key: str | None = None
     github_token: str | None = None
+    team_automate_url: str | None = None
     default_assignee_id: int | None = None
     document_translation: DocumentTranslationSettingsIn | None = None
 
@@ -90,6 +91,7 @@ class UserSettingsOut(BaseModel):
     redmine_jp_api_key: str | None = None
     redmine_vn_api_key: str | None = None
     github_token: str | None = None
+    team_automate_url: str | None = None
     default_assignee_id: int | None = None
     document_translation: DocumentTranslationSettingsOut = Field(default_factory=DocumentTranslationSettingsOut)
 
@@ -320,6 +322,11 @@ class TicketDetailResponse(BaseModel):
 class TicketStatusAssigneeUpdate(BaseModel):
     status: str | None = None
     assignee: str | None = None
+
+
+class TeamThreadPostResponse(BaseModel):
+    url: str
+    links: list[TicketLinkOut]
 
 
 class LogtimeRow(BaseModel):
