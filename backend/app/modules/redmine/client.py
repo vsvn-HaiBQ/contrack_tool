@@ -113,8 +113,8 @@ class RedmineClient:
                 return merged
             offset += limit
 
-    def get_issue(self, issue_id: int) -> RedmineIssue:
-        payload = self.get_issue_payload(issue_id)
+    def get_issue(self, issue_id: int, *, force_refresh: bool = False) -> RedmineIssue:
+        payload = self.get_issue_payload(issue_id, force_refresh=force_refresh)
         issue = payload["issue"]
         return self._map_issue(issue)
 
@@ -158,22 +158,24 @@ class RedmineClient:
         except RuntimeError:
             return
 
-    def get_issue_payload(self, issue_id: int) -> dict[str, Any]:
+    def get_issue_payload(self, issue_id: int, *, force_refresh: bool = False) -> dict[str, Any]:
+        if force_refresh:
+            self._delete_cached_issue_payload(issue_id)
         cached = self._get_cached_issue_payload(issue_id)
-        if cached is not None:
+        if cached is not None and not force_refresh:
             return cached
         payload = self._request("GET", f"/issues/{issue_id}.json", params={"include": "children,relations,allowed_statuses"})
         self._set_cached_issue_payload(issue_id, payload)
         return payload
 
-    def get_issues_by_ids(self, issue_ids: list[int]) -> list[RedmineIssue]:
+    def get_issues_by_ids(self, issue_ids: list[int], *, force_refresh: bool = False) -> list[RedmineIssue]:
         if not issue_ids:
             return []
         if len(issue_ids) == 1:
-            return [self.get_issue(issue_ids[0])]
+            return [self.get_issue(issue_ids[0], force_refresh=force_refresh)]
         # Parallel fan-out; preserve input order.
         with ThreadPoolExecutor(max_workers=min(8, len(issue_ids))) as executor:
-            return list(executor.map(self.get_issue, issue_ids))
+            return list(executor.map(lambda issue_id: self.get_issue(issue_id, force_refresh=force_refresh), issue_ids))
 
     def current_user(self) -> dict[str, Any]:
         payload = self._request("GET", "/users/current.json")

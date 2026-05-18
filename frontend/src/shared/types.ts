@@ -261,6 +261,15 @@ export type LogtimeRow = {
 
 export type LogtimeSaveResult = { issue_id: number; success: boolean; message: string };
 
+export type QuickCreateDraft = {
+  id: number;
+  tracker: string;
+  parent_issue_id: number | null;
+  subject: string;
+  description: string;
+  assignee_id: number | null;
+};
+
 export type PrResult = { title: string; url: string; linked_ticket_ids: number[] };
 export type PrPreview = {
   title: string;

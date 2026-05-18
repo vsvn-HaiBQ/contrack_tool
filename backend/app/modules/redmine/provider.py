@@ -252,6 +252,35 @@ def create_vn_ticket_resolved(
     return {"story": story, "subtasks": subtasks}
 
 
+def create_vn_child_issue_resolved(
+    *,
+    vn_host: str | None,
+    vn_api_key_enc: str | None,
+    project_id: int | str | None,
+    parent_issue_id: int,
+    subject: str,
+    description: str | None,
+    assignee_id: int | None,
+    tracker: str | None = None,
+):
+    if not project_id:
+        raise IntegrationConfigError("Redmine VN project id is not configured")
+    client = get_client(vn_host, vn_api_key_enc)
+    available_trackers = client.list_project_trackers(project_id) if project_id else client.list_trackers()
+    desired_tracker = (tracker or "Sub-task").strip()
+    tracker_id = _find_tracker_id(available_trackers, desired_tracker, desired_tracker.lower())
+    if tracker_id is None:
+        raise IntegrationConfigError(f"Unknown tracker: {desired_tracker}")
+    return client.create_issue(
+        project_id=project_id,
+        subject=subject,
+        description=description or f"Subtask for VN #{parent_issue_id}",
+        tracker_id=tracker_id,
+        assigned_to_id=assignee_id,
+        parent_issue_id=parent_issue_id,
+    )
+
+
 def build_ticket_detail(
     *,
     jp_issue_id: int,
@@ -260,15 +289,16 @@ def build_ticket_detail(
     jp_api_key_enc: str | None,
     vn_host: str | None,
     vn_api_key_enc: str | None,
+    force_refresh: bool = False,
 ):
     jp_client = get_client(jp_host, jp_api_key_enc)
     vn_client = get_client(vn_host, vn_api_key_enc)
 
     # Fetch JP issue and VN story payload in parallel.
     with ThreadPoolExecutor(max_workers=3) as executor:
-        future_jp = executor.submit(jp_client.get_issue, jp_issue_id)
-        future_story_payload = executor.submit(vn_client.get_issue_payload, vn_issue_id)
-        future_story = executor.submit(vn_client.get_issue, vn_issue_id)
+        future_jp = executor.submit(jp_client.get_issue, jp_issue_id, force_refresh=force_refresh)
+        future_story_payload = executor.submit(vn_client.get_issue_payload, vn_issue_id, force_refresh=force_refresh)
+        future_story = executor.submit(vn_client.get_issue, vn_issue_id, force_refresh=force_refresh)
         jp = future_jp.result()
         story_payload = future_story_payload.result().get("issue", {})
         story = future_story.result()
@@ -286,9 +316,9 @@ def build_ticket_detail(
 
     # Parallelize parent + children + related fetches.
     with ThreadPoolExecutor(max_workers=3) as executor:
-        future_parent = executor.submit(vn_client.get_issue, parent_id) if parent_id else None
-        future_children = executor.submit(vn_client.get_issues_by_ids, child_ids)
-        future_related = executor.submit(vn_client.get_issues_by_ids, related_ids)
+        future_parent = executor.submit(vn_client.get_issue, parent_id, force_refresh=force_refresh) if parent_id else None
+        future_children = executor.submit(vn_client.get_issues_by_ids, child_ids, force_refresh=force_refresh)
+        future_related = executor.submit(vn_client.get_issues_by_ids, related_ids, force_refresh=force_refresh)
         parent = future_parent.result() if future_parent else None
         children = future_children.result()
         related = future_related.result()

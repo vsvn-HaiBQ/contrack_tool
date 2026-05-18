@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Assignee, LogtimeRow, LogtimeSaveResult, StatusOption } from "../../shared/types";
+import type { Assignee, LogtimeRow, LogtimeSaveResult, QuickCreateDraft, StatusOption, TrackerOption } from "../../shared/types";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
+import QuickCreateTaskRow from "../tickets/QuickCreateTaskRow.vue";
 
 const props = defineProps<{
   logtimeDate: string;
@@ -11,8 +12,11 @@ const props = defineProps<{
   assigneeOptions: Assignee[];
   totalHours: number;
   results: LogtimeSaveResult[];
+  quickCreateForms: QuickCreateDraft[];
+  trackerOptions: TrackerOption[];
   loading: boolean;
   saving: boolean;
+  creatingChild: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -20,6 +24,9 @@ const emit = defineEmits<{
   shiftDate: [delta: number];
   goToday: [];
   save: [];
+  openQuickCreate: [issueId: number];
+  cancelQuickCreate: [draftId?: number];
+  createChildTicket: [draftId?: number];
 }>();
 
 type GroupedRow = {
@@ -75,6 +82,14 @@ function trackerBadgeClass(tracker?: string | null) {
 
 function isStory(row: LogtimeRow) {
   return (row.tracker || "").trim().toLowerCase() === "story";
+}
+
+function isSubtaskTracker(tracker: string | null | undefined) {
+  return (tracker || "").trim().toLowerCase().includes("sub");
+}
+
+function quickCreateFormsForParent(issueId: number) {
+  return props.quickCreateForms.filter((draft) => draft.parent_issue_id === issueId);
 }
 
 const formattedHeaderDate = computed(() => {
@@ -137,20 +152,23 @@ const formattedHeaderDate = computed(() => {
         Loading logtime...
       </div>
       <div v-else-if="groupedRows.length" class="grid gap-3">
-        <div class="hidden grid-cols-[minmax(132px,0.68fr)_minmax(0,3.2fr)_minmax(115px,0.62fr)_minmax(115px,0.62fr)_minmax(115px,0.58fr)_60px] gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-2 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#5C5E62] md:grid">
+        <div class="hidden grid-cols-[minmax(132px,0.68fr)_minmax(0,3.2fr)_minmax(115px,0.62fr)_minmax(115px,0.62fr)_minmax(115px,0.58fr)_60px] gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-2 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#5C5E62] md:grid pr-6">
           <span>Issue</span>
           <span>Subject</span>
           <span>Status</span>
           <span>Assignee</span>
           <span>Activity</span>
-          <span class="text-right">Hours</span>
+          <span>Hours</span>
         </div>
         <article
           v-for="group in groupedRows"
           :key="group.root.issue_id"
-          class="overflow-hidden rounded-xl border border-neutral-200"
+          class="overflow-visible rounded-xl border border-neutral-200"
         >
-          <div class="grid gap-2 bg-[#F5F8FF] px-2 py-2 md:grid-cols-[minmax(132px,0.68fr)_minmax(0,3.2fr)_minmax(115px,0.62fr)_minmax(115px,0.62fr)_minmax(115px,0.58fr)_60px] md:items-center">
+          <div
+            class="relative grid gap-2 bg-[#F5F8FF] px-2 py-2 pr-6 md:grid-cols-[minmax(132px,0.68fr)_minmax(0,3.2fr)_minmax(115px,0.62fr)_minmax(115px,0.62fr)_minmax(115px,0.58fr)_60px] md:items-center"
+            :class="group.children.length ? 'rounded-t-xl' : 'rounded-xl'"
+          >
             <div class="flex min-w-0 flex-wrap items-center gap-2">
               <span class="inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-semibold" :class="trackerBadgeClass(group.root.tracker)">
                 {{ group.root.tracker || "Issue" }}
@@ -187,55 +205,108 @@ const formattedHeaderDate = computed(() => {
               <input v-if="!isStory(group.root)" v-model.number="group.root.hours" type="number" min="0" step="0.25" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
               <div v-else class="hidden min-h-10 w-full rounded-lg border border-transparent md:block"></div>
             </div>
+            <div class="absolute top-1/2 right-0 z-10 translate-x-1/2 -translate-y-1/2">
+              <button
+                v-if="!isSubtaskTracker(group.root.tracker)"
+                type="button"
+                class="flex size-6 items-center justify-center rounded-full border border-neutral-200 bg-white text-[#5C5E62] shadow-sm transition hover:border-[#3E6AE1] hover:bg-[#F5F8FF] hover:text-[#3E6AE1]"
+                title="Create subtask"
+                @click="emit('openQuickCreate', group.root.issue_id)"
+              >
+                <svg viewBox="0 0 20 20" fill="none" class="size-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M10 4v12"></path>
+                  <path d="M4 10h12"></path>
+                </svg>
+              </button>
+            </div>
           </div>
+          <QuickCreateTaskRow
+            v-for="draft in quickCreateFormsForParent(group.root.issue_id)"
+            :key="`quick-create-root-${draft.id}`"
+            from="logtime"
+            :draft="draft"
+            :tracker-options="trackerOptions"
+            :assignee-options="assigneeOptions"
+            :creating-child="creatingChild"
+            @create="emit('createChildTicket', $event)"
+            @cancel="emit('cancelQuickCreate', $event)"
+          />
 
           <div v-if="group.children.length" class="border-t border-neutral-200 bg-neutral-50/70">
             <div class="grid gap-0">
-              <div
+              <template
                 v-for="item in group.children"
                 :key="item.row.issue_id"
-                class="grid gap-2 border-b border-neutral-200 px-2 py-1 last:border-b-0 md:grid-cols-[minmax(132px,0.68fr)_minmax(0,3.2fr)_minmax(115px,0.62fr)_minmax(115px,0.62fr)_minmax(115px,0.58fr)_60px] md:items-center"
               >
-                <div class="flex min-w-0 flex-wrap items-center gap-2">
-                  <span class="inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-semibold" :class="trackerBadgeClass(item.row.tracker)">
-                    {{ item.row.tracker || "Sub" }}
-                  </span>
-                  <span class="rounded bg-white px-1.5 py-0.5 text-xs font-mono text-[#3E6AE1] ring-1 ring-neutral-200">#{{ item.row.issue_id }}</span>
-                </div>
-                <div class="grid min-w-0 gap-1">
-                  <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Subject</span>
-                  <div class="relative min-w-0 pl-4">
-                    <span class="absolute top-0.5 left-0 h-2.5 w-3 border-l border-b border-neutral-300"></span>
-                    <span v-if="!item.isLast" class="absolute top-3 left-0 h-[calc(100%-0.75rem)] border-l border-neutral-300"></span>
-                    <a :href="item.row.url" target="_blank" rel="noreferrer" class="block min-w-0 truncate text-sm text-[#171A20] hover:text-[#3E6AE1] hover:underline" :title="item.row.subject">
-                      {{ item.row.subject }}
-                    </a>
+                <div
+                  class="relative grid gap-2 border-b border-neutral-200 px-2 py-1 pr-6 last:rounded-b-xl last:border-b-0 md:grid-cols-[minmax(132px,0.68fr)_minmax(0,3.2fr)_minmax(115px,0.62fr)_minmax(115px,0.62fr)_minmax(115px,0.58fr)_60px] md:items-center"
+                >
+                  <div class="flex min-w-0 flex-wrap items-center gap-2">
+                    <span class="inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-semibold" :class="trackerBadgeClass(item.row.tracker)">
+                      {{ item.row.tracker || "Sub" }}
+                    </span>
+                    <span class="rounded bg-white px-1.5 py-0.5 text-xs font-mono text-[#3E6AE1] ring-1 ring-neutral-200">#{{ item.row.issue_id }}</span>
+                  </div>
+                  <div class="grid min-w-0 gap-1">
+                    <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Subject</span>
+                    <div class="relative min-w-0 pl-4">
+                      <span class="absolute top-0.5 left-0 h-2.5 w-3 border-l border-b border-neutral-300"></span>
+                      <span v-if="!item.isLast" class="absolute top-3 left-0 h-[calc(100%-0.75rem)] border-l border-neutral-300"></span>
+                      <a :href="item.row.url" target="_blank" rel="noreferrer" class="block min-w-0 truncate text-sm text-[#171A20] hover:text-[#3E6AE1] hover:underline" :title="item.row.subject">
+                        {{ item.row.subject }}
+                      </a>
+                    </div>
+                  </div>
+                  <div class="grid gap-1">
+                    <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Status</span>
+                    <select v-model="item.row.status" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
+                      <option v-for="status in issueStatusOptions(item.row)" :key="status.id" :value="status.name">{{ status.name }}</option>
+                    </select>
+                  </div>
+                  <div class="grid gap-1">
+                    <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Assignee</span>
+                    <select v-model="item.row.assignee" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
+                      <option value="">Unassigned</option>
+                      <option v-for="assignee in assigneeOptions" :key="assignee.id" :value="assignee.name">{{ assignee.name }}</option>
+                    </select>
+                  </div>
+                  <div class="grid gap-1">
+                    <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Activity</span>
+                    <select v-model="item.row.activity" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
+                      <option v-for="activity in activities" :key="activity" :value="activity">{{ activity }}</option>
+                    </select>
+                  </div>
+                  <div class="grid gap-1">
+                    <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Spent time</span>
+                    <input v-model.number="item.row.hours" type="number" min="0" step="0.25" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+                  </div>
+                  <div class="absolute top-1/2 right-0 z-10 translate-x-1/2 -translate-y-1/2">
+                    <button
+                      v-if="!isSubtaskTracker(item.row.tracker)"
+                      type="button"
+                      class="flex size-6 items-center justify-center rounded-full border border-neutral-200 bg-white text-[#5C5E62] shadow-sm transition hover:border-[#3E6AE1] hover:bg-[#F5F8FF] hover:text-[#3E6AE1]"
+                      title="Create subtask"
+                      @click="emit('openQuickCreate', item.row.issue_id)"
+                    >
+                      <svg viewBox="0 0 20 20" fill="none" class="size-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M10 4v12"></path>
+                        <path d="M4 10h12"></path>
+                      </svg>
+                    </button>
                   </div>
                 </div>
-                <div class="grid gap-1">
-                  <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Status</span>
-                  <select v-model="item.row.status" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
-                    <option v-for="status in issueStatusOptions(item.row)" :key="status.id" :value="status.name">{{ status.name }}</option>
-                  </select>
-                </div>
-                <div class="grid gap-1">
-                  <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Assignee</span>
-                  <select v-model="item.row.assignee" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
-                    <option value="">Unassigned</option>
-                    <option v-for="assignee in assigneeOptions" :key="assignee.id" :value="assignee.name">{{ assignee.name }}</option>
-                  </select>
-                </div>
-                <div class="grid gap-1">
-                  <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Activity</span>
-                  <select v-model="item.row.activity" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
-                    <option v-for="activity in activities" :key="activity" :value="activity">{{ activity }}</option>
-                  </select>
-                </div>
-                <div class="grid gap-1">
-                  <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Spent time</span>
-                  <input v-model.number="item.row.hours" type="number" min="0" step="0.25" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
-                </div>
-              </div>
+                <QuickCreateTaskRow
+                  v-for="draft in quickCreateFormsForParent(item.row.issue_id)"
+                  :key="`quick-create-child-${draft.id}`"
+                  from="logtime"
+                  :draft="draft"
+                  :tracker-options="trackerOptions"
+                  :assignee-options="assigneeOptions"
+                  :creating-child="creatingChild"
+                  @create="emit('createChildTicket', $event)"
+                  @cancel="emit('cancelQuickCreate', $event)"
+                />
+              </template>
             </div>
           </div>
         </article>

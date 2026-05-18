@@ -10,13 +10,16 @@ export const ticketsApi = {
       { method: "POST", body: JSON.stringify(payload) }
     ),
   sync: (payload: unknown) => http<SyncResult>("/tickets/sync", { method: "POST", body: JSON.stringify(payload) }),
-  detail: (jpIssueId: number) => http<TicketDetail>(`/tickets/${jpIssueId}`),
+  detail: (jpIssueId: number, forceRefresh = false) =>
+    http<TicketDetail>(`/tickets/${jpIssueId}${forceRefresh ? "?force_refresh=true" : ""}`),
   deleteManaged: (jpIssueId: number) => http(`/tickets/${jpIssueId}`, { method: "DELETE" }),
   managed: (scope: "following" | "all" = "following") => http<ManagedTicketListItem[]>(`/tickets/managed?scope=${scope}`),
   follow: (jpIssueId: number) => http(`/tickets/${jpIssueId}/follow`, { method: "POST" }),
   unfollow: (jpIssueId: number) => http(`/tickets/${jpIssueId}/follow`, { method: "DELETE" }),
   createChild: (jpIssueId: number, payload: unknown) =>
     http<SyncIssueSummary>(`/tickets/${jpIssueId}/child`, { method: "POST", body: JSON.stringify(payload) }),
+  createIssueChild: (issueId: number, payload: unknown) =>
+    http<SyncIssueSummary>(`/tickets/issues/${issueId}/child`, { method: "POST", body: JSON.stringify(payload) }),
   postTeamThread: (jpIssueId: number) =>
     http<{ url: string; links: TicketDetail["links"] }>(`/tickets/${jpIssueId}/team-thread`, { method: "POST" }),
   updateTicket: (jpIssueId: number, payload: unknown) =>

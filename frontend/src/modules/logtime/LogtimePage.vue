@@ -4,8 +4,9 @@ import LogtimeView from "./LogtimeView.vue";
 import { logtimeApi } from "./api";
 import { ticketsApi } from "../tickets/api";
 import { usersApi } from "../users/api";
-import type { Assignee, LogtimeRow, LogtimeSaveResult, StatusOption } from "../../shared/types";
+import type { Assignee, LogtimeRow, LogtimeSaveResult, QuickCreateDraft, StatusOption } from "../../shared/types";
 import { showToast } from "../../shared/toast";
+import { sessionState } from "../../shared/session";
 
 const logtimeDate = ref(new Date().toISOString().slice(0, 10));
 const rows = ref<LogtimeRow[]>([]);
@@ -16,6 +17,9 @@ const results = ref<LogtimeSaveResult[]>([]);
 const originalRows = ref<Record<number, { status: string; assignee: string; activity: string; hours: number }>>({});
 const loading = ref(false);
 const saving = ref(false);
+const creatingChild = ref(false);
+const quickCreateForms = ref<QuickCreateDraft[]>([]);
+let quickCreateDraftId = 0;
 
 const activityDefaults = [
   { activity: "Development", pattern: /(?<![A-Za-z])(dev|development|code)(?![A-Za-z])/i, aliases: ["Development", "Dev"] },
@@ -57,6 +61,7 @@ function clearRows() {
   activities.value = [];
   results.value = [];
   originalRows.value = {};
+  quickCreateForms.value = [];
 }
 
 function resolveActivityOption(options: string[], names: string[]) {
@@ -241,6 +246,63 @@ async function save() {
   }
 }
 
+function defaultQuickCreateAssigneeId() {
+  return sessionState.userSettings.default_assignee_id ?? sessionState.assignees[0]?.id ?? assigneeOptions.value[0]?.id ?? null;
+}
+
+function openQuickCreate(issueId: number) {
+  quickCreateForms.value.push({
+    id: ++quickCreateDraftId,
+    tracker: "Sub-task",
+    parent_issue_id: issueId,
+    subject: "",
+    description: "",
+    assignee_id: defaultQuickCreateAssigneeId()
+  });
+}
+
+function cancelQuickCreate(draftId?: number) {
+  if (draftId != null) {
+    quickCreateForms.value = quickCreateForms.value.filter((draft) => draft.id !== draftId);
+    return;
+  }
+  quickCreateForms.value = [];
+}
+
+async function createChildTicket(draftId?: number) {
+  const draft = draftId != null ? quickCreateForms.value.find((item) => item.id === draftId) : null;
+  if (!draft) {
+    showToast("Task row is no longer available", "warning");
+    return;
+  }
+  if (!draft.parent_issue_id) {
+    showToast("Select a parent issue first", "warning");
+    return;
+  }
+  if (!draft.subject.trim()) {
+    showToast("Enter a task subject", "warning");
+    return;
+  }
+
+  creatingChild.value = true;
+  try {
+    const created = await ticketsApi.createIssueChild(draft.parent_issue_id, {
+      parent_issue_id: draft.parent_issue_id,
+      subject: draft.subject.trim(),
+      description: draft.description.trim() || null,
+      assignee_id: draft.assignee_id,
+      tracker: draft.tracker
+    });
+    showToast(`Created ${created.tracker} #${created.issue_id}`, "success");
+    cancelQuickCreate(draftId);
+    await refresh();
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  } finally {
+    creatingChild.value = false;
+  }
+}
+
 onMounted(async () => {
   await loadOptions();
   await refresh();
@@ -261,11 +323,17 @@ watch(logtimeDate, async () => {
     :assignee-options="assigneeOptions"
     :total-hours="totalHours"
     :results="results"
+    :quick-create-forms="quickCreateForms"
+    :tracker-options="sessionState.trackers"
     :loading="loading"
     :saving="saving"
+    :creating-child="creatingChild"
     @update:logtime-date="logtimeDate = $event"
     @shift-date="shiftDate"
     @go-today="goToday"
     @save="save"
+    @open-quick-create="openQuickCreate"
+    @cancel-quick-create="cancelQuickCreate"
+    @create-child-ticket="createChildTicket"
   />
 </template>

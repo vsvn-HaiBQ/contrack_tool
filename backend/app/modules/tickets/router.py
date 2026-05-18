@@ -347,8 +347,60 @@ def create_child_ticket(
     )
 
 
+@router.post("/issues/{issue_id}/child", response_model=SyncIssueSummary)
+def create_issue_child_ticket(
+    issue_id: int,
+    payload: ChildIssueCreateRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    user_settings: UserSettings = Depends(get_current_user_settings),
+    db: Session = Depends(get_db),
+) -> SyncIssueSummary:
+    parent_issue_id = payload.parent_issue_id or issue_id
+    if parent_issue_id != issue_id:
+        raise HTTPException(status_code=400, detail="parent_issue_id must match issue_id")
+
+    settings = get_system_settings_map(db)
+    try:
+        created_issue = redmine.create_vn_child_issue_resolved(
+            vn_host=settings.get("redmine_vn_host"),
+            vn_api_key_enc=user_settings.redmine_vn_api_key_enc,
+            project_id=settings.get("redmine_vn_project_id"),
+            parent_issue_id=issue_id,
+            subject=payload.subject,
+            description=payload.description,
+            assignee_id=payload.assignee_id,
+            tracker=payload.tracker,
+        )
+    except (redmine.IntegrationConfigError, redmine.RedmineClientError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    meta = request_meta(request)
+    write_audit_log(
+        db,
+        actor=user,
+        action="create_issue_child_ticket",
+        target_type="redmine_issue",
+        target_id=str(issue_id),
+        payload_after=payload.model_dump(),
+        **meta,
+    )
+    db.commit()
+    return SyncIssueSummary(
+        issue_id=created_issue.issue_id,
+        subject=created_issue.subject,
+        tracker=created_issue.tracker,
+        url=created_issue.url,
+    )
+
+
 @router.get("/{jp_issue_id}", response_model=TicketDetailResponse)
-def get_ticket_detail(jp_issue_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> TicketDetailResponse:
+def get_ticket_detail(
+    jp_issue_id: int,
+    force_refresh: bool = False,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TicketDetailResponse:
     _ = user
     ensure_ticket_follow_schema(db)
     managed = db.query(ManagedTicket).filter(ManagedTicket.jp_issue_id == jp_issue_id).first()
@@ -370,6 +422,7 @@ def get_ticket_detail(jp_issue_id: int, user: User = Depends(get_current_user), 
             jp_api_key_enc=user_settings.redmine_jp_api_key_enc if user_settings else None,
             vn_host=settings.get("redmine_vn_host"),
             vn_api_key_enc=user_settings.redmine_vn_api_key_enc if user_settings else None,
+            force_refresh=force_refresh,
         )
     except (redmine.IntegrationConfigError, redmine.RedmineClientError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

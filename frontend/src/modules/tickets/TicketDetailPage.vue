@@ -4,7 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import TicketDetailView from "./TicketDetailView.vue";
 import { ticketsApi } from "./api";
 import { showToast } from "../../shared/toast";
-import type { Assignee, ManagedTicketListItem, StatusOption, TicketDetail } from "../../shared/types";
+import type { Assignee, ManagedTicketListItem, QuickCreateDraft, StatusOption, TicketDetail } from "../../shared/types";
 import { usersApi } from "../users/api";
 import { sessionState } from "../../shared/session";
 import { copyClipboard, copyText, escapeHtml } from "../../shared/clipboard";
@@ -24,19 +24,12 @@ const linkForm = reactive({ type: "spec", url: "" });
 const showLinkForm = ref(false);
 const editingLinkId = ref<number | null>(null);
 const loadingDetail = ref(false);
+const refreshingDetail = ref(false);
 const saving = ref(false);
 const deletingManagedJpIssueId = ref<number | null>(null);
 const suggestSyncJpIssueId = ref<number | null>(null);
 const creatingChild = ref(false);
 const postingTeams = ref(false);
-type QuickCreateDraft = {
-  id: number;
-  tracker: string;
-  parent_issue_id: number | null;
-  subject: string;
-  description: string;
-  assignee_id: number | null;
-};
 const quickCreateForms = reactive<QuickCreateDraft[]>([]);
 let quickCreateDraftId = 0;
 const defaultQuickCreateAssigneeId = () => sessionState.userSettings.default_assignee_id ?? sessionState.assignees[0]?.id ?? null;
@@ -82,6 +75,19 @@ function snapshotEdit(issueId: number, status: string, assignee: string) {
   ticketEditOriginal[issueId] = { status, assignee };
 }
 
+function applyTicketDetail(detail: TicketDetail, preserveQuickCreate = false) {
+  ticketDetail.value = detail;
+  ticketSearch.value = String(detail.jp_issue_id);
+  if (!preserveQuickCreate) {
+    quickCreateForms.splice(0);
+  }
+  suggestSyncJpIssueId.value = null;
+  snapshotEdit(detail.vn_issue.issue_id, detail.vn_issue.status, detail.vn_issue.assignee ?? "");
+  for (const child of detail.children) {
+    snapshotEdit(child.issue_id, child.status, child.assignee ?? "");
+  }
+}
+
 async function loadByJpIssueId(
   jpIssueId: number,
   options?: { notifyLoaded?: boolean; notifyMissing?: boolean; preserveQuickCreate?: boolean }
@@ -101,20 +107,7 @@ async function loadByJpIssueId(
       return false;
     }
 
-    ticketDetail.value = await ticketsApi.detail(jpIssueId);
-    ticketSearch.value = String(jpIssueId);
-    if (!preserveQuickCreate) {
-      quickCreateForms.splice(0);
-    }
-    suggestSyncJpIssueId.value = null;
-    snapshotEdit(
-      ticketDetail.value.vn_issue.issue_id,
-      ticketDetail.value.vn_issue.status,
-      ticketDetail.value.vn_issue.assignee ?? ""
-    );
-    for (const child of ticketDetail.value.children) {
-      snapshotEdit(child.issue_id, child.status, child.assignee ?? "");
-    }
+    applyTicketDetail(await ticketsApi.detail(jpIssueId), preserveQuickCreate);
     if (notifyLoaded) {
       showToast("Ticket loaded", "success");
     }
@@ -125,6 +118,23 @@ async function loadByJpIssueId(
     return false;
   } finally {
     loadingDetail.value = false;
+  }
+}
+
+async function refreshRedmineDetail() {
+  if (!ticketDetail.value) {
+    return;
+  }
+
+  refreshingDetail.value = true;
+  try {
+    const detail = await ticketsApi.detail(ticketDetail.value.jp_issue_id, true);
+    applyTicketDetail(detail, true);
+    showToast("Redmine detail refreshed", "success");
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  } finally {
+    refreshingDetail.value = false;
   }
 }
 
@@ -540,6 +550,7 @@ onBeforeUnmount(() => {
     :assignee-options="assigneeOptions"
     :ticket-detail="ticketDetail"
     :loading-detail="loadingDetail"
+    :refreshing-detail="refreshingDetail"
     :ticket-edit="ticketEdit"
     :quick-create-forms="quickCreateForms"
     :tracker-options="sessionState.trackers"
@@ -560,6 +571,7 @@ onBeforeUnmount(() => {
     @toggle-follow="toggleFollow"
     @create-managed-ticket="createManagedTicket"
     @delete-managed-ticket="deleteManagedTicket"
+    @refresh-redmine-detail="refreshRedmineDetail"
     @open-quick-create="openQuickCreate"
     @cancel-quick-create="cancelQuickCreate"
     @toggle-link-form="showLinkForm = !showLinkForm; if (!showLinkForm) { editingLinkId = null; linkForm.type = 'spec'; linkForm.url = ''; }"
