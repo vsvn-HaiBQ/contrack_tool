@@ -58,7 +58,9 @@ const codexOk = ref(false);
 const codexModels = ref<CodexModelOption[]>([]);
 const settingsReady = ref(false);
 const savingSettings = ref(false);
+const activeDirectionField = ref<"from" | "to" | null>(null);
 let saveSettingsTimer: number | null = null;
+let directionMenuTimer: number | null = null;
 
 const fallbackModels: CodexModelOption[] = [
   { slug: "gpt-5.5", display_name: "GPT-5.5" },
@@ -94,6 +96,55 @@ const modelOptions = computed(() => {
   }
   return Array.from(options.values());
 });
+
+const directionLanguageOptions = computed(() => {
+  const options = new Map<string, string>();
+  for (const language of LANGUAGE_OPTIONS) {
+    options.set(language, language);
+  }
+
+  for (const value of [form.fromLang, form.toLang]) {
+    const trimmed = value.trim();
+    if (trimmed && !options.has(trimmed)) {
+      options.set(trimmed, trimmed);
+    }
+  }
+
+  return Array.from(options.values());
+});
+
+function openDirectionMenu(field: "from" | "to") {
+  if (directionMenuTimer !== null) {
+    window.clearTimeout(directionMenuTimer);
+    directionMenuTimer = null;
+  }
+  activeDirectionField.value = field;
+}
+
+function closeDirectionMenu(field: "from" | "to") {
+  if (directionMenuTimer !== null) {
+    window.clearTimeout(directionMenuTimer);
+  }
+  directionMenuTimer = window.setTimeout(() => {
+    if (activeDirectionField.value === field) {
+      activeDirectionField.value = null;
+    }
+    directionMenuTimer = null;
+  }, 120);
+}
+
+function selectDirectionLanguage(field: "from" | "to", value: string) {
+  if (field === "from") {
+    form.fromLang = value;
+  } else {
+    form.toLang = value;
+  }
+}
+
+function isDirectionLanguageSelected(field: "from" | "to", value: string) {
+  const current = field === "from" ? form.fromLang : form.toLang;
+  return current.trim().toLowerCase() === value.trim().toLowerCase();
+}
 
 function statusBadgeClass(status?: string) {
   if (status === "succeeded") return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
@@ -365,6 +416,9 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
   stopPolling();
+  if (directionMenuTimer !== null) {
+    window.clearTimeout(directionMenuTimer);
+  }
   if (saveSettingsTimer !== null) {
     window.clearTimeout(saveSettingsTimer);
   }
@@ -429,22 +483,61 @@ onBeforeUnmount(() => {
         <div class="grid gap-2">
           <label class="text-sm font-medium text-[#393C41]">Direction</label>
           <div class="flex items-center gap-2">
-            <datalist id="lang-options">
-              <option v-for="lang in LANGUAGE_OPTIONS" :key="lang" :value="lang" />
-            </datalist>
-            <input
-              v-model="form.fromLang"
-              list="lang-options"
-              placeholder="From"
-              class="flex-1 rounded border border-[#D0D1D2] bg-white px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
-            />
+            <div class="relative flex-1">
+              <input
+                v-model="form.fromLang"
+                autocomplete="off"
+                placeholder="From"
+                class="w-full rounded border border-[#D0D1D2] bg-white px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                @focus="openDirectionMenu('from')"
+                @input="openDirectionMenu('from')"
+                @blur="closeDirectionMenu('from')"
+                @keydown.escape="activeDirectionField = null"
+              />
+              <div v-if="activeDirectionField === 'from'" class="absolute inset-x-0 top-full z-10 mt-1 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-lg">
+                <button
+                  v-for="lang in directionLanguageOptions"
+                  :key="`from-${lang}`"
+                  type="button"
+                  class="flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:bg-[#F5F8FF]"
+                  :class="isDirectionLanguageSelected('from', lang) ? 'bg-[#EAF1FF] text-[#2F56BA]' : 'text-[#171A20]'"
+                  @mousedown.prevent="selectDirectionLanguage('from', lang)"
+                >
+                  <span>{{ lang }}</span>
+                  <svg v-if="isDirectionLanguageSelected('from', lang)" viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m4.5 10 3.5 3.5 7.5-8"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
             <span class="shrink-0 text-sm text-[#5C5E62]">&rarr;</span>
-            <input
-              v-model="form.toLang"
-              list="lang-options"
-              placeholder="To"
-              class="flex-1 rounded border border-[#D0D1D2] bg-white px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
-            />
+            <div class="relative flex-1">
+              <input
+                v-model="form.toLang"
+                autocomplete="off"
+                placeholder="To"
+                class="w-full rounded border border-[#D0D1D2] bg-white px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                @focus="openDirectionMenu('to')"
+                @input="openDirectionMenu('to')"
+                @blur="closeDirectionMenu('to')"
+                @keydown.escape="activeDirectionField = null"
+              />
+              <div v-if="activeDirectionField === 'to'" class="absolute inset-x-0 top-full z-10 mt-1 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-lg">
+                <button
+                  v-for="lang in directionLanguageOptions"
+                  :key="`to-${lang}`"
+                  type="button"
+                  class="flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:bg-[#F5F8FF]"
+                  :class="isDirectionLanguageSelected('to', lang) ? 'bg-[#EAF1FF] text-[#2F56BA]' : 'text-[#171A20]'"
+                  @mousedown.prevent="selectDirectionLanguage('to', lang)"
+                >
+                  <span>{{ lang }}</span>
+                  <svg v-if="isDirectionLanguageSelected('to', lang)" viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m4.5 10 3.5 3.5 7.5-8"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -519,7 +612,7 @@ onBeforeUnmount(() => {
 
       <div class="flex flex-wrap items-center gap-3">
         <button
-          class="inline-flex min-h-10 min-w-[180px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+          class="inline-flex min-h-10 min-w-45 items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
           :disabled="!canStart"
           @click="startTranslation"
         >
@@ -570,13 +663,13 @@ onBeforeUnmount(() => {
           Auto-scroll
         </label>
       </div>
-      <div ref="logContainer" class="translation-log max-h-[26rem] overflow-auto scroll-smooth rounded bg-neutral-950 p-3">
+      <div ref="logContainer" class="translation-log max-h-104 overflow-auto scroll-smooth rounded bg-neutral-950 p-3">
         <div v-if="!logs.length" class="text-neutral-500">Waiting for log output...</div>
         <div v-else class="grid gap-1">
           <div v-for="(entry, idx) in (logs as BuildJobLog[])" :key="entry.seq ?? `${entry.ts}-${idx}`" class="flex gap-2" :class="logLineClass(entry.level)">
             <span class="shrink-0 text-neutral-500">{{ formatTs(entry.ts) }}</span>
             <span class="shrink-0 text-neutral-400">[{{ entry.source }}]</span>
-            <span class="min-w-0 whitespace-pre-wrap break-words">{{ entry.message }}</span>
+            <span class="min-w-0 whitespace-pre-wrap wrap-break-word">{{ entry.message }}</span>
           </div>
         </div>
       </div>

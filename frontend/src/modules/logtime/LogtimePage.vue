@@ -18,14 +18,14 @@ const loading = ref(false);
 const saving = ref(false);
 
 const activityDefaults = [
-  { activity: "Development", pattern: /\bdev\b|\bdevelopment\b|\bcode\b/i, aliases: ["Development", "Dev"] },
-  { activity: "Fix bug", pattern: /\bfix\b|\bbug\b/i, aliases: ["Fix bug", "Bug fix"] },
-  { activity: "Investigation", pattern: /\bresearch\b|\bstudy\b/i, aliases: ["Investigation", "Research", "Study"] },
-  { activity: "Estimation", pattern: /\bestimate\b/i, aliases: ["Estimation", "Estimate"] },
-  { activity: "Meeting", pattern: /\bmeeting\b/i, aliases: ["Meeting"] },
-  { activity: "Testing", pattern: /\btest(?:ing)?\b/i, aliases: ["Testing", "Test"] },
-  { activity: "Q&A", pattern: /\bqa\b|\bq&a\b/i, aliases: ["QA", "Q&A"] },
-  { activity: "Support Teammate", pattern: /\bsupport\b/i, aliases: ["Support", "Support Teammate"] }
+  { activity: "Development", pattern: /(?<![A-Za-z])(dev|development|code)(?![A-Za-z])/i, aliases: ["Development", "Dev"] },
+  { activity: "Fix bug", pattern: /(?<![A-Za-z])(fix|bug)(?![A-Za-z])/i, aliases: ["Fix bug", "Bug fix"] },
+  { activity: "Investigation", pattern: /(?<![A-Za-z])(research|study)(?![A-Za-z])/i, aliases: ["Investigation", "Research", "Study"] },
+  { activity: "Estimation", pattern: /(?<![A-Za-z])(estimate|estimation)(?![A-Za-z])/i, aliases: ["Estimation", "Estimate"] },
+  { activity: "Meeting", pattern: /(?<![A-Za-z])meeting(?![A-Za-z])/i, aliases: ["Meeting"] },
+  { activity: "Testing", pattern: /(?<![A-Za-z])test(ing)?(?![A-Za-z])/i, aliases: ["Testing", "Test"] },
+  { activity: "Q&A", pattern: /(?<![A-Za-z])(qa|q&a)(?![A-Za-z])/i, aliases: ["QA", "Q&A"] },
+  { activity: "Support Teammate", pattern: /(?<![A-Za-z])support(?![A-Za-z])/i, aliases: ["Support", "Support Teammate"] }
 ];
 
 function isStory(row: LogtimeRow) {
