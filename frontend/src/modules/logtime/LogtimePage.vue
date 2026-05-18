@@ -17,6 +17,14 @@ const originalRows = ref<Record<number, { status: string; assignee: string; acti
 const loading = ref(false);
 const saving = ref(false);
 
+const activityDefaults = [
+  { activity: "Development", pattern: /\bdev\b/i, aliases: ["Development", "Dev"] },
+  { activity: "Fix bug", pattern: /fix\s*bug/i, aliases: ["Fix bug", "Bug fix"] },
+  { activity: "Investigation", pattern: /research/i, aliases: ["Investigation", "Research"] },
+  { activity: "Estimation", pattern: /estimate/i, aliases: ["Estimation", "Estimate"] },
+  { activity: "Testing", pattern: /\btest(?:ing)?\b/i, aliases: ["Testing", "Test"] }
+];
+
 function isStory(row: LogtimeRow) {
   return (row.tracker || "").trim().toLowerCase() === "story";
 }
@@ -46,6 +54,31 @@ function clearRows() {
   activities.value = [];
   results.value = [];
   originalRows.value = {};
+}
+
+function resolveActivityOption(options: string[], names: string[]) {
+  const normalizedNames = names.map((name) => name.trim().toLowerCase());
+  return options.find((option) => normalizedNames.includes(option.trim().toLowerCase()));
+}
+
+function inferDefaultActivity(subject: string, options: string[]) {
+  for (const rule of activityDefaults) {
+    if (rule.pattern.test(subject)) {
+      return resolveActivityOption(options, [rule.activity, ...rule.aliases]);
+    }
+  }
+  return undefined;
+}
+
+function applyDefaultActivities(items: LogtimeRow[], options: string[]) {
+  return items.map((row) => {
+    if ((row.activity || "").trim() || !row.subject) {
+      return row;
+    }
+
+    const defaultActivity = inferDefaultActivity(row.subject, options);
+    return defaultActivity ? { ...row, activity: defaultActivity } : row;
+  });
 }
 
 function shiftDate(delta: number) {
@@ -86,9 +119,9 @@ async function refresh() {
   loading.value = true;
   try {
     const response = await logtimeApi.source(logtimeDate.value);
-    rows.value = response.rows;
     activities.value = response.activities;
-    snapshotRows(response.rows);
+    rows.value = applyDefaultActivities(response.rows, response.activities);
+    snapshotRows(rows.value);
   } catch (error) {
     showToast((error as Error).message, "error");
   } finally {

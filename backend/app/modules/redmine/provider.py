@@ -224,7 +224,7 @@ def create_vn_ticket_resolved(
         raise IntegrationConfigError(f"Unknown tracker: {desired_tracker}")
     story = client.create_issue(
         project_id=project_id,
-        subject=subject or f"#{jp_issue_id}: {jp_subject}",
+        subject=subject or f"#{jp_issue_id}:{"" if jp_subject.startswith("【") else " "}{jp_subject}",
         description=description or _render_description(description_template, jp_issue_id=jp_issue_id, jp_issue_url=jp_issue_url, jp_subject=jp_subject),
         tracker_id=main_tracker_id,
         assigned_to_id=assignee_id,
@@ -236,7 +236,7 @@ def create_vn_ticket_resolved(
         raise IntegrationConfigError("Project tracker 'Sub-task' is not available")
     for subtask_name in create_subtasks:
         # Frontend now sends the full subject; only prefix if missing.
-        prefix = f"#{jp_issue_id}: "
+        prefix = f"#{jp_issue_id}:{"" if subtask_name.lstrip().startswith("【") else " "}"
         full_subject = subtask_name if subtask_name.lstrip().startswith(prefix) else f"{prefix}{subtask_name}"
         subtask = client.create_issue(
             project_id=project_id,

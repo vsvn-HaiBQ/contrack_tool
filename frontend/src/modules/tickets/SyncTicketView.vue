@@ -310,6 +310,7 @@ function trackerBadgeClass(tracker: string | null | undefined) {
           <label class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-2 py-2"><input v-model="syncState.selected_subtasks" value="fix_bug" type="checkbox" class="size-4" /> Fix bug</label>
           <label class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-2 py-2"><input v-model="syncState.selected_subtasks" value="dev" type="checkbox" class="size-4" /> Dev</label>
           <label class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-2 py-2"><input v-model="syncState.selected_subtasks" value="estimate" type="checkbox" class="size-4" /> Estimate</label>
+          <label class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-2 py-2"><input v-model="syncState.selected_subtasks" value="research" type="checkbox" class="size-4" /> Research</label>
           <label class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-2 py-2"><input v-model="syncState.selected_subtasks" value="test" type="checkbox" class="size-4" /> Test</label>
         </div>
         <div v-if="subtaskPreview.length" class="grid gap-2">

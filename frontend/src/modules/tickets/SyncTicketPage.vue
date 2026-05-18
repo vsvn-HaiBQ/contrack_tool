@@ -11,6 +11,7 @@ const DEFAULT_SUBTASK_LABELS: Record<string, string> = {
   fix_bug: "Fix bug",
   dev: "Dev",
   estimate: "Estimate",
+  research: "Research",
   test: "Test"
 };
 

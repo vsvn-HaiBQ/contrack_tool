@@ -417,7 +417,7 @@ def post_team_thread(
 
     link_map = {link.type: link.url for link in managed.links}
     body = {
-        "subject": detail["jp"].subject,
+        "subject": f'#{jp_issue_id}:{"" if detail["jp"].subject.startswith("【") else " "}{detail["jp"].subject}',
         "ticketJP": detail["jp"].url,
         "ticketVN": detail["story"].url,
     }
