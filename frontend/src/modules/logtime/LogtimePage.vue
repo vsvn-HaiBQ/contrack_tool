@@ -22,6 +22,7 @@ const activityDefaults = [
   { activity: "Fix bug", pattern: /fix\s*bug/i, aliases: ["Fix bug", "Bug fix"] },
   { activity: "Investigation", pattern: /research/i, aliases: ["Investigation", "Research"] },
   { activity: "Estimation", pattern: /estimate/i, aliases: ["Estimation", "Estimate"] },
+  { activity: "Meeting", pattern: /meeting/i, aliases: ["Meeting"] },
   { activity: "Testing", pattern: /\btest(?:ing)?\b/i, aliases: ["Testing", "Test"] }
 ];
 
@@ -57,14 +58,45 @@ function clearRows() {
 }
 
 function resolveActivityOption(options: string[], names: string[]) {
-  const normalizedNames = names.map((name) => name.trim().toLowerCase());
+  const normalizedNames = names.map((name) => name.trim().toLowerCase()).filter(Boolean);
   return options.find((option) => normalizedNames.includes(option.trim().toLowerCase()));
 }
 
+function subjectVariants(subject: string) {
+  const trimmed = subject.trim();
+  const withoutTicketPrefix = trimmed.replace(/^#\d+:\s*/, "");
+  return Array.from(new Set([trimmed, withoutTicketPrefix].filter(Boolean)));
+}
+
+function activityNamesForValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const normalizedValue = trimmed.toLowerCase();
+  const matchedRule = activityDefaults.find((rule) =>
+    [rule.activity, ...rule.aliases].some((name) => name.trim().toLowerCase() === normalizedValue)
+  );
+
+  return matchedRule ? [matchedRule.activity, ...matchedRule.aliases] : [trimmed];
+}
+
+function normalizeActivityValue(value: string | undefined, options: string[]) {
+  const trimmed = (value || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  return resolveActivityOption(options, activityNamesForValue(trimmed)) ?? trimmed;
+}
+
 function inferDefaultActivity(subject: string, options: string[]) {
-  for (const rule of activityDefaults) {
-    if (rule.pattern.test(subject)) {
-      return resolveActivityOption(options, [rule.activity, ...rule.aliases]);
+  for (const candidate of subjectVariants(subject)) {
+    for (const rule of activityDefaults) {
+      if (rule.pattern.test(candidate)) {
+        return resolveActivityOption(options, [rule.activity, ...rule.aliases]);
+      }
     }
   }
   return undefined;
@@ -72,7 +104,12 @@ function inferDefaultActivity(subject: string, options: string[]) {
 
 function applyDefaultActivities(items: LogtimeRow[], options: string[]) {
   return items.map((row) => {
-    if ((row.activity || "").trim() || !row.subject) {
+    const normalizedActivity = normalizeActivityValue(row.activity, options);
+    if (normalizedActivity) {
+      return normalizedActivity === row.activity ? row : { ...row, activity: normalizedActivity };
+    }
+
+    if (!row.subject) {
       return row;
     }
 

@@ -179,7 +179,7 @@ const formattedHeaderDate = computed(() => {
             <div class="grid gap-1">
               <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Activity</span>
               <select v-if="!isStory(group.root)" v-model="group.root.activity" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
-                <option v-for="activity in activities" :key="activity">{{ activity }}</option>
+                <option v-for="activity in activities" :key="activity" :value="activity">{{ activity }}</option>
               </select>
             </div>
             <div class="grid gap-1">
@@ -228,7 +228,7 @@ const formattedHeaderDate = computed(() => {
                 <div class="grid gap-1">
                   <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Activity</span>
                   <select v-model="item.row.activity" class="w-full rounded-lg border border-[#D0D1D2] bg-white px-1 py-1 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
-                    <option v-for="activity in activities" :key="activity">{{ activity }}</option>
+                    <option v-for="activity in activities" :key="activity" :value="activity">{{ activity }}</option>
                   </select>
                 </div>
                 <div class="grid gap-1">
