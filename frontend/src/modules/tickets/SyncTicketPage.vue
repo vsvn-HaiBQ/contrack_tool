@@ -59,13 +59,21 @@ function parseJpIssueInput(value: string) {
   return Number(allNumbers[allNumbers.length - 1]);
 }
 
+function joinSubjectWithPrefix(prefix: string, subject: string) {
+  return `${prefix}${subject.trimStart().startsWith("【") ? "" : " "}${subject}`;
+}
+
+function stripTicketPrefix(subject: string, jpIssueId: number) {
+  return subject.replace(new RegExp(`^#${jpIssueId}:\\s*`), "");
+}
+
 function buildStorySubject() {
   if (!syncState.jp_issue_id || !syncState.jp_subject) {
     return "";
   }
 
   const prefix = syncState.subject_prefix ? `[${syncState.subject_prefix}_${syncState.jp_issue_id}]` : `#${syncState.jp_issue_id}:`;
-  return `${prefix} ${syncState.jp_subject}`;
+  return joinSubjectWithPrefix(prefix, syncState.jp_subject);
 }
 
 watch(
@@ -130,11 +138,11 @@ async function verify(existingVnIssueId: number | null = null) {
       }
     }
 
-    const prefix = `#${response.jp_issue_id}: `;
+    const prefix = `#${response.jp_issue_id}:`;
     for (const [key, label] of Object.entries(DEFAULT_SUBTASK_LABELS)) {
       const current = syncState.subtask_titles[key] ?? label;
-      const stripped = current.startsWith(prefix) ? current.slice(prefix.length) : current;
-      syncState.subtask_titles[key] = `${prefix}${stripped || label}`;
+      const stripped = stripTicketPrefix(current, response.jp_issue_id);
+      syncState.subtask_titles[key] = joinSubjectWithPrefix(prefix, stripped || label);
     }
 
     showToast("JP issue verified", "success");

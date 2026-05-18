@@ -91,6 +91,19 @@ function normalizeActivityValue(value: string | undefined, options: string[]) {
   return resolveActivityOption(options, activityNamesForValue(trimmed)) ?? trimmed;
 }
 
+function shouldUseSubjectDefault(row: LogtimeRow, normalizedActivity: string, options: string[]) {
+  if (Number(row.hours || 0) > 0) {
+    return false;
+  }
+
+  if (!normalizedActivity) {
+    return true;
+  }
+
+  const defaultActivity = options[0]?.trim().toLowerCase();
+  return Boolean(defaultActivity) && normalizedActivity.trim().toLowerCase() === defaultActivity;
+}
+
 function inferDefaultActivity(subject: string, options: string[]) {
   for (const candidate of subjectVariants(subject)) {
     for (const rule of activityDefaults) {
@@ -105,6 +118,12 @@ function inferDefaultActivity(subject: string, options: string[]) {
 function applyDefaultActivities(items: LogtimeRow[], options: string[]) {
   return items.map((row) => {
     const normalizedActivity = normalizeActivityValue(row.activity, options);
+    const inferredActivity = row.subject ? inferDefaultActivity(row.subject, options) : undefined;
+
+    if (inferredActivity && shouldUseSubjectDefault(row, normalizedActivity, options)) {
+      return inferredActivity === row.activity ? row : { ...row, activity: inferredActivity };
+    }
+
     if (normalizedActivity) {
       return normalizedActivity === row.activity ? row : { ...row, activity: normalizedActivity };
     }
@@ -113,8 +132,7 @@ function applyDefaultActivities(items: LogtimeRow[], options: string[]) {
       return row;
     }
 
-    const defaultActivity = inferDefaultActivity(row.subject, options);
-    return defaultActivity ? { ...row, activity: defaultActivity } : row;
+    return inferredActivity ? { ...row, activity: inferredActivity } : row;
   });
 }
 
