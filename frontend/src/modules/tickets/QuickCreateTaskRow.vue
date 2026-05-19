@@ -40,7 +40,7 @@ function trackerBadgeClass(tracker: string | null | undefined) {
 </script>
 
 <template>
-  <div :class="`grid bg-[#F8FAFF] px-2 py-2 pr-6 ${from === 'detail' ? 'md:grid-cols-[160px_minmax(0,1fr)]' : from === 'logtime' ? 'md:grid-cols-[140px_minmax(0,1fr)]' : 'md:grid-cols-[120px_minmax(0,1fr)]'}`">
+  <div :class="`grid bg-[#F8FAFF] px-2 py-2 pr-6 last:rounded-xl border-t border-neutral-200 ${from === 'detail' ? 'md:grid-cols-[160px_minmax(0,1fr)]' : from === 'logtime' ? 'md:grid-cols-[140px_minmax(0,1fr)]' : 'md:grid-cols-[120px_minmax(0,1fr)]'}`">
     <div class="flex flex-wrap items-start gap-2">
       <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Type / ID</span>
       <span :class="['inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium', trackerBadgeClass(draft.tracker || 'Task')]">{{ draft.tracker || "Task" }}</span>
