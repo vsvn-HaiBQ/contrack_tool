@@ -365,7 +365,7 @@ function isClosedLike(status: string | null | undefined) {
           <div class="flex items-center gap-2">
             <button
               type="button"
-              class="inline-flex size-6 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-white text-[#5C5E62] transition hover:border-[#3E6AE1] hover:bg-[#F5F8FF] hover:text-[#3E6AE1] disabled:cursor-not-allowed disabled:opacity-60"
+              class="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-white text-[#5C5E62] transition hover:border-[#3E6AE1] hover:bg-[#F5F8FF] hover:text-[#3E6AE1] disabled:cursor-not-allowed disabled:opacity-60"
               :disabled="refreshingDetail"
               title="Refresh from Redmine"
               @click="emit('refreshRedmineDetail')"
@@ -381,7 +381,7 @@ function isClosedLike(status: string | null | undefined) {
             <button
               v-if="isAdmin"
               type="button"
-              class="inline-flex items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              class="inline-flex items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-1 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
               :disabled="deletingManagedJpIssueId === ticketDetail.jp_issue_id"
               @click="emit('deleteManagedTicket', ticketDetail.jp_issue_id)"
             >
@@ -394,12 +394,12 @@ function isClosedLike(status: string | null | undefined) {
               </svg>
               {{ deletingManagedJpIssueId === ticketDetail.jp_issue_id ? "Unlinking..." : "Unlink" }}
             </button>
-            <span class="inline-flex rounded-full bg-[#F4F4F4] px-3 py-1 text-xs font-medium text-[#393C41]">#{{ ticketDetail.jp_issue_id }}</span>
+            <span class="inline-flex rounded-full bg-[#F4F4F4] px-3 py-1 text-sm font-medium text-[#393C41]">#{{ ticketDetail.jp_issue_id }}</span>
           </div>
         </div>
 
         <div class="overflow-visible rounded-lg border border-neutral-200">
-          <div class="hidden grid-cols-[140px_minmax(0,1fr)_120px_120px] gap-3 rounded-t-lg border-b border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-[#5C5E62] md:grid pr-6">
+          <div class="hidden grid-cols-[140px_minmax(0,1fr)_120px_120px] gap-3 rounded-t-lg border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-[#5C5E62] md:grid pr-6">
             <span>Type / ID</span>
             <span>Subject</span>
             <span>Status</span>
@@ -543,7 +543,7 @@ function isClosedLike(status: string | null | undefined) {
         <div class="flex flex-wrap items-center justify-end gap-3 pt-2">
           <button
             type="button"
-            class="inline-flex min-h-10 min-w-40 items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-5 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+            class="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="saving"
             @click="emit('saveAll')"
           >
@@ -559,7 +559,7 @@ function isClosedLike(status: string | null | undefined) {
               <div class="rounded-t-lg border-neutral-200 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em]" :class="trackerHeaderClass(group.tracker)">
                 {{ group.tracker }}
               </div>
-              <div class="hidden grid-cols-[104px_minmax(0,1fr)_80px_80px] gap-3 border-b border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-[#5C5E62] md:grid pr-6">
+              <div class="hidden grid-cols-[104px_minmax(0,1fr)_80px_80px] gap-3 border-t border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-[#5C5E62] md:grid pr-6">
                 <span>Issue</span>
                 <span>Subject</span>
                 <span>Status</span>
@@ -765,23 +765,23 @@ function isClosedLike(status: string | null | undefined) {
           <div v-if="!displayLinks.length && !showLinkForm" class="rounded-xl border border-dashed border-neutral-300 px-4 py-6 text-center text-sm text-[#9CA0A6]">No links yet.</div>
         </div>
 
-        <div v-if="showLinkForm" class="flex flex-wrap items-center gap-3 rounded-xl border border-neutral-200 p-4">
+        <div v-if="showLinkForm" class="flex flex-wrap items-center gap-3 rounded-xl border border-neutral-200 p-2">
           <div class="flex flex-wrap gap-2">
             <button
               v-for="type in linkTypes"
               :key="type"
               type="button"
-              class="rounded-full border px-3 py-2 text-sm transition"
+              class="rounded-full border px-3 py-1.5 text-sm transition"
               :class="linkForm.type === type ? 'border-[#3E6AE1] bg-[#F5F8FF] text-[#3E6AE1]' : 'border-neutral-200 bg-white text-[#393C41] hover:bg-neutral-100'"
               @click="linkForm.type = type"
             >
               {{ type }}
             </button>
           </div>
-          <input v-model="linkForm.url" placeholder="https://..." class="min-w-[320px] flex-1 rounded-lg border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+          <input v-model="linkForm.url" placeholder="https://..." class="min-w-[320px] flex-1 rounded-lg border border-[#D0D1D2] px-2 py-1.5 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
           <button
             type="button"
-            class="flex size-10 items-center justify-center rounded-lg bg-[#3E6AE1] text-white transition hover:brightness-95"
+            class="flex size-8 items-center justify-center rounded-lg bg-[#3E6AE1] text-white transition hover:brightness-95"
             :title="editingLinkId ? 'Update link' : 'Save link'"
             @click="emit('addLink')"
           >
@@ -795,7 +795,7 @@ function isClosedLike(status: string | null | undefined) {
           </button>
           <button
             type="button"
-            class="flex size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white text-[#393C41] transition hover:bg-neutral-100"
+            class="flex size-8 items-center justify-center rounded-lg border border-neutral-200 bg-white text-[#393C41] transition hover:bg-neutral-100"
             title="Cancel link form"
             @click="emit('toggleLinkForm')"
           >
