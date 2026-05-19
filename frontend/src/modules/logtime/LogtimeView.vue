@@ -232,7 +232,7 @@ const formattedHeaderDate = computed(() => {
             @cancel="emit('cancelQuickCreate', $event)"
           />
 
-          <div v-if="group.children.length" class="border-t border-neutral-200 bg-neutral-50/70">
+          <div v-if="group.children.length" class="border-t border-neutral-200 bg-neutral-50/70 rounded-b-xl">
             <div class="grid gap-0">
               <template
                 v-for="item in group.children"

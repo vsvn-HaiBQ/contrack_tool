@@ -342,7 +342,7 @@ function isClosedLike(status: string | null | undefined) {
       <div class="grid gap-4 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
         <div class="flex items-center justify-between gap-3">
           <div class="flex items-center gap-3">
-            <h3 class="m-0 text-xl font-semibold text-[#171A20]">Story &amp; subtasks</h3>
+            <h3 class="m-0 text-xl font-semibold text-[#171A20]">Issues</h3>
             <button
               type="button"
               class="inline-flex items-center gap-3 rounded-full border px-3 py-1.5 text-xs font-medium transition"
@@ -408,7 +408,7 @@ function isClosedLike(status: string | null | undefined) {
 
           <div
             v-if="ticketDetail.parent"
-            class="relative grid gap-3 border-b border-neutral-200 bg-amber-50/40 px-3 py-3 pr-6 md:grid-cols-[140px_minmax(0,1fr)_120px_120px] md:items-center md:py-2"
+            class="relative grid gap-3 border-neutral-200 bg-amber-50/40 px-3 py-3 pr-6 md:grid-cols-[140px_minmax(0,1fr)_120px_120px] md:items-center md:py-2"
           >
             <div class="flex flex-wrap items-center gap-2">
               <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Type / ID</span>
@@ -461,7 +461,7 @@ function isClosedLike(status: string | null | undefined) {
             :key="row.issue.issue_id"
           >
             <div
-              class="relative grid gap-3 border-b border-neutral-200 px-3 py-3 pr-6 transition last:rounded-b-lg last:border-b-0 md:grid-cols-[140px_minmax(0,1fr)_120px_120px] md:items-center md:py-2"
+              class="relative grid gap-3 border-t border-neutral-200 px-3 py-3 pr-6 transition last:rounded-b-lg last:border-b-0 md:grid-cols-[140px_minmax(0,1fr)_120px_120px] md:items-center md:py-2"
               :class="row.isClosed ? 'bg-neutral-100 text-[#7A7D81]' : row.kind === 'story' ? 'bg-[#F5F8FF]' : 'hover:bg-neutral-50'"
             >
               <div class="flex flex-wrap items-center gap-2">

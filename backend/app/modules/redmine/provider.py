@@ -241,7 +241,6 @@ def create_vn_ticket_resolved(
         subtask = client.create_issue(
             project_id=project_id,
             subject=full_subject,
-            description=f"Subtask for JP {jp_issue_id}",
             tracker_id=subtask_tracker_id,
             assigned_to_id=assignee_id,
             parent_issue_id=story.issue_id,

@@ -327,16 +327,17 @@ class RedmineClient:
         *,
         project_id: int | str,
         subject: str,
-        description: str,
+        description: str | None = None,
         tracker_id: int | None = None,
         assigned_to_id: int | None = None,
         parent_issue_id: int | None = None,
     ) -> RedmineIssue:
         issue_payload: dict[str, Any] = {
             "project_id": project_id,
-            "subject": subject,
-            "description": description,
+            "subject": subject
         }
+        if description is not None:
+            issue_payload["description"] = description
         if tracker_id is not None:
             issue_payload["tracker_id"] = tracker_id
         if assigned_to_id is not None:
