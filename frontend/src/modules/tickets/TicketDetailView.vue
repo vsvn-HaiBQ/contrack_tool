@@ -556,7 +556,7 @@ function isClosedLike(status: string | null | undefined) {
           <p class="text-xs font-semibold uppercase tracking-[0.08em] text-[#5C5E62]">Related VN issues</p>
           <div class="grid gap-3">
             <div v-for="group in groupedRelatedIssues" :key="group.tracker" class="overflow-visible rounded-lg border border-neutral-200 bg-white">
-              <div class="rounded-t-lg border-b border-neutral-200 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em]" :class="trackerHeaderClass(group.tracker)">
+              <div class="rounded-t-lg border-neutral-200 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em]" :class="trackerHeaderClass(group.tracker)">
                 {{ group.tracker }}
               </div>
               <div class="hidden grid-cols-[104px_minmax(0,1fr)_80px_80px] gap-3 border-b border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-[#5C5E62] md:grid pr-6">
@@ -570,7 +570,7 @@ function isClosedLike(status: string | null | undefined) {
                 :key="rel.issue_id"
               >
                 <div
-                  class="relative grid gap-3 border-b border-neutral-200 px-3 py-3 pr-6 text-sm transition last:rounded-b-lg last:border-b-0 md:grid-cols-[104px_minmax(0,1fr)_80px_80px] md:items-center md:py-2"
+                  class="relative grid gap-3 border-t border-neutral-200 px-3 py-3 pr-6 text-sm transition last:rounded-b-lg last:border-b-0 md:grid-cols-[104px_minmax(0,1fr)_80px_80px] md:items-center md:py-2"
                   :class="rel.isClosed ? 'bg-neutral-100 text-[#7A7D81]' : 'text-[#171A20] hover:bg-neutral-50'"
                 >
                   <div class="grid gap-1">
