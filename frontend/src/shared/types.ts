@@ -304,6 +304,7 @@ export type GitEolFixResult = {
   fixed_files: Array<{
     path: string;
     restored_eol_lines: number;
+    fixed_eol_lines?: number[];
     remaining_changed_lines: number;
     remaining_eol_only_lines: number;
     worktree_changed?: boolean;

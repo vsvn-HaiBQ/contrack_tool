@@ -264,7 +264,8 @@ class GitEolService:
 
         base_lines = self._split_lines(base_bytes)
         source_lines = self._split_lines(source_bytes)
-        restored = self._restore_equal_line_eols(base_lines, source_lines)
+        fixed_eol_lines = self._restore_equal_line_eols(base_lines, source_lines)
+        restored = len(fixed_eol_lines)
         next_bytes = self._join_lines(source_lines)
         worktree_changed = next_bytes != source_bytes
         if worktree_changed:
@@ -278,20 +279,21 @@ class GitEolService:
         return GitEolFixedFile(
             path=path,
             restored_eol_lines=restored,
+            fixed_eol_lines=fixed_eol_lines,
             remaining_changed_lines=remaining.changed_lines,
             remaining_eol_only_lines=remaining.eol_only_lines,
             worktree_changed=worktree_changed,
             message=message,
         )
 
-    def _restore_equal_line_eols(self, base_lines: list[RawLine], source_lines: list[RawLine]) -> int:
+    def _restore_equal_line_eols(self, base_lines: list[RawLine], source_lines: list[RawLine]) -> list[int]:
         matcher = difflib.SequenceMatcher(
             None,
             [line.content for line in base_lines],
             [line.content for line in source_lines],
             autojunk=False,
         )
-        restored = 0
+        fixed_lines: list[int] = []
         for tag, base_start, base_end, source_start, _source_end in matcher.get_opcodes():
             if tag != "equal":
                 continue
@@ -300,8 +302,8 @@ class GitEolService:
                 source_line = source_lines[source_start + offset]
                 if source_line.eol != base_line.eol:
                     source_line.eol = base_line.eol
-                    restored += 1
-        return restored
+                    fixed_lines.append(source_start + offset + 1)
+        return fixed_lines
 
     def _diff_stats(self, base_bytes: bytes, source_bytes: bytes) -> DiffStats:
         base_lines = self._split_lines(base_bytes)
@@ -731,7 +733,15 @@ class GitEolService:
             base_bytes = self._git_object(worktree, merge_base, old_path)
         except GitEolError:
             base_bytes = b""
-        fixed_paths = {file.get("path") for file in session.get("fixed_files", [])}
+        fixed_files = session.get("fixed_files", [])
+        fixed_paths = {file.get("path") for file in fixed_files}
+        fixed_eol_lines = {
+            int(line)
+            for file in fixed_files
+            if file.get("path") == path
+            for line in (file.get("fixed_eol_lines") or [])
+            if isinstance(line, int)
+        }
         if path in fixed_paths:
             source_path = self._safe_worktree_file(worktree, path)
             source_bytes = source_path.read_bytes() if source_path.is_file() else b""
@@ -756,6 +766,7 @@ class GitEolService:
             rows = self._build_equal_range_rows(
                 base_lines,
                 source_lines,
+                fixed_eol_lines=fixed_eol_lines,
                 left_start=left_start,
                 left_end=left_end,
                 right_start=right_start,
@@ -766,6 +777,7 @@ class GitEolService:
             rows, stats = self._build_side_by_side_rows(
                 base_lines,
                 source_lines,
+                fixed_eol_lines=fixed_eol_lines,
                 fold_unchanged=fold_unchanged,
                 context=context,
             )
@@ -781,6 +793,7 @@ class GitEolService:
         base_lines: list[RawLine],
         source_lines: list[RawLine],
         *,
+        fixed_eol_lines: set[int] | None = None,
         fold_unchanged: bool = False,
         context: int = 3,
     ) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -814,7 +827,8 @@ class GitEolService:
                 return None
             return {"lineno": lineno, "text": render_text(line), "eol": eol_name(line)}
 
-        opcodes = self._display_opcodes(base_lines, source_lines, matcher.get_opcodes())
+        fixed_eol_lines = fixed_eol_lines or set()
+        opcodes = self._display_opcodes(base_lines, source_lines, matcher.get_opcodes(), fixed_eol_lines=fixed_eol_lines)
         for op_index, (tag, i1, i2, j1, j2) in enumerate(opcodes):
             if tag == "equal":
                 count = i2 - i1
@@ -865,19 +879,27 @@ class GitEolService:
                         }
                     )
             elif tag == "replace":
-                # Pair up replaced lines, pad the shorter side.
                 left_count = i2 - i1
                 right_count = j2 - j1
-                pair_count = max(left_count, right_count)
-                changed += pair_count
-                for offset in range(pair_count):
-                    base_line = base_lines[i1 + offset] if offset < left_count else None
-                    source_line = source_lines[j1 + offset] if offset < right_count else None
+                removed += left_count
+                added += right_count
+                changed += max(left_count, right_count)
+                for offset in range(left_count):
+                    base_line = base_lines[i1 + offset]
                     rows.append(
                         {
-                            "type": "replace" if base_line and source_line else ("delete" if base_line else "insert"),
-                            "left": make_side(base_line, i1 + offset + 1 if base_line else None),
-                            "right": make_side(source_line, j1 + offset + 1 if source_line else None),
+                            "type": "delete",
+                            "left": make_side(base_line, i1 + offset + 1),
+                            "right": None,
+                        }
+                    )
+                for offset in range(right_count):
+                    source_line = source_lines[j1 + offset]
+                    rows.append(
+                        {
+                            "type": "insert",
+                            "left": None,
+                            "right": make_side(source_line, j1 + offset + 1),
                         }
                     )
             elif tag == "delete":
@@ -910,7 +932,10 @@ class GitEolService:
         base_lines: list[RawLine],
         source_lines: list[RawLine],
         opcodes: list[tuple[str, int, int, int, int]],
+        *,
+        fixed_eol_lines: set[int] | None = None,
     ) -> list[tuple[str, int, int, int, int]]:
+        fixed_eol_lines = fixed_eol_lines or set()
         result: list[tuple[str, int, int, int, int]] = []
         for tag, i1, i2, j1, j2 in opcodes:
             if tag != "equal":
@@ -918,12 +943,16 @@ class GitEolService:
                 continue
             offset = 0
             while offset < i2 - i1:
-                eol_diff = base_lines[i1 + offset].eol != source_lines[j1 + offset].eol
+                eol_diff = base_lines[i1 + offset].eol != source_lines[j1 + offset].eol or (j1 + offset + 1) in fixed_eol_lines
                 start = offset
                 offset += 1
                 while (
                     offset < i2 - i1
-                    and (base_lines[i1 + offset].eol != source_lines[j1 + offset].eol) == eol_diff
+                    and (
+                        base_lines[i1 + offset].eol != source_lines[j1 + offset].eol
+                        or (j1 + offset + 1) in fixed_eol_lines
+                    )
+                    == eol_diff
                 ):
                     offset += 1
                 result.append(("eol" if eol_diff else "equal", i1 + start, i1 + offset, j1 + start, j1 + offset))
@@ -934,6 +963,7 @@ class GitEolService:
         base_lines: list[RawLine],
         source_lines: list[RawLine],
         *,
+        fixed_eol_lines: set[int] | None = None,
         left_start: int | None,
         left_end: int | None,
         right_start: int | None,
@@ -947,6 +977,7 @@ class GitEolService:
         if left_end > len(base_lines) or right_end > len(source_lines):
             raise GitEolError("Hidden diff range is outside file bounds")
 
+        fixed_eol_lines = fixed_eol_lines or set()
         rows: list[dict[str, Any]] = []
         for offset in range(left_end - left_start + 1):
             left_index = left_start - 1 + offset
@@ -955,7 +986,7 @@ class GitEolService:
             right_line = source_lines[right_index]
             rows.append(
                 {
-                    "type": "eol" if left_line.eol != right_line.eol else "equal",
+                    "type": "eol" if left_line.eol != right_line.eol or right_index + 1 in fixed_eol_lines else "equal",
                     "left": {
                         "lineno": left_index + 1,
                         "text": left_line.content.decode("utf-8", errors="replace"),

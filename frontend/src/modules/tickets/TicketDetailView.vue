@@ -45,7 +45,7 @@ const emit = defineEmits<{
   saveAll: [];
   addLink: [];
   copyLink: [url: string];
-  copyTeamThread: [];
+  copyTeamsThread: [];
   postToTeams: [];
   editLink: [linkId: number, type: string, url: string];
   cancelEditLink: [];
@@ -631,13 +631,13 @@ function isClosedLike(status: string | null | undefined) {
             <button
               type="button"
               class="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100"
-              @click="emit('copyTeamThread')"
+              @click="emit('copyTeamsThread')"
             >
               <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <rect x="7" y="7" width="9" height="9" rx="2"></rect>
                 <path d="M4 13V5a2 2 0 0 1 2-2h8"></path>
               </svg>
-              Copy Team Thread
+              Copy Teams Thread
             </button>
             <button
               v-if="canPostToTeams"

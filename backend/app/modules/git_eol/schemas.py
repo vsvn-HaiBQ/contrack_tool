@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class GitEolPreviewRequest(BaseModel):
@@ -35,6 +35,7 @@ class GitEolFixRequest(BaseModel):
 class GitEolFixedFile(BaseModel):
     path: str
     restored_eol_lines: int
+    fixed_eol_lines: list[int] = Field(default_factory=list)
     remaining_changed_lines: int
     remaining_eol_only_lines: int
     worktree_changed: bool = False

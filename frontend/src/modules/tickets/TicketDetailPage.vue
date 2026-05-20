@@ -280,7 +280,7 @@ async function copyLink(url: string) {
   }
 }
 
-async function copyTeamThread() {
+async function copyTeamsThread() {
   if (!ticketDetail.value) {
     showToast("Load a managed ticket first", "warning");
     return;
@@ -331,9 +331,9 @@ async function copyTeamThread() {
       text: lines.join("\n"),
       html: htmlParts.join("")
     });
-    showToast("Team thread format copied", "success");
+    showToast("Teams thread format copied", "success");
   } catch {
-    showToast("Cannot copy team thread format", "error");
+    showToast("Cannot copy teams thread format", "error");
   }
 }
 
@@ -578,7 +578,7 @@ onBeforeUnmount(() => {
     @save-all="saveAll"
     @add-link="addLink"
     @copy-link="copyLink"
-    @copy-team-thread="copyTeamThread"
+    @copy-teams-thread="copyTeamsThread"
     @post-to-teams="postToTeams"
     @edit-link="startEditLink"
     @cancel-edit-link="cancelEditLink"

@@ -572,9 +572,15 @@ function structuredDiff(input = {}) {
   }
   const baseLines = splitLines(baseBytes);
   const sourceLines = splitLines(sourceBytes);
+  const fixedEolLines = new Set(
+    (value.fixed_files || [])
+      .filter((item) => item.path === filePath)
+      .flatMap((item) => item.fixed_eol_lines || [])
+      .filter((line) => Number.isInteger(line))
+  );
   const range = hiddenRange(input);
   if (range) {
-    const rows = equalRangeRows(baseLines, sourceLines, range);
+    const rows = equalRangeRows(baseLines, sourceLines, range, fixedEolLines);
     return { session_id: sessionId, path: filePath, binary: false, rows, stats: { added: 0, removed: 0, changed: 0, eol_only: 0 } };
   }
   return {
@@ -582,16 +588,17 @@ function structuredDiff(input = {}) {
     path: filePath,
     binary: false,
     ...buildSideBySideRows(baseLines, sourceLines, {
+      fixedEolLines,
       foldUnchanged: parseBoolean(input.foldUnchanged ?? input.fold_unchanged, false),
       context: positiveInt(input.context, 3, 0, 50),
     }),
   };
 }
 
-function buildSideBySideRows(baseLines, sourceLines, { foldUnchanged = false, context = 3 } = {}) {
+function buildSideBySideRows(baseLines, sourceLines, { fixedEolLines = new Set(), foldUnchanged = false, context = 3 } = {}) {
   const rows = [];
   const stats = { added: 0, removed: 0, changed: 0, eol_only: 0 };
-  const ops = displayOpcodes(baseLines, sourceLines);
+  const ops = displayOpcodes(baseLines, sourceLines, fixedEolLines);
   for (let opIndex = 0; opIndex < ops.length; opIndex += 1) {
     const op = ops[opIndex];
     if (op.tag === "equal") {
@@ -639,16 +646,16 @@ function buildSideBySideRows(baseLines, sourceLines, { foldUnchanged = false, co
         });
       }
     } else if (op.tag === "replace") {
-      const count = Math.max(op.i2 - op.i1, op.j2 - op.j1);
-      stats.changed += count;
-      for (let offset = 0; offset < count; offset += 1) {
-        const left = offset < op.i2 - op.i1 ? baseLines[op.i1 + offset] : null;
-        const right = offset < op.j2 - op.j1 ? sourceLines[op.j1 + offset] : null;
-        rows.push({
-          type: left && right ? "replace" : left ? "delete" : "insert",
-          left: left ? side(left, op.i1 + offset + 1) : null,
-          right: right ? side(right, op.j1 + offset + 1) : null,
-        });
+      const leftCount = op.i2 - op.i1;
+      const rightCount = op.j2 - op.j1;
+      stats.removed += leftCount;
+      stats.added += rightCount;
+      stats.changed += Math.max(leftCount, rightCount);
+      for (let offset = 0; offset < leftCount; offset += 1) {
+        rows.push({ type: "delete", left: side(baseLines[op.i1 + offset], op.i1 + offset + 1), right: null });
+      }
+      for (let offset = 0; offset < rightCount; offset += 1) {
+        rows.push({ type: "insert", left: null, right: side(sourceLines[op.j1 + offset], op.j1 + offset + 1) });
       }
     } else if (op.tag === "delete") {
       stats.removed += op.i2 - op.i1;
@@ -665,7 +672,7 @@ function buildSideBySideRows(baseLines, sourceLines, { foldUnchanged = false, co
   return { rows, stats };
 }
 
-function displayOpcodes(baseLines, sourceLines) {
+function displayOpcodes(baseLines, sourceLines, fixedEolLines = new Set()) {
   const result = [];
   for (const op of opcodes(baseLines, sourceLines)) {
     if (op.tag !== "equal") {
@@ -674,12 +681,12 @@ function displayOpcodes(baseLines, sourceLines) {
     }
     let offset = 0;
     while (offset < op.i2 - op.i1) {
-      const eolDiff = baseLines[op.i1 + offset].eol !== sourceLines[op.j1 + offset].eol;
+      const eolDiff = baseLines[op.i1 + offset].eol !== sourceLines[op.j1 + offset].eol || fixedEolLines.has(op.j1 + offset + 1);
       const start = offset;
       offset += 1;
       while (
         offset < op.i2 - op.i1 &&
-        (baseLines[op.i1 + offset].eol !== sourceLines[op.j1 + offset].eol) === eolDiff
+        (baseLines[op.i1 + offset].eol !== sourceLines[op.j1 + offset].eol || fixedEolLines.has(op.j1 + offset + 1)) === eolDiff
       ) {
         offset += 1;
       }
@@ -713,7 +720,7 @@ function hiddenRange(input = {}) {
   return { leftStart, leftEnd, rightStart, rightEnd };
 }
 
-function equalRangeRows(baseLines, sourceLines, range) {
+function equalRangeRows(baseLines, sourceLines, range, fixedEolLines = new Set()) {
   const rows = [];
   const count = range.leftEnd - range.leftStart + 1;
   for (let offset = 0; offset < count; offset += 1) {
@@ -724,7 +731,7 @@ function equalRangeRows(baseLines, sourceLines, range) {
     if (!left || !right) {
       throw new Error("Hidden diff range is outside file bounds");
     }
-    const eolDiff = left.eol !== right.eol;
+    const eolDiff = left.eol !== right.eol || fixedEolLines.has(rightIndex + 1);
     rows.push({
       type: eolDiff ? "eol" : "equal",
       left: side(left, leftIndex + 1),
@@ -810,7 +817,8 @@ function fixFile(repoPath, entry) {
   }
   const baseLines = splitLines(baseBytes);
   const sourceLines = splitLines(sourceBytes);
-  const restored = restoreComparableLineEols(baseLines, sourceLines);
+  const fixedEolLines = restoreComparableLineEols(baseLines, sourceLines);
+  const restored = fixedEolLines.length;
   const nextWorktreeBytes = joinLines(sourceLines);
   const worktreeChanged = !sourceBytes.equals(nextWorktreeBytes);
   if (worktreeChanged) {
@@ -836,6 +844,7 @@ function fixFile(repoPath, entry) {
     result: {
       path: entry.path,
       restored_eol_lines: restored,
+      fixed_eol_lines: fixedEolLines,
       remaining_changed_lines: remaining.changed_lines,
       remaining_eol_only_lines: remaining.eol_only_lines,
       worktree_changed: worktreeChanged,
@@ -848,7 +857,7 @@ function fixFile(repoPath, entry) {
 
 function restoreComparableLineEols(baseLines, sourceLines) {
   const fallbackEol = dominantEol(baseLines);
-  let restored = 0;
+  const fixedLines = [];
   for (const op of opcodes(baseLines, sourceLines)) {
     if (op.tag === "delete") {
       continue;
@@ -863,7 +872,7 @@ function restoreComparableLineEols(baseLines, sourceLines) {
         const targetEol = baseLine && baseLine.eol ? baseLine.eol : fallbackEol;
         if (targetEol && sourceLine.eol !== targetEol) {
           sourceLine.eol = targetEol;
-          restored += 1;
+          fixedLines.push(op.j1 + offset + 1);
         }
       }
     } else if (op.tag === "insert") {
@@ -875,12 +884,12 @@ function restoreComparableLineEols(baseLines, sourceLines) {
         }
         if (targetEol && sourceLine.eol !== targetEol) {
           sourceLine.eol = targetEol;
-          restored += 1;
+          fixedLines.push(op.j1 + offset + 1);
         }
       }
     }
   }
-  return restored;
+  return fixedLines;
 }
 
 function nearbyBaseEol(lines, index) {
