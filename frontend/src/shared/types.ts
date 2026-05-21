@@ -362,7 +362,7 @@ export type GitEolDiffSide = {
 };
 
 export type GitEolDiffRow = {
-  type: "equal" | "eol" | "replace" | "delete" | "insert" | "fold" | string;
+  type: "equal" | "eol" | "fixed_eol" | "replace" | "delete" | "insert" | "fold" | string;
   left: GitEolDiffSide | null;
   right: GitEolDiffSide | null;
   count?: number | null;

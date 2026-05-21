@@ -14,6 +14,7 @@ const API_BASE = apiBase;
 
 type DiffOptions = {
   foldUnchanged?: boolean;
+  includeFixed?: boolean;
   context?: number;
   leftStart?: number | null;
   leftEnd?: number | null;
@@ -24,6 +25,7 @@ type DiffOptions = {
 function diffUrl(sessionId: string, path: string, options: DiffOptions = {}) {
   const params = new URLSearchParams({ path });
   if (options.foldUnchanged) params.set("fold_unchanged", "true");
+  if (options.includeFixed) params.set("include_fixed", "true");
   if (options.context !== undefined) params.set("context", String(options.context));
   if (options.leftStart) params.set("left_start", String(options.leftStart));
   if (options.leftEnd) params.set("left_end", String(options.leftEnd));

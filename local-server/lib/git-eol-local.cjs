@@ -474,6 +474,17 @@ function previewWorkingTree({ sourceFolder }) {
   const branch = gitText(repoPath, ["branch", "--show-current"]).trim() || "HEAD";
   const changed = parseChangedFiles(git(repoPath, ["diff", "--name-status", "-z", "-M", "HEAD", "--"]));
   const files = changed.map((entry) => previewFile(repoPath, entry));
+  const sourceSnapshots = new Map();
+  for (const file of files) {
+    if (!file.processable) {
+      continue;
+    }
+    try {
+      sourceSnapshots.set(file.path, worktreeBytes(repoPath, file.path));
+    } catch {
+      // Preview already captured processability; ignore files that disappear after preview.
+    }
+  }
   const sessionId = crypto.randomBytes(16).toString("hex");
   const preview = {
     session_id: sessionId,
@@ -490,6 +501,7 @@ function previewWorkingTree({ sourceFolder }) {
     files,
     fixed_files: [],
     fixed_blobs: new Map(),
+    source_snapshots: sourceSnapshots,
     commit_sha: null,
   });
   return preview;
@@ -555,6 +567,7 @@ function structuredDiff(input = {}) {
     throw new Error("File is not part of the preview");
   }
   const oldPath = entry.old_path || filePath;
+  const includeFixed = Boolean(input.includeFixed || input.include_fixed);
   let baseBytes = Buffer.alloc(0);
   let sourceBytes = Buffer.alloc(0);
   try {
@@ -563,7 +576,9 @@ function structuredDiff(input = {}) {
     baseBytes = Buffer.alloc(0);
   }
   try {
-    sourceBytes = worktreeBytes(value.repoPath, filePath);
+    sourceBytes = includeFixed
+      ? worktreeBytes(value.repoPath, filePath)
+      : value.source_snapshots?.get(filePath) || worktreeBytes(value.repoPath, filePath);
   } catch {
     sourceBytes = Buffer.alloc(0);
   }
@@ -572,12 +587,14 @@ function structuredDiff(input = {}) {
   }
   const baseLines = splitLines(baseBytes);
   const sourceLines = splitLines(sourceBytes);
-  const fixedEolLines = new Set(
-    (value.fixed_files || [])
-      .filter((item) => item.path === filePath)
-      .flatMap((item) => item.fixed_eol_lines || [])
-      .filter((line) => Number.isInteger(line))
-  );
+  const fixedEolLines = includeFixed
+    ? new Set(
+        (value.fixed_files || [])
+          .filter((item) => item.path === filePath)
+          .flatMap((item) => item.fixed_eol_lines || [])
+          .filter((line) => Number.isInteger(line))
+      )
+    : new Set();
   const range = hiddenRange(input);
   if (range) {
     const rows = equalRangeRows(baseLines, sourceLines, range, fixedEolLines);
@@ -636,11 +653,11 @@ function buildSideBySideRows(baseLines, sourceLines, { fixedEolLines = new Set()
         });
         appendEqualRows(head + hidden, count);
       }
-    } else if (op.tag === "eol") {
+    } else if (op.tag === "eol" || op.tag === "fixed_eol") {
       for (let offset = 0; offset < op.i2 - op.i1; offset += 1) {
-        stats.eol_only += 1;
+        if (op.tag === "eol") stats.eol_only += 1;
         rows.push({
-          type: "eol",
+          type: op.tag,
           left: side(baseLines[op.i1 + offset], op.i1 + offset + 1),
           right: side(sourceLines[op.j1 + offset], op.j1 + offset + 1),
         });
@@ -681,17 +698,17 @@ function displayOpcodes(baseLines, sourceLines, fixedEolLines = new Set()) {
     }
     let offset = 0;
     while (offset < op.i2 - op.i1) {
-      const eolDiff = baseLines[op.i1 + offset].eol !== sourceLines[op.j1 + offset].eol || fixedEolLines.has(op.j1 + offset + 1);
+      const currentTag = eolDisplayTag(baseLines[op.i1 + offset], sourceLines[op.j1 + offset], op.j1 + offset + 1, fixedEolLines);
       const start = offset;
       offset += 1;
       while (
         offset < op.i2 - op.i1 &&
-        (baseLines[op.i1 + offset].eol !== sourceLines[op.j1 + offset].eol || fixedEolLines.has(op.j1 + offset + 1)) === eolDiff
+        eolDisplayTag(baseLines[op.i1 + offset], sourceLines[op.j1 + offset], op.j1 + offset + 1, fixedEolLines) === currentTag
       ) {
         offset += 1;
       }
       result.push({
-        tag: eolDiff ? "eol" : "equal",
+        tag: currentTag,
         i1: op.i1 + start,
         i2: op.i1 + offset,
         j1: op.j1 + start,
@@ -700,6 +717,12 @@ function displayOpcodes(baseLines, sourceLines, fixedEolLines = new Set()) {
     }
   }
   return result;
+}
+
+function eolDisplayTag(left, right, rightLineNo, fixedEolLines) {
+  if (fixedEolLines.has(rightLineNo)) return "fixed_eol";
+  if (left.eol !== right.eol) return "eol";
+  return "equal";
 }
 
 function hiddenRange(input = {}) {
@@ -731,9 +754,8 @@ function equalRangeRows(baseLines, sourceLines, range, fixedEolLines = new Set()
     if (!left || !right) {
       throw new Error("Hidden diff range is outside file bounds");
     }
-    const eolDiff = left.eol !== right.eol || fixedEolLines.has(rightIndex + 1);
     rows.push({
-      type: eolDiff ? "eol" : "equal",
+      type: eolDisplayTag(left, right, rightIndex + 1, fixedEolLines),
       left: side(left, leftIndex + 1),
       right: side(right, rightIndex + 1),
     });
@@ -940,7 +962,7 @@ function commitWorkingTree({ sessionId, message }) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "contrack-git-index-"));
   const tempEnv = { GIT_INDEX_FILE: path.join(tempDir, "index") };
   const stagedBlobs = new Map();
-  const commitMessage = message && message.trim() ? message.trim() : "Fix EOL noise";
+  const commitMessage = message && message.trim() ? message.trim() : "fix eol";
   try {
     git(value.repoPath, ["read-tree", "HEAD"], { env: tempEnv });
     for (const filePath of files) {

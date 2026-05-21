@@ -32,7 +32,7 @@ const props = defineProps<{
   jobStatus: string;
   jobLogs: GitEolJobLog[];
   jobError: string | null;
-  loadHiddenRows: (path: string, row: GitEolDiffRow) => Promise<GitEolDiffRow[]>;
+  loadHiddenRows: (path: string, row: GitEolDiffRow, includeFixed?: boolean) => Promise<GitEolDiffRow[]>;
 }>();
 
 const emit = defineEmits<{
@@ -371,13 +371,6 @@ function statusBadgeClass(status: string): string {
           No EOL changes were needed for the selected files.
         </div>
 
-        <div v-if="noChangeFixedFiles.length" class="grid gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-sm">
-          <p class="font-medium text-[#171A20]">Files checked with no committable EOL changes</p>
-          <div v-for="file in noChangeFixedFiles" :key="`noop-${file.path}`" class="break-all text-[#5C5E62]">
-            {{ file.path }}<span v-if="file.message"> - {{ file.message }}</span>
-          </div>
-        </div>
-
         <!-- Fixed files with checkboxes + expandable diff -->
         <div v-if="changedFixedFiles.length" class="w-full border border-neutral-200">
           <table class="w-full border-collapse text-left text-sm">
@@ -416,7 +409,7 @@ function statusBadgeClass(status: string): string {
                     <GitEolDiffTable
                       :diff="resultDiffCache[file.path] ?? null"
                       :loading="resultDiffLoading[file.path] ?? false"
-                      :load-hidden-rows="(row) => loadHiddenRows(file.path, row)"
+                      :load-hidden-rows="(row) => loadHiddenRows(file.path, row, true)"
                     />
                   </td>
                 </tr>

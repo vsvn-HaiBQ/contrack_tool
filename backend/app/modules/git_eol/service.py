@@ -169,7 +169,7 @@ class GitEolService:
                 "changed_files": [],
             }
 
-        commit_message = message.strip() if message and message.strip() else "Fix EOL noise"
+        commit_message = message.strip() if message and message.strip() else "fix eol"
         self._git(worktree, ["commit", "-m", commit_message])
         commit_sha = self._git_text(worktree, ["rev-parse", "HEAD"]).strip()
         session["commit_sha"] = commit_sha
@@ -709,6 +709,7 @@ class GitEolService:
         path: str,
         fold_unchanged: bool = False,
         context: int = 3,
+        include_fixed: bool = False,
         left_start: int | None = None,
         left_end: int | None = None,
         right_start: int | None = None,
@@ -741,8 +742,8 @@ class GitEolService:
             if file.get("path") == path
             for line in (file.get("fixed_eol_lines") or [])
             if isinstance(line, int)
-        }
-        if path in fixed_paths:
+        } if include_fixed else set()
+        if include_fixed and path in fixed_paths:
             source_path = self._safe_worktree_file(worktree, path)
             source_bytes = source_path.read_bytes() if source_path.is_file() else b""
         else:
@@ -868,12 +869,13 @@ class GitEolService:
                         }
                     )
                     append_equal_rows(head + hidden, count)
-            elif tag == "eol":
+            elif tag in {"eol", "fixed_eol"}:
                 for offset in range(i2 - i1):
-                    eol_only += 1
+                    if tag == "eol":
+                        eol_only += 1
                     rows.append(
                         {
-                            "type": "eol",
+                            "type": tag,
                             "left": make_side(base_lines[i1 + offset], i1 + offset + 1),
                             "right": make_side(source_lines[j1 + offset], j1 + offset + 1),
                         }
@@ -943,20 +945,24 @@ class GitEolService:
                 continue
             offset = 0
             while offset < i2 - i1:
-                eol_diff = base_lines[i1 + offset].eol != source_lines[j1 + offset].eol or (j1 + offset + 1) in fixed_eol_lines
+                current_tag = self._eol_display_tag(base_lines[i1 + offset], source_lines[j1 + offset], j1 + offset + 1, fixed_eol_lines)
                 start = offset
                 offset += 1
                 while (
                     offset < i2 - i1
-                    and (
-                        base_lines[i1 + offset].eol != source_lines[j1 + offset].eol
-                        or (j1 + offset + 1) in fixed_eol_lines
-                    )
-                    == eol_diff
+                    and self._eol_display_tag(base_lines[i1 + offset], source_lines[j1 + offset], j1 + offset + 1, fixed_eol_lines)
+                    == current_tag
                 ):
                     offset += 1
-                result.append(("eol" if eol_diff else "equal", i1 + start, i1 + offset, j1 + start, j1 + offset))
+                result.append((current_tag, i1 + start, i1 + offset, j1 + start, j1 + offset))
         return result
+
+    def _eol_display_tag(self, base_line: RawLine, source_line: RawLine, source_lineno: int, fixed_eol_lines: set[int]) -> str:
+        if source_lineno in fixed_eol_lines:
+            return "fixed_eol"
+        if base_line.eol != source_line.eol:
+            return "eol"
+        return "equal"
 
     def _build_equal_range_rows(
         self,
@@ -986,7 +992,7 @@ class GitEolService:
             right_line = source_lines[right_index]
             rows.append(
                 {
-                    "type": "eol" if left_line.eol != right_line.eol or right_index + 1 in fixed_eol_lines else "equal",
+                    "type": self._eol_display_tag(left_line, right_line, right_index + 1, fixed_eol_lines),
                     "left": {
                         "lineno": left_index + 1,
                         "text": left_line.content.decode("utf-8", errors="replace"),

@@ -23,7 +23,7 @@ const form = reactive({
   local_source_folder: ""
 });
 const commitForm = reactive({
-  message: "Fix EOL noise"
+  message: "fix eol"
 });
 const selectedFiles = reactive<Record<string, boolean>>({});
 const expandedFiles = reactive<Record<string, boolean>>({});
@@ -239,15 +239,16 @@ async function loadDiff(
   path: string,
   cache: Record<string, GitEolStructuredDiff>,
   loading: Record<string, boolean>,
-  force = false
+  force = false,
+  includeFixed = false
 ): Promise<void> {
   if (!preview.value) return;
   if (!force && cache[path]) return;
   loading[path] = true;
   try {
     cache[path] = isWorkingTreeMode.value
-      ? await localServerApi.gitEol.structuredDiff({ sessionId: preview.value.session_id, path, foldUnchanged: true, context: 3 })
-      : await gitEolApi.diff(preview.value.session_id, path, { foldUnchanged: true, context: 3 });
+      ? await localServerApi.gitEol.structuredDiff({ sessionId: preview.value.session_id, path, foldUnchanged: true, context: 3, includeFixed })
+      : await gitEolApi.diff(preview.value.session_id, path, { foldUnchanged: true, context: 3, includeFixed });
   } catch (error) {
     cache[path] = {
       session_id: preview.value.session_id,
@@ -262,7 +263,7 @@ async function loadDiff(
   }
 }
 
-async function loadHiddenRows(path: string, row: GitEolDiffRow): Promise<GitEolDiffRow[]> {
+async function loadHiddenRows(path: string, row: GitEolDiffRow, includeFixed = false): Promise<GitEolDiffRow[]> {
   if (!preview.value) return [];
   const leftStart = row.left_start ?? null;
   const leftEnd = row.left_end ?? null;
@@ -278,13 +279,15 @@ async function loadHiddenRows(path: string, row: GitEolDiffRow): Promise<GitEolD
         leftStart,
         leftEnd,
         rightStart,
-        rightEnd
+        rightEnd,
+        includeFixed
       })
     : await gitEolApi.diff(preview.value.session_id, path, {
         leftStart,
         leftEnd,
         rightStart,
-        rightEnd
+        rightEnd,
+        includeFixed
       });
   return diff.rows;
 }
@@ -301,7 +304,7 @@ async function toggleResultFileExpanded(path: string) {
   const isOpen = !!expandedResultFiles[path];
   expandedResultFiles[path] = !isOpen;
   if (!isOpen) {
-    await loadDiff(path, resultDiffCache, resultDiffLoading);
+    await loadDiff(path, resultDiffCache, resultDiffLoading, false, true);
   }
 }
 
@@ -349,16 +352,6 @@ async function fixSelectedFiles() {
     fixResult.value.fixed_files
       .filter(hasFixedOutput)
       .forEach((f) => { selectedResultFiles[f.path] = true; });
-    // Invalidate diffs of fixed files (worktree changed) and refresh open ones.
-    const fixedPaths = fixResult.value.fixed_files.map((file) => file.path);
-    fixedPaths.forEach((path) => {
-      delete diffCache[path];
-    });
-    await Promise.all(
-      fixedPaths
-        .filter((path) => expandedFiles[path])
-        .map((path) => loadDiff(path, diffCache, diffLoading, true))
-    );
   } catch (error) {
     showToast((error as Error).message, "error");
   } finally {

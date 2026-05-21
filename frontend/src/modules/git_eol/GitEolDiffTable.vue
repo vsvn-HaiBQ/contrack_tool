@@ -69,6 +69,7 @@ const entries = computed<RenderEntry[]>(() => {
 });
 
 function leftCellClass(type: string): string {
+  if (type === "fixed_eol") return "bg-violet-50";
   if (type === "replace" || type === "eol") return "bg-yellow-50";
   if (type === "delete") return "bg-rose-50";
   if (type === "insert") return "bg-neutral-50";
@@ -76,6 +77,7 @@ function leftCellClass(type: string): string {
 }
 
 function rightCellClass(type: string): string {
+  if (type === "fixed_eol") return "bg-violet-50";
   if (type === "replace" || type === "eol") return "bg-yellow-50";
   if (type === "insert") return "bg-emerald-50";
   if (type === "delete") return "bg-neutral-50";
@@ -83,12 +85,14 @@ function rightCellClass(type: string): string {
 }
 
 function leftGutterClass(type: string): string {
+  if (type === "fixed_eol") return "bg-violet-100";
   if (type === "replace" || type === "eol") return "bg-yellow-100 text-yellow-800";
   if (type === "delete") return "bg-rose-100 text-rose-800";
   return "bg-neutral-50 text-neutral-400";
 }
 
 function rightGutterClass(type: string): string {
+  if (type === "fixed_eol") return "bg-violet-100";
   if (type === "replace" || type === "eol") return "bg-yellow-100 text-yellow-800";
   if (type === "insert") return "bg-emerald-100 text-emerald-800";
   return "bg-neutral-50 text-neutral-400";
