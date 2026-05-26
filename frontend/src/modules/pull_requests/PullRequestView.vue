@@ -7,6 +7,7 @@ const props = defineProps<{
   prForm: { jp_tickets: string; base_branch: string; source_branch: string; title: string };
   preview: PrPreview | null;
   loadingPreview: boolean;
+  creatingPr: boolean;
   result: PrResult | null;
 }>();
 
@@ -31,7 +32,7 @@ const canVerify = computed(() => Boolean(props.prForm.jp_tickets.trim() && props
       <div class="flex items-center gap-3 pt-2">
         <button
           class="inline-flex min-h-10 min-w-[200px] items-center justify-center gap-2 rounded-lg bg-[#171A20] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
-          :disabled="!canVerify || loadingPreview"
+          :disabled="!canVerify || loadingPreview || creatingPr"
           @click="emit('verify')"
         >
           <LoadingCircle v-if="loadingPreview" />
@@ -87,7 +88,14 @@ const canVerify = computed(() => Boolean(props.prForm.jp_tickets.trim() && props
             </div>
           </div>
           <div v-if="preview.branch_exists" class="flex items-center gap-3 pt-2">
-            <button class="min-h-10 min-w-[200px] rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95" @click="emit('submit')">Create PR</button>
+            <button
+              class="inline-flex min-h-10 min-w-[200px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="creatingPr || loadingPreview"
+              @click="emit('submit')"
+            >
+              <LoadingCircle v-if="creatingPr" />
+              {{ creatingPr ? "Creating..." : "Create PR" }}
+            </button>
           </div>
         </div>
         <p v-else class="text-sm text-[#5C5E62]">Verify PR to preview title, source branch, and JP tickets.</p>

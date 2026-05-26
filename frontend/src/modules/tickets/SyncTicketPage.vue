@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { reactive, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import SyncTicketView from "./SyncTicketView.vue";
 import { ticketsApi } from "./api";
 import { sessionState } from "../../shared/session";
@@ -33,7 +33,10 @@ const syncState = reactive({
   selected_subtasks: [] as string[],
   subtask_titles: { ...DEFAULT_SUBTASK_LABELS } as Record<string, string>,
   extra_tracker: "Story",
-  force_create: false
+  force_create: false,
+  syncing: false,
+  syncing_mode: null as "create_new" | "link" | null,
+  syncing_issue_id: null as number | null
 });
 
 const syncResult = reactive<SyncResult>({
@@ -44,6 +47,7 @@ const syncResult = reactive<SyncResult>({
 });
 
 const route = useRoute();
+const router = useRouter();
 let lastPrefillKey = "";
 
 function parseJpIssueInput(value: string) {
@@ -160,6 +164,9 @@ async function verify(existingVnIssueId: number | null = null) {
 }
 
 async function runSync(mode: "create_new" | "link" = "create_new", existingVnIssueId?: number | null) {
+  if (syncState.syncing) {
+    return;
+  }
   if (!syncState.verified || !syncState.jp_issue_id) {
     showToast("Verify the JP issue first", "warning");
     return;
@@ -170,6 +177,10 @@ async function runSync(mode: "create_new" | "link" = "create_new", existingVnIss
     showToast("Select a Story in VN Reference to link", "warning");
     return;
   }
+
+  syncState.syncing = true;
+  syncState.syncing_mode = mode;
+  syncState.syncing_issue_id = mode === "link" ? linkedIssueId ?? null : null;
 
   try {
     const result = await ticketsApi.sync({
@@ -201,8 +212,13 @@ async function runSync(mode: "create_new" | "link" = "create_new", existingVnIss
     }
 
     showToast("Sync completed", "success");
+    await router.push({ name: "detail", params: { jpIssueId: String(syncState.jp_issue_id) } });
   } catch (error) {
     showToast((error as Error).message, "error");
+  } finally {
+    syncState.syncing = false;
+    syncState.syncing_mode = null;
+    syncState.syncing_issue_id = null;
   }
 }
 

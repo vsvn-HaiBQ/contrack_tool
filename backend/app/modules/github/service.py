@@ -1,6 +1,10 @@
 def build_pr_title(base_branch: str, jp_tickets: list[int], subjects: list[str]) -> str:
     if len(jp_tickets) == 1:
-        return f"{base_branch} (#{jp_tickets[0]}) {subjects[0]}"
+        subject = subjects[0]
+        normalized_subject = subject.lstrip()
+        if normalized_subject.startswith("【"):
+            return f"{base_branch} (#{jp_tickets[0]}){normalized_subject}"
+        return f"{base_branch} (#{jp_tickets[0]}) {subject}"
     joined = ", ".join(f"#{ticket}" for ticket in jp_tickets[:2])
     return f"{base_branch} ({joined})"
 

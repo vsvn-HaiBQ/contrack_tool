@@ -23,6 +23,9 @@ const props = defineProps<{
     subtask_titles: Record<string, string>;
     extra_tracker: string;
     force_create: boolean;
+    syncing: boolean;
+    syncing_mode: "create_new" | "link" | null;
+    syncing_issue_id: number | null;
   };
   syncResult: SyncResult;
   assignees: Assignee[];
@@ -214,14 +217,16 @@ function trackerBadgeClass(tracker: string | null | undefined) {
               v-else-if="row.isStory"
               type="button"
               class="inline-flex items-center gap-1 rounded-lg border border-[#3E6AE1] px-3 py-2 text-xs font-medium text-[#3E6AE1] transition hover:bg-[#F5F8FF]"
+              :disabled="syncState.syncing"
               @click="emit('runSync', { mode: 'link', existingVnIssueId: row.candidate.issue_id })"
             >
+              <LoadingCircle v-if="syncState.syncing_mode === 'link' && syncState.syncing_issue_id === row.candidate.issue_id" class="text-[#3E6AE1]" />
               <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M8 12 12 8"></path>
                 <path d="M7 6.5H5.75A2.75 2.75 0 0 0 3 9.25v5A2.75 2.75 0 0 0 5.75 17h5a2.75 2.75 0 0 0 2.75-2.75V13"></path>
                 <path d="M11 3h6v6"></path>
               </svg>
-              Link
+              {{ syncState.syncing_mode === 'link' && syncState.syncing_issue_id === row.candidate.issue_id ? "Linking..." : "Link" }}
             </button>
           </div>
         </div>
@@ -329,10 +334,12 @@ function trackerBadgeClass(tracker: string | null | undefined) {
 
       <div class="flex flex-wrap items-center gap-3 border-t border-neutral-100 pt-4">
         <button
-          class="min-h-10 min-w-[200px] rounded-lg bg-[#3E6AE1] px-5 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95"
+          class="inline-flex min-h-10 min-w-[200px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-5 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+          :disabled="syncState.syncing"
           @click="emit('runSync', { mode: 'create_new' })"
         >
-          {{ editorTitle }}
+          <LoadingCircle v-if="syncState.syncing_mode === 'create_new'" />
+          {{ syncState.syncing_mode === 'create_new' ? "Creating..." : editorTitle }}
         </button>
       </div>
     </div>

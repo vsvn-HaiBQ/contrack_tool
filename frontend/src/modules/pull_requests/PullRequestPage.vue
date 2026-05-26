@@ -15,6 +15,7 @@ const prForm = reactive({
 const result = ref<PrResult | null>(null);
 const preview = ref<PrPreview | null>(null);
 const loadingPreview = ref(false);
+const creatingPr = ref(false);
 const lastGeneratedTitle = ref("");
 
 function parseTickets() {
@@ -110,6 +111,9 @@ watch(
 );
 
 async function submit() {
+  if (creatingPr.value) {
+    return;
+  }
   const parsedTickets = parseTickets();
   if (!parsedTickets.length) {
     showToast("Enter at least one JP ticket", "warning");
@@ -127,6 +131,7 @@ async function submit() {
     showToast("Source branch does not exist on remote", "warning");
     return;
   }
+  creatingPr.value = true;
   try {
     result.value = await pullRequestsApi.create({
       jp_tickets: parsedTickets,
@@ -137,6 +142,8 @@ async function submit() {
     showToast("Pull request created", "success");
   } catch (error) {
     showToast((error as Error).message, "error");
+  } finally {
+    creatingPr.value = false;
   }
 }
 </script>
@@ -146,6 +153,7 @@ async function submit() {
     :pr-form="prForm"
     :preview="preview"
     :loading-preview="loadingPreview"
+    :creating-pr="creatingPr"
     :result="result"
     @verify="verifyPreview"
     @submit="submit"
