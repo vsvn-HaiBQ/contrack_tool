@@ -9,6 +9,7 @@ const loading = ref(false);
 const deleting = ref(false);
 const rows = ref<AuditLog[]>([]);
 const total = ref(0);
+const payloadModal = ref<{ title: string; payload: string } | null>(null);
 const options = reactive({
   actions: [] as string[],
   actor_usernames: [] as string[],
@@ -57,6 +58,13 @@ function formatDate(value: string) {
 function payloadPreview(value: Record<string, unknown> | null) {
   if (!value) return "";
   return JSON.stringify(value, null, 2);
+}
+
+function openPayload(row: AuditLog) {
+  payloadModal.value = {
+    title: `${row.action} / ${row.target_type}${row.target_id ? `:${row.target_id}` : ""}`,
+    payload: payloadPreview(row.payload_after || row.payload_before) || "{}"
+  };
 }
 
 function clearSelection() {
@@ -200,52 +208,76 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div class="overflow-x-auto rounded-2xl border border-neutral-200 bg-white shadow-sm">
-      <div class="grid min-w-[920px] grid-cols-[40px_170px_minmax(110px,0.8fr)_minmax(150px,1fr)_minmax(170px,1.1fr)_minmax(220px,1.4fr)] items-center gap-4 border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-xs font-medium uppercase tracking-wide text-[#5C5E62]">
-        <div class="flex items-center justify-center">
-          <input
-            type="checkbox"
-            class="size-4 rounded border-neutral-300 accent-[#3E6AE1]"
-            :checked="allVisibleSelected"
-            @change="toggleAllVisible"
-          />
+    <div class="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
+      <div class="max-h-[560px] overflow-auto">
+        <div class="sticky top-0 z-10 grid min-w-[940px] grid-cols-[40px_170px_84px_minmax(150px,0.9fr)_minmax(280px,1.6fr)_72px] items-center gap-4 border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-xs font-medium uppercase tracking-wide text-[#5C5E62]">
+          <div class="flex items-center justify-center">
+            <input
+              type="checkbox"
+              class="size-4 rounded border-neutral-300 accent-[#3E6AE1]"
+              :checked="allVisibleSelected"
+              @change="toggleAllVisible"
+            />
+          </div>
+          <span>Time</span>
+          <span>User</span>
+          <span>Action</span>
+          <span>Target</span>
+          <span>Payload</span>
         </div>
-        <span>Time</span>
-        <span>User</span>
-        <span>Action</span>
-        <span>Target</span>
-        <span>Payload</span>
-      </div>
-      <div v-if="loading" class="flex items-center gap-2 px-4 py-8 text-sm text-[#5C5E62]">
-        <LoadingCircle class="text-[#3E6AE1]" />
-        Loading audit logs...
-      </div>
-      <div v-else-if="!rows.length" class="px-4 py-8 text-sm text-[#5C5E62]">No audit logs found.</div>
-      <template v-else>
+        <div v-if="loading" class="flex min-w-[940px] items-center gap-2 px-4 py-8 text-sm text-[#5C5E62]">
+          <LoadingCircle class="text-[#3E6AE1]" />
+          Loading audit logs...
+        </div>
+        <div v-else-if="!rows.length" class="min-w-[940px] px-4 py-8 text-sm text-[#5C5E62]">No audit logs found.</div>
         <div
+          v-else
           v-for="row in rows"
           :key="row.id"
-          class="grid min-w-[920px] grid-cols-[40px_170px_minmax(110px,0.8fr)_minmax(150px,1fr)_minmax(170px,1.1fr)_minmax(220px,1.4fr)] items-start gap-4 border-b border-neutral-200 px-4 py-3 text-sm last:border-b-0"
+          class="grid min-w-[940px] grid-cols-[40px_170px_84px_minmax(150px,0.9fr)_minmax(280px,1.6fr)_72px] items-start gap-4 border-b border-neutral-200 px-4 py-3 text-sm last:border-b-0"
         >
           <div class="flex items-center justify-center pt-0.5">
             <input v-model="selectedIds[row.id]" type="checkbox" class="size-4 rounded border-neutral-300 accent-[#3E6AE1]" />
           </div>
           <span class="text-xs leading-5 text-[#5C5E62]">{{ formatDate(row.created_at) }}</span>
-          <span class="min-w-0 break-words font-medium leading-5 text-[#171A20]">{{ row.actor_username }}</span>
+          <span class="min-w-0 truncate font-medium leading-5 text-[#171A20]" :title="row.actor_username">{{ row.actor_username }}</span>
           <span class="min-w-0 break-words leading-5 text-[#171A20]">{{ row.action }}</span>
           <span class="min-w-0 break-words leading-5 text-[#393C41]">{{ row.target_type }}<template v-if="row.target_id">: {{ row.target_id }}</template></span>
-          <details class="min-w-0">
-            <summary class="cursor-pointer text-xs text-[#3E6AE1]">Payload</summary>
-            <pre class="mt-2 max-h-56 overflow-auto rounded bg-neutral-950 p-3 text-xs text-neutral-100">{{ payloadPreview(row.payload_after || row.payload_before) }}</pre>
-          </details>
+          <button
+            type="button"
+            class="inline-flex min-h-7 items-center justify-center rounded border border-neutral-200 bg-white px-2 text-xs font-medium text-[#3E6AE1] transition hover:bg-neutral-50"
+            @click="openPayload(row)"
+          >
+            View
+          </button>
         </div>
-      </template>
+      </div>
       <div class="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-[#5C5E62]">
         <span>{{ currentFrom }}-{{ currentTo }} / {{ total }}</span>
         <div class="flex items-center gap-2">
           <button class="rounded border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60" :disabled="filters.offset === 0" @click="prevPage">Prev</button>
           <button class="rounded border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60" :disabled="filters.offset + filters.limit >= total" @click="nextPage">Next</button>
         </div>
+      </div>
+    </div>
+
+    <div v-if="payloadModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-6" @click.self="payloadModal = null">
+      <div class="grid max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-xl">
+        <div class="flex items-center justify-between gap-3 border-b border-neutral-200 px-4 py-3">
+          <h2 class="min-w-0 truncate text-base font-semibold text-[#171A20]">{{ payloadModal.title }}</h2>
+          <button
+            type="button"
+            class="inline-flex size-8 items-center justify-center rounded-lg border border-neutral-200 bg-white text-[#393C41] transition hover:bg-neutral-100"
+            title="Close"
+            @click="payloadModal = null"
+          >
+            <svg viewBox="0 0 20 20" fill="none" class="size-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+              <path d="M5 5l10 10"></path>
+              <path d="M15 5 5 15"></path>
+            </svg>
+          </button>
+        </div>
+        <pre class="max-h-[70vh] overflow-auto bg-neutral-950 p-4 text-xs leading-5 text-neutral-100">{{ payloadModal.payload }}</pre>
       </div>
     </div>
   </section>

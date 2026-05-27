@@ -69,7 +69,22 @@ const buildPanels = computed(() => {
   return keys.map((key) => buildPanel(key, key === "client" ? "Client Log" : "Server Log", targets[key]!));
 });
 
-const artifacts = computed(() => job.value?.artifacts ?? []);
+const artifacts = computed(() => {
+  const current = job.value;
+  if (!current) return [];
+  const targetArtifacts = Object.values(current.target_jobs ?? {}).flatMap((targetJob) => targetJob?.artifacts ?? []);
+  return targetArtifacts.length ? targetArtifacts : current.artifacts ?? [];
+});
+const manualUploadJobs = computed(() => {
+  const current = job.value;
+  if (!current || form.uploadToBox) return [];
+  const targetJobs = Object.values(current.target_jobs ?? {}).filter(
+    (targetJob): targetJob is BuildJob => Boolean(targetJob?.status === "succeeded" && targetJob.artifacts?.length)
+  );
+  if (targetJobs.length) return targetJobs;
+  return current.status === "succeeded" && current.artifacts?.length ? [current] : [];
+});
+const canManualUploadToBox = computed(() => manualUploadJobs.value.length > 0);
 const lastLogKey = computed(() =>
   buildPanels.value
     .map((panel) => {
@@ -559,6 +574,17 @@ async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
   }
 }
 
+async function uploadManualBuildArtifacts() {
+  if (!canManualUploadToBox.value || uploadingToBox.value) return;
+  if (!boxReady.value) {
+    showToast("Box is not connected", "warning");
+    return;
+  }
+  for (const targetJob of manualUploadJobs.value) {
+    await uploadBuildArtifacts(targetJob);
+  }
+}
+
 function uploadCompletedTargets(parentJob: BuildJob) {
   if (!form.uploadToBox) return;
   const targets = Object.values(parentJob.target_jobs ?? {});
@@ -756,7 +782,19 @@ onBeforeUnmount(stopPolling);
     <div v-if="artifacts.length" class="grid gap-3 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Artifacts</h3>
-        <span v-if="showBoxUploadStatus" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1" :class="boxUploadStatusClass()">{{ boxUploadStatusLabel() }}</span>
+        <div class="flex flex-wrap items-center gap-2">
+          <span v-if="showBoxUploadStatus" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1" :class="boxUploadStatusClass()">{{ boxUploadStatusLabel() }}</span>
+          <button
+            v-if="!form.uploadToBox"
+            type="button"
+            class="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-[#3E6AE1] bg-white px-3 py-2 text-sm font-medium text-[#3E6AE1] transition hover:bg-[#F5F8FF] disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="!canManualUploadToBox || uploadingToBox"
+            @click="uploadManualBuildArtifacts"
+          >
+            <LoadingCircle v-if="uploadingToBox" class="text-current" />
+            {{ uploadingToBox ? "Uploading..." : "Upload to Box" }}
+          </button>
+        </div>
       </div>
       <button
         v-for="artifact in artifacts"
