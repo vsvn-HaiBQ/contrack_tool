@@ -209,7 +209,7 @@ onMounted(async () => {
     </div>
 
     <div class="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
-      <div class="max-h-[560px] overflow-auto">
+      <div class="max-h-[510px] overflow-auto">
         <div class="sticky top-0 z-10 grid min-w-[940px] grid-cols-[40px_170px_84px_minmax(150px,0.9fr)_minmax(280px,1.6fr)_72px] items-center gap-4 border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-xs font-medium uppercase tracking-wide text-[#5C5E62]">
           <div class="flex items-center justify-center">
             <input
@@ -277,7 +277,7 @@ onMounted(async () => {
             </svg>
           </button>
         </div>
-        <pre class="max-h-[70vh] overflow-auto bg-neutral-950 p-4 text-xs leading-5 text-neutral-100">{{ payloadModal.payload }}</pre>
+        <pre class="max-h-[70vh] overflow-auto p-4 text-xs leading-5">{{ payloadModal.payload }}</pre>
       </div>
     </div>
   </section>
