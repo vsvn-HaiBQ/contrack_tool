@@ -31,10 +31,11 @@ const tabs = [
   { key: "/document-translation", label: "Translate Docs", requiresNode: true },
   { key: "/logtime", label: "Logtime" },
   { key: "/notes", label: "Notes" },
+  { key: "/audit", label: "Audit Logs", adminOnly: true },
 ];
 
 const nodeOnlyRoutes = new Set(["/git-eol", "/build-source", "/document-translation"]);
-const visibleTabs = computed(() => tabs.filter((tab) => !tab.requiresNode || nodeServerOnline.value));
+const visibleTabs = computed(() => tabs.filter((tab) => (!tab.requiresNode || nodeServerOnline.value) && (!tab.adminOnly || sessionState.me?.role === "admin")));
 const nodeServerWarning = computed(() => {
   if (nodeServerChecked.value && !nodeServerOnline.value) {
     return `Node server offline: ${localServerBase}. Local tools hidden.`;

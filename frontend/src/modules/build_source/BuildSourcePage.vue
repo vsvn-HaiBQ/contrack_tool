@@ -7,6 +7,7 @@ import { localServerApi, localServerBase } from "../../shared/localServer";
 import { apiBackendBase, apiBoxOAuthCallbackPath, boxOAuthRedirectUri } from "../../shared/runtimeConfig";
 import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
+import { auditApi } from "../audit/api";
 import { boxApi } from "../box/api";
 import { ticketsApi } from "../tickets/api";
 import { usersApi } from "../users/api";
@@ -394,6 +395,19 @@ async function startBuild() {
       repo: sessionState.systemSettings.git_repo,
       githubToken: sessionState.userSettings.github_token,
     });
+    void auditApi.record({
+      action: "build_start",
+      target_type: "build_job",
+      target_id: job.value.job_id,
+      payload_after: {
+        targetBranch: form.targetBranch.trim(),
+        buildClient: form.buildClient,
+        buildServer: form.buildServer,
+        uploadToBox: form.uploadToBox,
+        sourceFolder: form.sourceFolder,
+        buildFolder: form.buildFolder
+      }
+    }).catch(() => undefined);
     localServerOnline.value = true;
     startPolling();
   } catch (error) {
@@ -418,6 +432,21 @@ function startPolling() {
         uploadCompletedTargets(next);
         if (["succeeded", "failed", "partial", "canceled"].includes(next.status)) {
           stopPolling();
+          void auditApi.record({
+            action: "build_complete",
+            target_type: "build_job",
+            target_id: next.job_id,
+            payload_after: {
+              status: next.status,
+              error: next.error,
+              targetBranch: form.targetBranch.trim(),
+              artifacts: (next.artifacts ?? []).map((artifact) => ({
+                type: artifact.type,
+                file_name: artifact.file_name,
+                path: artifact.path
+              }))
+            }
+          }).catch(() => undefined);
           showToast(buildStatusMessage(next), next.status === "succeeded" ? "success" : next.status === "partial" ? "warning" : "error");
           if (form.uploadToBox) {
             uploadCompletedTargets(next);

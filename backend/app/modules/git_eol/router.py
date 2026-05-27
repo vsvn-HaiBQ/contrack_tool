@@ -183,12 +183,29 @@ def fetch_structured_diff(
 @router.post("/fix", response_model=GitEolFixResponse)
 def fix_git_eol(
     payload: GitEolFixRequest,
+    request: Request,
     user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> GitEolFixResponse:
     try:
-        return service.fix(user=user, session_id=payload.session_id, selected_files=payload.files)
+        result = service.fix(user=user, session_id=payload.session_id, selected_files=payload.files)
     except GitEolError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    write_audit_log(
+        db,
+        actor=user,
+        action="git_eol_fix",
+        target_type="git_eol_session",
+        target_id=payload.session_id,
+        payload_after={
+            "files": payload.files,
+            "fixed_files": [item.path for item in result.fixed_files],
+            "total_restored_eol_lines": result.total_restored_eol_lines,
+        },
+        **request_meta(request),
+    )
+    db.commit()
+    return result
 
 
 @router.post("/commit", response_model=GitEolCommitResponse)

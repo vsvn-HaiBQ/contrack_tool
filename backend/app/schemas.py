@@ -1,10 +1,69 @@
 from datetime import datetime
+import json
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class AuditLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    actor_user_id: int | None = None
+    actor_username: str
+    action: str
+    target_type: str
+    target_id: str | None = None
+    payload_before: dict | None = None
+    payload_after: dict | None = None
+    ip: str | None = None
+    user_agent: str | None = None
+    created_at: datetime
+
+    @field_validator("payload_before", "payload_after", mode="before")
+    @classmethod
+    def parse_legacy_json_payload(cls, value):
+        if not isinstance(value, str):
+            return value
+        if not value.strip() or value.strip() == "null":
+            return None
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {"value": value}
+        return parsed if isinstance(parsed, dict) else None
+
+
+class AuditLogListResponse(BaseModel):
+    items: list[AuditLogOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class AuditLogOptionsResponse(BaseModel):
+    actions: list[str]
+    actor_usernames: list[str]
+    target_types: list[str]
+
+
+class AuditEventCreateRequest(BaseModel):
+    action: str = Field(..., min_length=1, max_length=100)
+    target_type: str = Field(..., min_length=1, max_length=50)
+    target_id: str | None = Field(default=None, max_length=100)
+    payload_after: dict | None = None
+
+
+class AuditDeleteRequest(BaseModel):
+    ids: list[int] = Field(default_factory=list)
+    action: str | None = None
+    actor_username: str | None = None
+    target_type: str | None = None
+    date_from: datetime | None = None
+    date_to: datetime | None = None
 
 
 class LoginRequest(BaseModel):

@@ -1,5 +1,26 @@
 export type User = { id: number; username: string; role: string };
 
+export type AuditLog = {
+  id: number;
+  actor_user_id: number | null;
+  actor_username: string;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  payload_before: Record<string, unknown> | null;
+  payload_after: Record<string, unknown> | null;
+  ip: string | null;
+  user_agent: string | null;
+  created_at: string;
+};
+
+export type AuditLogListResponse = {
+  items: AuditLog[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export type Note = {
   id: number;
   title: string;

@@ -5,6 +5,7 @@ import { gitEolApi } from "./api";
 import { localServerApi, localServerBase } from "../../shared/localServer";
 import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
+import { auditApi } from "../audit/api";
 import { usersApi } from "../users/api";
 import type {
   GitEolCommitResult,
@@ -335,6 +336,19 @@ async function fixSelectedFiles() {
           session_id: preview.value.session_id,
           files: selectedPaths.value
         });
+    if (isWorkingTreeMode.value) {
+      void auditApi.record({
+        action: "git_eol_fix",
+        target_type: "git_eol_session",
+        target_id: preview.value.session_id,
+        payload_after: {
+          mode: "working_tree",
+          files: selectedPaths.value,
+          fixed_files: fixResult.value.fixed_files.map((file) => file.path),
+          total_restored_eol_lines: fixResult.value.total_restored_eol_lines
+        }
+      }).catch(() => undefined);
+    }
     if (isWorkingTreeMode.value) {
       const appliedCount = fixResult.value.fixed_files.filter((f) => f.worktree_changed).length;
       const committableCount = fixResult.value.fixed_files.filter((f) => f.committable).length;

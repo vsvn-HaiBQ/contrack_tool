@@ -4,6 +4,7 @@ import LoadingCircle from "../../shared/LoadingCircle.vue";
 import { localServerApi, localServerBase, type CodexModelOption } from "../../shared/localServer";
 import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
+import { auditApi } from "../audit/api";
 import { usersApi } from "../users/api";
 import type { BuildJobLog, DocumentTranslationJob, DocumentTranslationSettings } from "../../shared/types";
 
@@ -317,6 +318,21 @@ function startPolling() {
       job.value = next;
       if (["succeeded", "failed", "canceled"].includes(next.status)) {
         stopPolling();
+        void auditApi.record({
+          action: "document_translation_complete",
+          target_type: "document_translation_job",
+          target_id: next.job_id,
+          payload_after: {
+            status: next.status,
+            error: next.error,
+            filePath: form.filePath,
+            outputPath: next.result?.output_path ?? null,
+            direction: direction.value,
+            model: (next.result?.model ?? form.model.trim()) || null,
+            totalSegments: next.result?.total_segments ?? null,
+            translatedSegments: next.progress?.translated_segments ?? null
+          }
+        }).catch(() => undefined);
         showToast(
           next.status === "succeeded" ? "Document translated" : next.status === "canceled" ? "Translation stopped" : next.error || "Translation failed",
           next.status === "succeeded" ? "success" : "error"
@@ -365,6 +381,22 @@ async function startTranslation() {
       glossary: form.glossary,
       instructions: form.instructions,
     });
+    void auditApi.record({
+      action: "document_translation_start",
+      target_type: "document_translation_job",
+      target_id: job.value.job_id,
+      payload_after: {
+        filePath: form.filePath,
+        outputDirectory: form.outputDirectory || null,
+        direction: direction.value,
+        model: form.model.trim() || null,
+        reasoningEffort: form.reasoningEffort,
+        fastMode: form.fastMode,
+        timeoutSeconds: form.timeoutSeconds,
+        batchSize: form.batchSize,
+        contextWindow: form.contextWindow
+      }
+    }).catch(() => undefined);
     startPolling();
   } catch (error) {
     showToast((error as Error).message, "error");
