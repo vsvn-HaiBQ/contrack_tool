@@ -36,6 +36,11 @@ class AuditLogOut(BaseModel):
             return {"value": value}
         return parsed if isinstance(parsed, dict) else None
 
+    @field_validator("ip", mode="before")
+    @classmethod
+    def stringify_ip(cls, value):
+        return str(value) if value is not None else None
+
 
 class AuditLogListResponse(BaseModel):
     items: list[AuditLogOut]
