@@ -64,16 +64,16 @@ class AuditEventCreateRequest(BaseModel):
 
 
 class AuditDeleteRequest(BaseModel):
-    ids: list[int]
-
-
-class AuditUpdateNotesRequest(BaseModel):
-    notes: str | None = None = Field(default_factory=list)
+    ids: list[int] = Field(default_factory=list)
     action: str | None = None
     actor_username: str | None = None
     target_type: str | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
+
+
+class AuditUpdateNotesRequest(BaseModel):
+    notes: str | None = None
 
 
 class LoginRequest(BaseModel):
