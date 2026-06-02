@@ -1,5 +1,5 @@
 import { http } from "../../shared/http";
-import type { AuditLogListResponse } from "../../shared/types";
+import type { AuditLog, AuditLogListResponse } from "../../shared/types";
 
 export type AuditFilters = {
   action?: string;
@@ -26,5 +26,6 @@ export const auditApi = {
   list: (filters: AuditFilters) => http<AuditLogListResponse>(`/audit${listQuery(filters)}`),
   options: () => http<{ actions: string[]; actor_usernames: string[]; target_types: string[] }>("/audit/options"),
   record: (payload: unknown) => http("/audit/events", { method: "POST", body: JSON.stringify(payload) }),
-  delete: (payload: unknown) => http<{ message: string }>("/audit", { method: "DELETE", body: JSON.stringify(payload) })
+  delete: (payload: unknown) => http<{ message: string }>("/audit", { method: "DELETE", body: JSON.stringify(payload) }),
+  updateNotes: (id: number, notes: string | null) => http<AuditLog>(`/audit/${id}/notes`, { method: "PATCH", body: JSON.stringify({ notes }) })
 };

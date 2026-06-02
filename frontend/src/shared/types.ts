@@ -11,6 +11,7 @@ export type AuditLog = {
   payload_after: Record<string, unknown> | null;
   ip: string | null;
   user_agent: string | null;
+  notes: string | null;
   created_at: string;
 };
 

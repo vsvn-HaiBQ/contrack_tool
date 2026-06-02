@@ -69,6 +69,10 @@ const buildPanels = computed(() => {
   return keys.map((key) => buildPanel(key, key === "client" ? "Client Log" : "Server Log", targets[key]!));
 });
 
+const buildPanelsGridClass = computed(() => {
+  return buildPanels.value.length === 1 ? "" : "xl:grid-cols-2";
+});
+
 const artifacts = computed(() => {
   const current = job.value;
   if (!current) return [];
@@ -321,6 +325,23 @@ async function handleAutoUploadToggle() {
 async function validateDirectory(path: string, label: string) {
   const result = await localServerApi.validatePath(path, true);
   if (!result.valid) {
+    // If folder doesn't exist, ask user if they want to create it
+    if (!result.exists && result.path) {
+      const shouldCreate = window.confirm(`Folder does not exist:\n${result.path}\n\nDo you want to create it?`);
+      
+      if (shouldCreate) {
+        try {
+          await localServerApi.createDirectory(result.path);
+          showToast(`Created folder: ${result.path}`, "success");
+          localServerOnline.value = true;
+          return result.path;
+        } catch (error) {
+          throw new Error(`Failed to create ${label}: ${(error as Error).message}`);
+        }
+      } else {
+        throw new Error(`${label}: ${result.message}`);
+      }
+    }
     throw new Error(`${label}: ${result.message}`);
   }
   localServerOnline.value = true;
@@ -565,9 +586,22 @@ async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
     showToast(`Uploaded ${result.items.length} artifact(s) to Box; ${linkMessage}`, "success");
   } catch (error) {
     uploadedBoxJobIds[targetJob.job_id] = true;
-    appendBoxUploadLog(targetJob, "error", (error as Error).message);
+    const errorMsg = (error as Error).message;
+    appendBoxUploadLog(targetJob, "error", errorMsg);
     setBoxUploadStatus("failed");
-    showToast((error as Error).message, "error");
+    
+    // Check if error is related to token expiry
+    if (error instanceof HttpError && (error.status === 400 || error.status === 502)) {
+      if (errorMsg.includes("authorization") || errorMsg.includes("token") || errorMsg.includes("refresh")) {
+        appendBoxUploadLog(targetJob, "warn", "Box authorization may have expired. Please reconnect to Box.");
+        showToast("Box authorization expired. Please reconnect.", "warning");
+        // Reset Box connection status
+        boxStatus.value = { configured: true, connected: false, message: "Box authorization is required" };
+        form.uploadToBox = false;
+        return;
+      }
+    }
+    showToast(errorMsg, "error");
   } finally {
     delete uploadingBoxJobIds[targetJob.job_id];
     refreshUploadingToBox();
@@ -739,7 +773,7 @@ onBeforeUnmount(stopPolling);
       </div>
     </form>
 
-    <div v-if="buildPanels.length" class="grid gap-4 xl:grid-cols-2">
+    <div v-if="buildPanels.length" class="grid gap-4" :class="buildPanelsGridClass">
       <div v-for="panel in buildPanels" :key="panel.key" class="relative grid gap-3 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
         <button
           v-if="canStopWorker(panel.job.status)"

@@ -127,6 +127,8 @@ export const localServerApi = {
     localHttp<{ ok: boolean }>("/shell/open-containing-folder", jsonBody({ path: targetPath })),
   validatePath: (targetPath: string, mustBeDirectory = true) =>
     localHttp<LocalPathValidation>("/filesystem/validate-path", jsonBody({ path: targetPath, mustBeDirectory })),
+  createDirectory: (targetPath: string) =>
+    localHttp<{ ok: boolean; path: string; message: string }>("/filesystem/create-directory", jsonBody({ path: targetPath })),
   build: {
     start: (payload: unknown) => localHttp<import("./types").BuildJob>("/build/start", jsonBody(payload)),
     getJob: (jobId: string) => localHttp<import("./types").BuildJob>(`/build/jobs/${encodeURIComponent(jobId)}`),

@@ -303,6 +303,22 @@ async function validateFile(filePath: string) {
 async function validateDirectory(path: string, label: string) {
   const result = await localServerApi.validatePath(path, true);
   if (!result.valid) {
+    // If folder doesn't exist, ask user if they want to create it
+    if (!result.exists && result.path) {
+      const shouldCreate = window.confirm(`Folder does not exist:\n${result.path}\n\nDo you want to create it?`);
+      
+      if (shouldCreate) {
+        try {
+          await localServerApi.createDirectory(result.path);
+          showToast(`Created folder: ${result.path}`, "success");
+          return result.path;
+        } catch (error) {
+          throw new Error(`Failed to create ${label}: ${(error as Error).message}`);
+        }
+      } else {
+        throw new Error(`${label}: ${result.message}`);
+      }
+    }
     throw new Error(`${label}: ${result.message}`);
   }
   return result.path;

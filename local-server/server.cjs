@@ -561,6 +561,22 @@ async function route(req, res) {
     sendJson(req, res, 200, validatePath(await readJson(req)));
     return;
   }
+  if (req.method === "POST" && pathname === "/filesystem/create-directory") {
+    const body = await readJson(req);
+    const targetPath = String(body && body.path ? body.path : "").trim();
+    if (!targetPath) {
+      sendJson(req, res, 400, { ok: false, message: "path is required" });
+      return;
+    }
+    try {
+      const resolved = path.resolve(targetPath);
+      fs.mkdirSync(resolved, { recursive: true });
+      sendJson(req, res, 200, { ok: true, path: resolved, message: "Directory created successfully" });
+    } catch (error) {
+      sendJson(req, res, 500, { ok: false, message: error && error.message ? error.message : "Failed to create directory" });
+    }
+    return;
+  }
   if (req.method === "GET" && pathname === "/document-translation/health") {
     sendJson(req, res, 200, await documentTranslationHealth({
       openXmlBaseUrl: url.searchParams.get("openXmlBaseUrl") || url.searchParams.get("openxml_base_url") || undefined,
