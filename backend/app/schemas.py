@@ -21,7 +21,6 @@ class AuditLogOut(BaseModel):
     payload_after: dict | None = None
     ip: str | None = None
     user_agent: str | None = None
-    notes: str | None = None
     created_at: datetime
 
     @field_validator("payload_before", "payload_after", mode="before")
@@ -70,10 +69,6 @@ class AuditDeleteRequest(BaseModel):
     target_type: str | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
-
-
-class AuditUpdateNotesRequest(BaseModel):
-    notes: str | None = None
 
 
 class LoginRequest(BaseModel):

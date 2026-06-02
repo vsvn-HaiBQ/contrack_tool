@@ -10,8 +10,6 @@ const deleting = ref(false);
 const rows = ref<AuditLog[]>([]);
 const total = ref(0);
 const payloadModal = ref<{ title: string; payload: string } | null>(null);
-const editingNotes = reactive<Record<number, boolean>>({});
-const notesBuffer = reactive<Record<number, string>>({});
 const options = reactive({
   actions: [] as string[],
   actor_usernames: [] as string[],
@@ -129,29 +127,6 @@ async function deleteSelected() {
   }
 }
 
-function startEditNotes(row: AuditLog) {
-  editingNotes[row.id] = true;
-  notesBuffer[row.id] = row.notes ?? "";
-}
-
-function cancelEditNotes(rowId: number) {
-  delete editingNotes[rowId];
-  delete notesBuffer[rowId];
-}
-
-async function saveNotes(row: AuditLog) {
-  const notes = notesBuffer[row.id]?.trim() || null;
-  try {
-    const updated = await auditApi.updateNotes(row.id, notes);
-    row.notes = updated.notes;
-    delete editingNotes[row.id];
-    delete notesBuffer[row.id];
-    showToast("Notes updated", "success");
-  } catch (error) {
-    showToast((error as Error).message, "error");
-  }
-}
-
 function nextPage() {
   if (filters.offset + filters.limit >= total.value) return;
   filters.offset += filters.limit;
@@ -235,7 +210,7 @@ onMounted(async () => {
 
     <div class="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
       <div class="max-h-[510px] overflow-auto">
-        <div class="sticky top-0 z-10 grid min-w-[1180px] grid-cols-[40px_150px_80px_minmax(130px,0.8fr)_minmax(240px,1.4fr)_minmax(180px,1fr)_68px] items-center gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-xs font-medium uppercase tracking-wide text-[#5C5E62]">
+        <div class="sticky top-0 z-10 grid min-w-[940px] grid-cols-[40px_170px_84px_minmax(150px,0.9fr)_minmax(280px,1.6fr)_72px] items-center gap-4 border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-xs font-medium uppercase tracking-wide text-[#5C5E62]">
           <div class="flex items-center justify-center">
             <input
               type="checkbox"
@@ -248,65 +223,26 @@ onMounted(async () => {
           <span>User</span>
           <span>Action</span>
           <span>Target</span>
-          <span>Notes</span>
           <span>Payload</span>
         </div>
-        <div v-if="loading" class="flex min-w-[1180px] items-center gap-2 px-4 py-8 text-sm text-[#5C5E62]">
+        <div v-if="loading" class="flex min-w-[940px] items-center gap-2 px-4 py-8 text-sm text-[#5C5E62]">
           <LoadingCircle class="text-[#3E6AE1]" />
           Loading audit logs...
         </div>
-        <div v-else-if="!rows.length" class="min-w-[1180px] px-4 py-8 text-sm text-[#5C5E62]">No audit logs found.</div>
+        <div v-else-if="!rows.length" class="min-w-[940px] px-4 py-8 text-sm text-[#5C5E62]">No audit logs found.</div>
         <div
           v-else
           v-for="row in rows"
           :key="row.id"
-          class="grid min-w-[1180px] grid-cols-[40px_150px_80px_minmax(130px,0.8fr)_minmax(240px,1.4fr)_minmax(180px,1fr)_68px] items-start gap-3 border-b border-neutral-200 px-4 py-3 text-sm last:border-b-0"
+          class="grid min-w-[940px] grid-cols-[40px_170px_84px_minmax(150px,0.9fr)_minmax(280px,1.6fr)_72px] items-start gap-4 border-b border-neutral-200 px-4 py-3 text-sm last:border-b-0"
         >
           <div class="flex items-center justify-center pt-0.5">
             <input v-model="selectedIds[row.id]" type="checkbox" class="size-4 rounded border-neutral-300 accent-[#3E6AE1]" />
           </div>
           <span class="text-xs leading-5 text-[#5C5E62]">{{ formatDate(row.created_at) }}</span>
           <span class="min-w-0 truncate font-medium leading-5 text-[#171A20]" :title="row.actor_username">{{ row.actor_username }}</span>
-          <span class="min-w-0 break-words leading-5 text-[#171A20]">{{ row.action }}</span>
-          <span class="min-w-0 break-words leading-5 text-[#393C41]">{{ row.target_type }}<template v-if="row.target_id">: {{ row.target_id }}</template></span>
-          <div class="min-w-0">
-            <div v-if="editingNotes[row.id]" class="flex flex-col gap-1">
-              <textarea
-                v-model="notesBuffer[row.id]"
-                class="min-h-16 w-full rounded border border-[#D0D1D2] px-2 py-1 text-xs outline-none transition focus:border-[#3E6AE1]"
-                placeholder="Add notes..."
-              ></textarea>
-              <div class="flex gap-1">
-                <button
-                  type="button"
-                  class="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100"
-                  @click="saveNotes(row)"
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  class="rounded border border-neutral-200 bg-white px-2 py-1 text-xs font-medium text-[#393C41] transition hover:bg-neutral-100"
-                  @click="cancelEditNotes(row.id)"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-            <div v-else class="flex items-start gap-1">
-              <span class="min-w-0 flex-1 break-words text-xs leading-5 text-[#5C5E62]">{{ row.notes || "-" }}</span>
-              <button
-                type="button"
-                class="shrink-0 inline-flex size-5 items-center justify-center rounded border border-neutral-200 bg-white text-[#393C41] transition hover:bg-neutral-100"
-                title="Edit notes"
-                @click="startEditNotes(row)"
-              >
-                <svg viewBox="0 0 20 20" fill="none" class="size-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-                  <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"></path>
-                </svg>
-              </button>
-            </div>
-          </div>
+          <span class="min-w-0 wrap-break-word leading-5 text-[#171A20]">{{ row.action }}</span>
+          <span class="min-w-0 wrap-break-word leading-5 text-[#393C41]">{{ row.target_type }}<template v-if="row.target_id">: {{ row.target_id }}</template></span>
           <button
             type="button"
             class="inline-flex min-h-7 items-center justify-center rounded border border-neutral-200 bg-white px-2 text-xs font-medium text-[#3E6AE1] transition hover:bg-neutral-50"

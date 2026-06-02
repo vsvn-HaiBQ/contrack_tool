@@ -7,7 +7,7 @@ from app.db import get_db
 from app.dependencies import get_admin_user, get_current_user, request_meta
 from app.models import AuditLog, User
 from app.modules.audit.service import write_audit_log
-from app.schemas import AuditDeleteRequest, AuditEventCreateRequest, AuditLogListResponse, AuditLogOptionsResponse, AuditLogOut, AuditUpdateNotesRequest, MessageResponse
+from app.schemas import AuditDeleteRequest, AuditEventCreateRequest, AuditLogListResponse, AuditLogOptionsResponse, AuditLogOut, MessageResponse
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -135,19 +135,3 @@ def delete_audit_logs(
     )
     db.commit()
     return MessageResponse(message=f"Deleted {count} audit log(s)")
-
-
-@router.patch("/{audit_id}/notes", response_model=AuditLogOut)
-def update_audit_notes(
-    audit_id: int,
-    payload: AuditUpdateNotesRequest,
-    _: User = Depends(get_admin_user),
-    db: Session = Depends(get_db),
-) -> AuditLogOut:
-    row = db.get(AuditLog, audit_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Audit log not found")
-    row.notes = payload.notes.strip() if payload.notes and payload.notes.strip() else None
-    db.commit()
-    db.refresh(row)
-    return AuditLogOut.model_validate(row)

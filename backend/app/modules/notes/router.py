@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.dependencies import get_admin_user, get_current_user
+from app.dependencies import get_admin_user, get_current_user, request_meta
 from app.models import Note, User
+from app.modules.audit.service import write_audit_log
 from app.schemas import NoteCreateRequest, NoteOut, NoteReorderRequest, NoteUpdateRequest
 
 router = APIRouter(prefix="/notes", tags=["notes"])
@@ -20,6 +21,7 @@ def list_notes(
 @router.post("", response_model=NoteOut, status_code=201)
 def create_note(
     payload: NoteCreateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> NoteOut:
@@ -31,6 +33,16 @@ def create_note(
         position=max_pos,
     )
     db.add(note)
+    db.flush()
+    write_audit_log(
+        db,
+        actor=user,
+        action="create_note",
+        target_type="note",
+        target_id=str(note.id),
+        payload_after={"title": note.title, "content": note.content},
+        **request_meta(request),
+    )
     db.commit()
     db.refresh(note)
     return note
@@ -54,6 +66,7 @@ def reorder_notes(
 def update_note(
     note_id: int,
     payload: NoteUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> NoteOut:
@@ -62,8 +75,19 @@ def update_note(
         raise HTTPException(status_code=404, detail="Note not found")
     if note.locked and user.role != "admin":
         raise HTTPException(status_code=403, detail="Note is locked")
+    payload_before = {"title": note.title, "content": note.content}
     note.title = payload.title.strip()
     note.content = payload.content
+    write_audit_log(
+        db,
+        actor=user,
+        action="update_note",
+        target_type="note",
+        target_id=str(note_id),
+        payload_before=payload_before,
+        payload_after={"title": note.title, "content": note.content},
+        **request_meta(request),
+    )
     db.commit()
     db.refresh(note)
     return note
@@ -72,6 +96,7 @@ def update_note(
 @router.delete("/{note_id}", status_code=204)
 def delete_note(
     note_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> None:
@@ -80,6 +105,15 @@ def delete_note(
         raise HTTPException(status_code=404, detail="Note not found")
     if note.locked and user.role != "admin":
         raise HTTPException(status_code=403, detail="Note is locked")
+    write_audit_log(
+        db,
+        actor=user,
+        action="delete_note",
+        target_type="note",
+        target_id=str(note_id),
+        payload_before={"title": note.title, "content": note.content},
+        **request_meta(request),
+    )
     db.delete(note)
     db.commit()
 
@@ -87,13 +121,24 @@ def delete_note(
 @router.patch("/{note_id}/lock", response_model=NoteOut)
 def toggle_lock(
     note_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(get_admin_user),
+    actor: User = Depends(get_admin_user),
 ) -> NoteOut:
     note = db.get(Note, note_id)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
-    note.locked = not note.locked
+    new_locked = not note.locked
+    note.locked = new_locked
+    write_audit_log(
+        db,
+        actor=actor,
+        action="lock_note" if new_locked else "unlock_note",
+        target_type="note",
+        target_id=str(note_id),
+        payload_after={"title": note.title, "locked": new_locked},
+        **request_meta(request),
+    )
     db.commit()
     db.refresh(note)
     return note
