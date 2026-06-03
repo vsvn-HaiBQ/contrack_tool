@@ -8,6 +8,7 @@ import LogtimePage from "./modules/logtime/LogtimePage.vue";
 import PullRequestPage from "./modules/pull_requests/PullRequestPage.vue";
 import GitEolPage from "./modules/git_eol/GitEolPage.vue";
 import BuildSourcePage from "./modules/build_source/BuildSourcePage.vue";
+import ConfluencePreviewPage from "./modules/confluence_preview/ConfluencePreviewPage.vue";
 import DocumentTranslationPage from "./modules/document_translation/DocumentTranslationPage.vue";
 import NotesPage from "./modules/notes/NotesPage.vue";
 import AuditPage from "./modules/audit/AuditPage.vue";
@@ -40,6 +41,7 @@ const router = createRouter({
         { path: "pull-requests", name: "pull-requests", component: PullRequestPage },
         { path: "git-eol", name: "git-eol", component: GitEolPage, meta: { keepAlive: true } },
         { path: "build-source", name: "build-source", component: BuildSourcePage, meta: { keepAlive: true } },
+        { path: "confluence-preview", name: "confluence-preview", component: ConfluencePreviewPage, meta: { keepAlive: true } },
         { path: "document-translation", name: "document-translation", component: DocumentTranslationPage, meta: { keepAlive: true } },
         { path: "notes", name: "notes", component: NotesPage },
         { path: "audit", name: "audit", component: AuditPage, meta: { adminOnly: true } },
@@ -49,6 +51,11 @@ const router = createRouter({
 });
 
 const nodeOnlyRouteNames = new Set(["git-eol", "build-source", "document-translation"]);
+const qaRestrictedRouteNames = new Set(["pull-requests", "git-eol", "build-source"]);
+
+function isQaUser() {
+  return String(sessionState.me?.role ?? "").trim().toLowerCase() === "qa";
+}
 
 async function isNodeServerAvailable() {
   try {
@@ -73,7 +80,7 @@ router.beforeEach(async (to) => {
   if (
     authenticated &&
     !hasRequiredRedmineKeys() &&
-    !["settings", "git-eol", "build-source", "document-translation", "login"].includes(String(to.name))
+    !["settings", "git-eol", "build-source", "confluence-preview", "document-translation", "login"].includes(String(to.name))
   ) {
     return { name: "settings" };
   }
@@ -81,6 +88,9 @@ router.beforeEach(async (to) => {
     return { name: defaultRouteName() };
   }
   if (authenticated && to.meta.adminOnly && sessionState.me?.role !== "admin") {
+    return { name: defaultRouteName() };
+  }
+  if (authenticated && isQaUser() && qaRestrictedRouteNames.has(String(to.name))) {
     return { name: defaultRouteName() };
   }
   if (authenticated && nodeOnlyRouteNames.has(String(to.name)) && !(await isNodeServerAvailable())) {

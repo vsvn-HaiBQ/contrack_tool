@@ -36,6 +36,12 @@ def get_admin_user(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def get_non_qa_user(user: User = Depends(get_current_user)) -> User:
+    if user.role == "qa":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="QA users cannot access this feature")
+    return user
+
+
 def request_meta(request: Request) -> dict[str, str | None]:
     return {
         "ip": request.client.host if request.client else None,

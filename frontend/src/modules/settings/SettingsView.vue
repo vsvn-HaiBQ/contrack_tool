@@ -287,7 +287,8 @@ const emit = defineEmits<{
           <span></span>
           <input v-model="createUserForm.username" placeholder="username" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
           <select v-model="createUserForm.role" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
-            <option value="user">user</option>
+            <option value="dev">dev</option>
+            <option value="qa">qa</option>
             <option value="admin">admin</option>
           </select>
           <input v-model="createUserForm.password" type="password" placeholder="password" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />

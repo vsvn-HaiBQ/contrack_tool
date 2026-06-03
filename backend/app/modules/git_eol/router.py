@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.dependencies import get_current_user, get_optional_user, request_meta
+from app.dependencies import get_non_qa_user, get_optional_user, request_meta
 from app.models import User, UserSettings
 from app.modules.audit.service import write_audit_log
 from app.modules.git_eol.jobs import (
@@ -61,7 +61,7 @@ def _job_to_response(payload: dict) -> GitEolJobResponse:
 @router.post("/preview", response_model=GitEolJobStatus)
 def enqueue_preview(
     payload: GitEolPreviewRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_non_qa_user),
     user_settings: UserSettings = Depends(get_current_user_settings),  # noqa: ARG001 - validates configured
     db: Session = Depends(get_db),
 ) -> GitEolJobStatus:
@@ -83,7 +83,7 @@ def enqueue_preview(
 
 
 @router.get("/jobs/{job_id}", response_model=GitEolJobResponse)
-def fetch_job(job_id: str, user: User = Depends(get_current_user)) -> GitEolJobResponse:
+def fetch_job(job_id: str, user: User = Depends(get_non_qa_user)) -> GitEolJobResponse:
     payload = get_job(job_id)
     if not payload:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -93,7 +93,7 @@ def fetch_job(job_id: str, user: User = Depends(get_current_user)) -> GitEolJobR
 
 
 @router.get("/jobs/{job_id}/logs", response_model=list[GitEolJobLog])
-def fetch_job_logs(job_id: str, user: User = Depends(get_current_user)) -> list[GitEolJobLog]:
+def fetch_job_logs(job_id: str, user: User = Depends(get_non_qa_user)) -> list[GitEolJobLog]:
     payload = get_job(job_id)
     if not payload:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -112,6 +112,8 @@ def stream_job(
         raise HTTPException(status_code=404, detail="Job not found")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    if user.role == "qa":
+        raise HTTPException(status_code=403, detail="QA users cannot access this feature")
     if payload.get("user_id") != user.id:
         raise HTTPException(status_code=403, detail="Job belongs to another user")
 
@@ -140,7 +142,7 @@ def stream_job(
 def fetch_diff(
     session_id: str,
     path: str = Query(..., min_length=1),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_non_qa_user),
 ) -> GitEolDiffResponse:
     try:
         diff = service.unified_diff(user=user, session_id=session_id, path=path)
@@ -160,7 +162,7 @@ def fetch_structured_diff(
     left_end: int | None = Query(None, ge=1),
     right_start: int | None = Query(None, ge=1),
     right_end: int | None = Query(None, ge=1),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_non_qa_user),
 ) -> GitEolStructuredDiffResponse:
     try:
         result = service.structured_diff(
@@ -184,7 +186,7 @@ def fetch_structured_diff(
 def fix_git_eol(
     payload: GitEolFixRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_non_qa_user),
     db: Session = Depends(get_db),
 ) -> GitEolFixResponse:
     try:
@@ -212,7 +214,7 @@ def fix_git_eol(
 def commit_git_eol(
     payload: GitEolCommitRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_non_qa_user),
     db: Session = Depends(get_db),
 ) -> GitEolCommitResponse:
     try:
@@ -237,7 +239,7 @@ def commit_git_eol(
 def push_git_eol(
     payload: GitEolPushRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_non_qa_user),
     user_settings: UserSettings = Depends(get_current_user_settings),
     db: Session = Depends(get_db),
 ) -> GitEolPushResponse:

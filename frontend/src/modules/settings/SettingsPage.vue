@@ -20,7 +20,7 @@ const savingBoxSettings = ref(false);
 const createUserForm = reactive({
   username: "",
   password: "",
-  role: "user"
+  role: "dev"
 });
 const boxSettings = reactive({
   client_id: "",
@@ -205,7 +205,7 @@ async function createUser() {
     sessionState.users = await usersApi.list();
     createUserForm.username = "";
     createUserForm.password = "";
-    createUserForm.role = "user";
+    createUserForm.role = "dev";
     showCreateUserRow.value = false;
     showToast("User created", "success");
   } catch (error) {

@@ -1,6 +1,6 @@
 DO $$
 BEGIN
-    CREATE TYPE user_role AS ENUM ('admin', 'user');
+    CREATE TYPE user_role AS ENUM ('admin', 'dev', 'qa');
 EXCEPTION
     WHEN duplicate_object THEN NULL;
 END $$;

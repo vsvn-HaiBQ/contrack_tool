@@ -104,7 +104,7 @@ class SetupStatusResponse(BaseModel):
 class UserCreateRequest(BaseModel):
     username: str
     password: str
-    role: str = "user"
+    role: str = "dev"
 
 
 class ChangePasswordRequest(BaseModel):

@@ -8,10 +8,20 @@ from app.models import User, UserSettings
 from app.schemas import DocumentTranslationSettingsOut, UserSettingsOut
 
 _UNSET = object()
+VALID_USER_ROLES = {"admin", "dev", "qa"}
+
+
+def validate_role(role: str) -> str:
+    value = str(role or "").strip().lower()
+    if value == "user":
+        value = "dev"
+    if value not in VALID_USER_ROLES:
+        raise ValueError("Role must be admin, dev, or qa")
+    return value
 
 
 def create_user_record(db: Session, *, username: str, password: str, role: str) -> User:
-    user = User(username=username, password_hash=hash_password(password), role=role)
+    user = User(username=username, password_hash=hash_password(password), role=validate_role(role))
     db.add(user)
     db.flush()
     db.add(UserSettings(user_id=user.id))

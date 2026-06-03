@@ -25,9 +25,10 @@ let lastReleaseCheckAt = 0;
 const tabs = [
   { key: "/tickets/detail", label: "Ticket Detail" },
   { key: "/tickets/sync", label: "Sync Ticket" },
-  { key: "/pull-requests", label: "Create PR" },
-  { key: "/git-eol", label: "Fix EOL", requiresNode: true },
-  { key: "/build-source", label: "Build Source", requiresNode: true },
+  { key: "/pull-requests", label: "Create PR", hiddenForRoles: ["qa"] },
+  { key: "/git-eol", label: "Fix EOL", requiresNode: true, hiddenForRoles: ["qa"] },
+  { key: "/build-source", label: "Build Source", requiresNode: true, hiddenForRoles: ["qa"] },
+  { key: "/confluence-preview", label: "Confluence Preview" },
   { key: "/document-translation", label: "Translate Docs", requiresNode: true },
   { key: "/logtime", label: "Logtime" },
   { key: "/notes", label: "Notes" },
@@ -35,7 +36,18 @@ const tabs = [
 ];
 
 const nodeOnlyRoutes = new Set(["/git-eol", "/build-source", "/document-translation"]);
-const visibleTabs = computed(() => tabs.filter((tab) => (!tab.requiresNode || nodeServerOnline.value) && (!tab.adminOnly || sessionState.me?.role === "admin")));
+function normalizedRole() {
+  return String(sessionState.me?.role ?? "").trim().toLowerCase();
+}
+
+const visibleTabs = computed(() =>
+  tabs.filter(
+    (tab) =>
+      (!tab.requiresNode || nodeServerOnline.value) &&
+      (!tab.adminOnly || sessionState.me?.role === "admin") &&
+      !(tab.hiddenForRoles ?? []).includes(normalizedRole())
+  )
+);
 const nodeServerWarning = computed(() => {
   if (nodeServerChecked.value && !nodeServerOnline.value) {
     return `Node server offline: ${localServerBase}. Local tools hidden.`;
