@@ -282,14 +282,20 @@ async function selectDirectory(currentPath) {
 }
 
 async function selectFile(currentPath) {
+  const paths = await selectFiles(currentPath, false);
+  return paths.length ? paths[0] : null;
+}
+
+async function selectFiles(currentPath, allowMultiple = true) {
   if (process.platform !== "win32") {
     throw new Error("File picker is only supported on Windows local server");
   }
+  const multiselectFlag = allowMultiple ? "$true" : "$false";
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
     "$initial = $env:CONTRACK_INITIAL_FILE_PATH",
-    "$selected = $null",
+    "$selected = @()",
     "Add-Type -AssemblyName System.Windows.Forms",
     "Add-Type -AssemblyName System.Drawing",
     "[System.Windows.Forms.Application]::EnableVisualStyles()",
@@ -304,7 +310,7 @@ async function selectFile(currentPath) {
     "$dialog = New-Object System.Windows.Forms.OpenFileDialog",
     "$dialog.Title = 'Select document'",
     "$dialog.Filter = 'Supported documents (*.txt;*.md;*.docx;*.xlsx;*.pptx)|*.txt;*.md;*.docx;*.xlsx;*.pptx|Text documents (*.txt;*.md)|*.txt;*.md|Office documents (*.docx;*.xlsx;*.pptx)|*.docx;*.xlsx;*.pptx|All files (*.*)|*.*'",
-    "$dialog.Multiselect = $false",
+    `$dialog.Multiselect = ${multiselectFlag}`,
     "if (![string]::IsNullOrWhiteSpace($initial)) {",
     "  if (Test-Path -LiteralPath $initial -PathType Leaf) {",
     "    $dialog.InitialDirectory = [System.IO.Path]::GetDirectoryName($initial)",
@@ -313,10 +319,10 @@ async function selectFile(currentPath) {
     "    $dialog.InitialDirectory = $initial",
     "  }",
     "}",
-    "if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $selected = $dialog.FileName }",
+    "if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $selected = $dialog.FileNames }",
     "$owner.Close()",
     "$owner.Dispose()",
-    "if (![string]::IsNullOrWhiteSpace($selected)) { [Console]::Out.WriteLine($selected) }",
+    "foreach ($path in $selected) { if (![string]::IsNullOrWhiteSpace($path)) { [Console]::Out.WriteLine($path) } }",
   ].join("\r\n");
   const output = await runProcess(
     "powershell.exe",
@@ -329,7 +335,10 @@ async function selectFile(currentPath) {
       windowsHide: true,
     }
   );
-  return output.trim() || null;
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
 }
 
 async function openPath(targetPath) {
@@ -543,6 +552,11 @@ async function route(req, res) {
   if (req.method === "POST" && pathname === "/dialog/select-file") {
     const body = await readJson(req);
     sendJson(req, res, 200, { path: await selectFile(body.currentPath) });
+    return;
+  }
+  if (req.method === "POST" && pathname === "/dialog/select-files") {
+    const body = await readJson(req);
+    sendJson(req, res, 200, { paths: await selectFiles(body.currentPath, true) });
     return;
   }
   if (req.method === "POST" && pathname === "/shell/open-path") {

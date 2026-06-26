@@ -148,6 +148,7 @@ class UserSettingsIn(BaseModel):
     github_token: str | None = None
     team_automate_url: str | None = None
     default_assignee_id: int | None = None
+    pinned_version_id: int | None = None
     document_translation: DocumentTranslationSettingsIn | None = None
 
 
@@ -157,6 +158,7 @@ class UserSettingsOut(BaseModel):
     github_token: str | None = None
     team_automate_url: str | None = None
     default_assignee_id: int | None = None
+    pinned_version_id: int | None = None
     document_translation: DocumentTranslationSettingsOut = Field(default_factory=DocumentTranslationSettingsOut)
 
 
@@ -180,6 +182,46 @@ class SystemSettingsUpdate(BaseModel):
     values: dict[str, str | None]
 
 
+class VersionIn(BaseModel):
+    name: str
+    default_base_branch: str | None = None
+    client_folder_id: str | None = None
+    server_folder_id: str | None = None
+    client_baseline_folder: str | None = None
+    server_baseline_folder: str | None = None
+    position: int | None = None
+
+
+class VersionUpdate(BaseModel):
+    name: str | None = None
+    default_base_branch: str | None = None
+    client_folder_id: str | None = None
+    server_folder_id: str | None = None
+    client_baseline_folder: str | None = None
+    server_baseline_folder: str | None = None
+    position: int | None = None
+
+
+class VersionOut(BaseModel):
+    id: int
+    name: str
+    default_base_branch: str | None = None
+    client_folder_id: str | None = None
+    server_folder_id: str | None = None
+    client_baseline_folder: str | None = None
+    server_baseline_folder: str | None = None
+    position: int = 0
+    updated_by: str | None = None
+
+
+class VersionListResponse(BaseModel):
+    items: list[VersionOut]
+
+
+class PinVersionRequest(BaseModel):
+    version_id: int | None = None
+
+
 class IntegrationStatusItem(BaseModel):
     service: str
     configured: bool
@@ -197,19 +239,19 @@ class IntegrationTestResponse(BaseModel):
     message: str
 
 
+class IntegrationTestRequest(BaseModel):
+    raw_value: str | None = None
+
+
 class BoxSettingsIn(BaseModel):
     client_id: str | None = None
     client_secret: str | None = None
-    server_folder_id: str | None = None
-    client_folder_id: str | None = None
     shared_link_access: str | None = None
 
 
 class BoxSettingsOut(BaseModel):
     client_id: str | None = None
     client_secret_configured: bool = False
-    server_folder_id: str | None = None
-    client_folder_id: str | None = None
     shared_link_access: str = "company"
     updated_by: str | None = None
 
@@ -236,6 +278,7 @@ class BoxUploadAccessResponse(BaseModel):
     client_folder_id: str
     server_folder_id: str
     shared_link_access: str
+    is_baseline: bool = False
 
 
 class AssigneeOption(BaseModel):
@@ -270,6 +313,11 @@ class VerifySyncResponse(BaseModel):
     candidates: list[VNTicketReference]
 
 
+class SyncSubtaskRequest(BaseModel):
+    title: str
+    assignee_id: int | None = None
+
+
 class SyncActionRequest(BaseModel):
     jp_issue_id: int
     mode: str = Field(pattern="^(link|create_new)$")
@@ -279,7 +327,7 @@ class SyncActionRequest(BaseModel):
     parent_issue_id: int | None = None
     related_ticket_id: int | None = None
     existing_vn_issue_id: int | None = None
-    create_subtasks: list[str] = []
+    create_subtasks: list[SyncSubtaskRequest] = []
     extra_tracker: str | None = None
     force_create: bool = False
 

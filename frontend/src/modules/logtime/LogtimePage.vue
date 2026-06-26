@@ -199,18 +199,6 @@ async function save() {
       return original && (original.status !== row.status || original.assignee !== (row.assignee ?? ""));
     });
 
-    if (changedMetaRows.length) {
-      const updateResults = await Promise.allSettled(
-        changedMetaRows.map((row) =>
-          ticketsApi.updateIssue(row.issue_id, { status: row.status, assignee: row.assignee ?? "" })
-        )
-      );
-      const failedUpdates = updateResults.filter((item) => item.status === "rejected");
-      if (failedUpdates.length) {
-        showToast(`Status/assignee updated ${changedMetaRows.length - failedUpdates.length}/${changedMetaRows.length}`, "warning");
-      }
-    }
-
     const changedLogtimeRows = rows.value
       .filter((row) => !isStory(row))
       .filter((row) => {
@@ -233,6 +221,18 @@ async function save() {
           rows: changedLogtimeRows
         })
       : [];
+
+    if (changedMetaRows.length) {
+      const updateResults = await Promise.allSettled(
+        changedMetaRows.map((row) =>
+          ticketsApi.updateIssue(row.issue_id, { status: row.status, assignee: row.assignee ?? "" })
+        )
+      );
+      const failedUpdates = updateResults.filter((item) => item.status === "rejected");
+      if (failedUpdates.length) {
+        showToast(`Status/assignee updated ${changedMetaRows.length - failedUpdates.length}/${changedMetaRows.length}`, "warning");
+      }
+    }
 
     snapshotRows(rows.value);
     showToast(

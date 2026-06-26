@@ -62,7 +62,7 @@ def normalize_shared_link_access(value: object) -> str:
 
 
 def is_configured(row: BoxIntegrationSetting) -> bool:
-    return bool(row.client_id and row.client_secret_enc and row.server_folder_id and row.client_folder_id)
+    return bool(row.client_id and row.client_secret_enc)
 
 
 def is_connected(user_settings: UserSettings) -> bool:
@@ -73,8 +73,6 @@ def serialize_settings(row: BoxIntegrationSetting) -> dict:
     return {
         "client_id": row.client_id,
         "client_secret_configured": bool(row.client_secret_enc),
-        "server_folder_id": row.server_folder_id,
-        "client_folder_id": row.client_folder_id,
         "shared_link_access": row.shared_link_access or "company",
         "updated_by": row.updated_by,
     }
@@ -103,10 +101,6 @@ def apply_settings(row: BoxIntegrationSetting, values: dict[str, object], *, act
     if "client_secret" in values:
         client_secret = normalize_optional_text(values["client_secret"])
         row.client_secret_enc = encrypt_secret(client_secret)
-    if "server_folder_id" in values:
-        row.server_folder_id = normalize_folder_id(values["server_folder_id"], "server_folder_id")
-    if "client_folder_id" in values:
-        row.client_folder_id = normalize_folder_id(values["client_folder_id"], "client_folder_id")
     if "shared_link_access" in values:
         row.shared_link_access = normalize_shared_link_access(values["shared_link_access"])
     row.updated_by = actor_username

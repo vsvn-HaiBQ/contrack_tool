@@ -11,7 +11,6 @@ DEFAULT_CSS = """
 
 body {
   margin: 0;
-  background: #f6f7f9;
   color: #172b4d;
   line-height: 1.55;
 }

@@ -65,10 +65,15 @@ function resizePreviewFrame(event: Event) {
           <input
             type="file"
             accept=".confluence"
-            class="w-full cursor-pointer rounded border border-[#D0D1D2] bg-white px-2 py-2 text-[#171A20] outline-none transition file:mr-3 file:cursor-pointer file:rounded file:border-0 file:bg-neutral-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[#393C41] focus:border-[#3E6AE1]"
+            :disabled="loading"
+            class="w-full cursor-pointer rounded border border-[#D0D1D2] bg-white px-2 py-2 text-[#171A20] outline-none transition file:mr-3 file:cursor-pointer file:rounded file:border-0 file:bg-neutral-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[#393C41] focus:border-[#3E6AE1] disabled:cursor-not-allowed disabled:opacity-60"
             @change="selectFile"
           />
         </label>
+        <div v-if="loading" class="flex items-center gap-2 text-sm text-[#5C5E62]">
+          <LoadingCircle />
+          <span>Loading preview...</span>
+        </div>
       </div>
     </div>
 

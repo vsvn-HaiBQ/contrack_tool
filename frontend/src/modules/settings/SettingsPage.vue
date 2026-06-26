@@ -25,8 +25,6 @@ const createUserForm = reactive({
 const boxSettings = reactive({
   client_id: "",
   client_secret: "",
-  server_folder_id: "",
-  client_folder_id: "",
   shared_link_access: "company"
 });
 const boxClientSecretConfigured = ref(false);
@@ -49,8 +47,6 @@ async function loadIntegrationStatuses() {
 function applyBoxSettings(settings: BoxSettings) {
   boxSettings.client_id = settings.client_id ?? "";
   boxSettings.client_secret = "";
-  boxSettings.server_folder_id = settings.server_folder_id ?? "";
-  boxSettings.client_folder_id = settings.client_folder_id ?? "";
   boxSettings.shared_link_access = settings.shared_link_access ?? "company";
   boxClientSecretConfigured.value = settings.client_secret_configured;
 }
@@ -77,8 +73,6 @@ async function saveBoxSettings() {
   try {
     const payload: Record<string, string> = {
       client_id: boxSettings.client_id.trim(),
-      server_folder_id: boxSettings.server_folder_id.trim(),
-      client_folder_id: boxSettings.client_folder_id.trim(),
       shared_link_access: boxSettings.shared_link_access
     };
     if (boxSettings.client_secret.trim()) {
@@ -241,7 +235,11 @@ async function deleteUser(userId: number) {
 async function testIntegration(serviceName: string) {
   testingService.value = serviceName;
   try {
-    const result = await settingsApi.testIntegration(serviceName);
+    let rawValue: string | null = null;
+    if (serviceName === "redmine_jp") rawValue = sessionState.userSettings.redmine_jp_api_key ?? "";
+    else if (serviceName === "redmine_vn") rawValue = sessionState.userSettings.redmine_vn_api_key ?? "";
+    else if (serviceName === "github") rawValue = sessionState.userSettings.github_token ?? "";
+    const result = await settingsApi.testIntegration(serviceName, rawValue);
     integrationStatuses.value = integrationStatuses.value.map((item) =>
       item.service === serviceName ? { ...item, connected: result.success, message: result.message } : item
     );

@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import type { Assignee, SyncResult, TicketCandidate, TrackerOption } from "../../shared/types";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
+import SearchableSelect from "../../shared/SearchableSelect.vue";
 
 const props = defineProps<{
   syncState: {
@@ -21,6 +22,7 @@ const props = defineProps<{
     existing_vn_issue_id: number | null;
     selected_subtasks: string[];
     subtask_titles: Record<string, string>;
+    subtask_assignees: Record<string, number | null>;
     extra_tracker: string;
     force_create: boolean;
     syncing: boolean;
@@ -90,6 +92,9 @@ const subtaskPreview = computed(() =>
 
 const editorTitle = computed(() => `Create ${props.syncState.extra_tracker}`);
 const hasReferenceCandidates = computed(() => props.syncState.candidates.length > 0);
+const assigneeOptions = computed(() =>
+  props.assignees.map((assignee) => ({ value: assignee.id, label: `[${assignee.id}] ${assignee.name}` }))
+);
 const trackerOptions = computed(() => {
   if (props.trackers.length) return props.trackers;
   return [
@@ -322,11 +327,17 @@ function trackerBadgeClass(tracker: string | null | undefined) {
           <div
             v-for="item in subtaskPreview"
             :key="item.key"
-            class="rounded-lg border border-neutral-200 bg-white px-3 py-2"
+            class="grid gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 sm:grid-cols-[1fr_minmax(180px,260px)] sm:items-center"
           >
             <input
               v-model="syncState.subtask_titles[item.key]"
               class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+            />
+            <SearchableSelect
+              :model-value="syncState.subtask_assignees[item.key] ?? syncState.assignee_id ?? null"
+              :options="assigneeOptions"
+              placeholder="Search assignee..."
+              @update:model-value="(value) => (syncState.subtask_assignees[item.key] = value as number | null)"
             />
           </div>
         </div>

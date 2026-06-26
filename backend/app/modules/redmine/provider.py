@@ -209,7 +209,7 @@ def create_vn_ticket_resolved(
     assignee_id: int | None,
     parent_issue_id: int | None,
     related_ticket_id: int | None,
-    create_subtasks: list[str],
+    create_subtasks: list,
     description_template: str | None,
     main_tracker: str | None = None,
 ):
@@ -234,15 +234,25 @@ def create_vn_ticket_resolved(
     subtask_tracker_id = _find_tracker_id(available_trackers, "Sub-task", "Subtask")
     if create_subtasks and subtask_tracker_id is None:
         raise IntegrationConfigError("Project tracker 'Sub-task' is not available")
-    for subtask_name in create_subtasks:
-        # Frontend now sends the full subject; only prefix if missing.
+    for subtask_item in create_subtasks:
+        if isinstance(subtask_item, str):
+            subtask_name = subtask_item
+            subtask_assignee_id = assignee_id
+        elif isinstance(subtask_item, dict):
+            subtask_name = subtask_item.get("title") or ""
+            subtask_assignee_id = subtask_item.get("assignee_id") or assignee_id
+        else:
+            subtask_name = getattr(subtask_item, "title", "") or ""
+            subtask_assignee_id = getattr(subtask_item, "assignee_id", None) or assignee_id
+        if not subtask_name:
+            continue
         prefix = f"#{jp_issue_id}:{"" if subtask_name.lstrip().startswith("【") else " "}"
         full_subject = subtask_name if subtask_name.lstrip().startswith(prefix) else f"{prefix}{subtask_name}"
         subtask = client.create_issue(
             project_id=project_id,
             subject=full_subject,
             tracker_id=subtask_tracker_id,
-            assigned_to_id=assignee_id,
+            assigned_to_id=subtask_assignee_id,
             parent_issue_id=story.issue_id,
         )
         subtasks.append(subtask)
@@ -325,7 +335,12 @@ def build_ticket_detail(
     return {"jp": jp, "story": story, "parent": parent, "children": children, "related": related}
 
 
-def test_connection(host: str | None, encrypted_api_key: str | None) -> str:
-    client = get_client(host, encrypted_api_key)
+def test_connection(host: str | None, encrypted_api_key: str | None, *, raw_api_key: str | None = None) -> str:
+    if raw_api_key and raw_api_key.strip():
+        if not host:
+            raise IntegrationConfigError("Redmine host is not configured")
+        client = RedmineClient(host, raw_api_key.strip())
+    else:
+        client = get_client(host, encrypted_api_key)
     current_user = client.current_user()
     return f"Connected as {current_user['name']}"

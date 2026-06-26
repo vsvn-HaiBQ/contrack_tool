@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { RouterView, useRouter } from "vue-router";
 import SidebarNav from "./SidebarNav.vue";
 import { authApi } from "../auth/api";
-import { clearSession, hasRequiredRedmineKeys, sessionState } from "../../shared/session";
+import { clearSession, hasRequiredRedmineKeys, pinVersion, sessionState } from "../../shared/session";
 import { localServerApi, localServerBase } from "../../shared/localServer";
 import { absoluteBackendUrl, localServerReleaseApi } from "../../shared/localServerRelease";
 import { showToast } from "../../shared/toast";
@@ -174,6 +174,14 @@ function goSettings() {
   router.push({ name: "settings" });
 }
 
+async function handlePinVersion(versionId: number | null) {
+  try {
+    await pinVersion(versionId);
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  }
+}
+
 onMounted(() => {
   void refreshNodeServerStatus();
   nodeHealthTimer = window.setInterval(() => void refreshNodeServerStatus(), 5000);
@@ -196,6 +204,8 @@ onBeforeUnmount(() => {
       :node-server-warning="nodeServerWarning"
       :node-server-update="nodeServerUpdate"
       :node-server-download="nodeServerDownload"
+      :versions="sessionState.versions"
+      :pinned-version-id="sessionState.pinnedVersionId"
       @select="$router.push($event)"
       @toggle-user-menu="userMenuOpen = !userMenuOpen"
       @close-user-menu="userMenuOpen = false"
@@ -203,10 +213,10 @@ onBeforeUnmount(() => {
       @logout="logout"
       @install-node-update="installNodeUpdate"
       @download-node-server="downloadNodeServerPackage"
+      @pin-version="handlePinVersion"
     />
     <main
-      class="mx-auto grid w-full gap-8 px-4 py-6 sm:px-6 lg:px-8"
-      :class="$route.path.startsWith('/git-eol') ? 'max-w-none' : 'max-w-7xl'"
+      class="mx-auto grid w-full max-w-7xl gap-8 px-4 py-6 sm:px-6 lg:px-8"
     >
       <RouterView v-slot="{ Component, route }">
         <KeepAlive>

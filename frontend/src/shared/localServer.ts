@@ -122,6 +122,10 @@ export const localServerApi = {
     const response = await localHttp<{ path: string | null }>("/dialog/select-file", jsonBody({ currentPath }));
     return response.path;
   },
+  selectFiles: async (currentPath?: string) => {
+    const response = await localHttp<{ paths: string[] }>("/dialog/select-files", jsonBody({ currentPath }));
+    return response.paths ?? [];
+  },
   openPath: (targetPath: string) => localHttp<{ ok: boolean }>("/shell/open-path", jsonBody({ path: targetPath })),
   openContainingFolder: (targetPath: string) =>
     localHttp<{ ok: boolean }>("/shell/open-containing-folder", jsonBody({ path: targetPath })),

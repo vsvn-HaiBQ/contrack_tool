@@ -7,5 +7,8 @@ export const boxApi = {
   status: () => http<BoxStatus>("/box/status"),
   startOAuth: (payload: unknown) =>
     http<{ authorize_url: string; redirect_url: string }>("/box/oauth/start", { method: "POST", body: JSON.stringify(payload) }),
-  uploadAccess: () => http<BoxUploadAccess>("/box/upload-access", { method: "POST" })
+  uploadAccess: (targetBranch?: string | null) => {
+    const query = targetBranch?.trim() ? `?target_branch=${encodeURIComponent(targetBranch.trim())}` : "";
+    return http<BoxUploadAccess>(`/box/upload-access${query}`, { method: "POST" });
+  }
 };

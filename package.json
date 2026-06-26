@@ -1,6 +1,6 @@
 {
   "name": "ct_tool",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "scripts": {
     "build": "npm run build:web && npm run build:local-server",
     "build:web": "npm --prefix frontend run build",

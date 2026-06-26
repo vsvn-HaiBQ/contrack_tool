@@ -6,6 +6,7 @@ import { HttpError } from "../../shared/http";
 import { localServerApi, localServerBase } from "../../shared/localServer";
 import { apiBackendBase, apiBoxOAuthCallbackPath, boxOAuthRedirectUri } from "../../shared/runtimeConfig";
 import { sessionState } from "../../shared/session";
+import { activeDefaultBaseBranch } from "../../shared/session";
 import { showToast } from "../../shared/toast";
 import { auditApi } from "../audit/api";
 import { boxApi } from "../box/api";
@@ -119,7 +120,7 @@ function parseTicketIds(): string[] {
 }
 
 function buildAutoTargetBranch(): string {
-  const defaultBaseBranch = sessionState.systemSettings.default_base_branch?.trim();
+  const defaultBaseBranch = activeDefaultBaseBranch.value;
   const tickets = parseTicketIds();
   if (!defaultBaseBranch || !tickets.length) return "";
   return `${defaultBaseBranch}_${tickets.map((ticket) => `#${ticket}`).join("_")}`;
@@ -536,12 +537,13 @@ async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
   appendBoxUploadLog(targetJob, "info", `Uploading ${artifactsToUpload.length} ${targetJob.target ?? "build"} artifact(s) to Box`);
   setBoxUploadStatus("uploading");
   try {
-    const uploadAccess = await boxApi.uploadAccess();
+    const uploadAccess = await boxApi.uploadAccess(form.targetBranch.trim() || null);
     const result = await localServerApi.box.uploadArtifacts({
       accessToken: uploadAccess.access_token,
       clientFolderId: uploadAccess.client_folder_id,
       serverFolderId: uploadAccess.server_folder_id,
       sharedLinkAccess: uploadAccess.shared_link_access,
+      overwrite: Boolean(uploadAccess.is_baseline),
       artifacts: artifactsToUpload,
     });
     let linkedCount = 0;
@@ -662,7 +664,7 @@ watch(
 );
 
 watch(
-  () => [form.jpIssueId, sessionState.systemSettings.default_base_branch],
+  () => [form.jpIssueId, activeDefaultBaseBranch.value],
   () => {
     const nextBranch = buildAutoTargetBranch();
     if (!nextBranch) {
@@ -707,9 +709,8 @@ onBeforeUnmount(stopPolling);
           <label class="text-sm font-medium text-[#393C41]">JP Ticket ID (optional)</label>
           <input
             v-model="form.jpIssueId"
-            inputmode="numeric"
             class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
-            placeholder="12345"
+            placeholder="12345, 12346 (comma separated)"
           />
         </div>
         <div class="grid gap-2">

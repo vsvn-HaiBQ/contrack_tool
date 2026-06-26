@@ -13,6 +13,7 @@ async function uploadArtifactsToBox(input) {
   }
   const folderMap = normalizeFolderMap(input || {});
   const sharedLinkAccess = normalizeSharedLinkAccess(input && (input.sharedLinkAccess || input.shared_link_access));
+  const overwriteOnConflict = Boolean(input && (input.overwrite || input.overwrite_on_conflict));
   const dateFolderName = currentDateFolderName();
   const items = [];
 
@@ -29,7 +30,7 @@ async function uploadArtifactsToBox(input) {
     }
     const dayFolder = await ensureFolder(accessToken, parentFolderId, dateFolderName);
     const requestedName = stringValue(artifact.file_name || artifact.fileName || path.basename(filePath), "artifact.file_name");
-    const uploaded = await uploadFileWithConflictRetry(accessToken, dayFolder.id, filePath, requestedName);
+    const uploaded = await uploadFileWithConflictRetry(accessToken, dayFolder.id, filePath, requestedName, { overwriteOnConflict });
     const linked = await ensureSharedLink(accessToken, uploaded.id, sharedLinkAccess);
     items.push({
       type: artifactType,
@@ -128,15 +129,57 @@ async function findChildFolder(accessToken, parentFolderId, folderName) {
   }
 }
 
-async function uploadFileWithConflictRetry(accessToken, folderId, filePath, fileName) {
+async function uploadFileWithConflictRetry(accessToken, folderId, filePath, fileName, options = {}) {
+  const overwriteOnConflict = Boolean(options && options.overwriteOnConflict);
   try {
     return await uploadFile(accessToken, folderId, filePath, fileName);
   } catch (error) {
     if (error.status !== 409) {
       throw error;
     }
+    if (overwriteOnConflict) {
+      const conflictId = extractConflictFileId(error.payload);
+      if (conflictId) {
+        return uploadFileVersion(accessToken, conflictId, filePath, fileName);
+      }
+    }
     return uploadFile(accessToken, folderId, filePath, timestampedFileName(fileName));
   }
+}
+
+function extractConflictFileId(payload) {
+  const conflicts = payload && payload.context_info && payload.context_info.conflicts;
+  if (!conflicts) return null;
+  if (Array.isArray(conflicts)) {
+    const item = conflicts.find((entry) => entry && entry.type === "file" && entry.id);
+    return item ? item.id : null;
+  }
+  if (conflicts.type === "file" && conflicts.id) {
+    return conflicts.id;
+  }
+  return null;
+}
+
+async function uploadFileVersion(accessToken, fileId, filePath, fileName) {
+  const boundary = `----contrack-box-${crypto.randomBytes(12).toString("hex")}`;
+  const attributes = JSON.stringify({ name: fileName });
+  const fileBuffer = fs.readFileSync(filePath);
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="attributes"\r\nContent-Type: application/json\r\n\r\n${attributes}\r\n`, "utf8"),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${safeFileName(fileName)}"\r\nContent-Type: application/octet-stream\r\n\r\n`, "utf8"),
+    fileBuffer,
+    Buffer.from(`\r\n--${boundary}--\r\n`, "utf8"),
+  ]);
+  const payload = await boxJson(accessToken, `${BOX_UPLOAD_BASE}/files/${encodeURIComponent(fileId)}/content`, {
+    method: "POST",
+    headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
+    body,
+  });
+  const entry = Array.isArray(payload.entries) ? payload.entries[0] : null;
+  if (!entry || !entry.id) {
+    throw new Error("Box version upload response did not include a file id");
+  }
+  return entry;
 }
 
 async function uploadFile(accessToken, folderId, filePath, fileName) {

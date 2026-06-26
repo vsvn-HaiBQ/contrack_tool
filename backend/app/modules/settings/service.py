@@ -11,7 +11,6 @@ SYSTEM_SETTING_KEYS = [
     "redmine_jp_host",
     "redmine_vn_host",
     "redmine_vn_project_id",
-    "default_base_branch",
     "description_template",
 ]
 
@@ -79,8 +78,5 @@ def validate_system_settings(values: dict[str, str | None]) -> dict[str, str | N
                 raise ValueError("git_repo must use owner/repo format")
         elif key == "redmine_vn_project_id":
             _validate_positive_int(value, key)
-        elif key == "default_base_branch":
-            if not re.fullmatch(r"[A-Za-z0-9._/-]+", value):
-                raise ValueError("default_base_branch contains invalid characters")
         validated[key] = value
     return validated

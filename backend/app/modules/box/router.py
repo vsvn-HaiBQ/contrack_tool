@@ -15,6 +15,7 @@ from app.models import User, UserSettings
 from app.modules.audit.service import write_audit_log
 from app.modules.box import service
 from app.modules.users.dependencies import get_current_user_settings
+from app.modules.versions import service as versions_service
 from app.schemas import (
     BoxOAuthStartRequest,
     BoxOAuthStartResponse,
@@ -153,6 +154,7 @@ def box_oauth_callback(
 
 @router.post("/upload-access", response_model=BoxUploadAccessResponse)
 def get_upload_access(
+    target_branch: str | None = Query(default=None),
     _: User = Depends(get_current_user),
     user_settings: UserSettings = Depends(get_current_user_settings),
     db: Session = Depends(get_db),
@@ -163,14 +165,30 @@ def get_upload_access(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except service.BoxClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    if not row.client_folder_id or not row.server_folder_id:
-        raise HTTPException(status_code=400, detail="Box folder ids are incomplete")
+    pinned = versions_service.get_pinned_version(db, user_settings)
+    if not pinned:
+        raise HTTPException(status_code=400, detail="No version pinned; ask admin to create a version")
+    branch = (target_branch or "").strip()
+    base_branch = (pinned.default_base_branch or "").strip()
+    use_baseline = bool(branch) and bool(base_branch) and branch == base_branch
+    if use_baseline:
+        client_folder_id = pinned.client_baseline_folder or pinned.client_folder_id
+        server_folder_id = pinned.server_baseline_folder or pinned.server_folder_id
+    else:
+        client_folder_id = pinned.client_folder_id
+        server_folder_id = pinned.server_folder_id
+    if not client_folder_id or not server_folder_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Pinned version is missing client/server folder ids; ask admin to configure them",
+        )
     return BoxUploadAccessResponse(
         access_token=access_token,
         expires_at=user_settings.box_token_expires_at,
-        client_folder_id=row.client_folder_id,
-        server_folder_id=row.server_folder_id,
+        client_folder_id=client_folder_id,
+        server_folder_id=server_folder_id,
         shared_link_access=row.shared_link_access or "company",
+        is_baseline=use_baseline,
     )
 
 

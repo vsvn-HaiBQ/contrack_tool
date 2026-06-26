@@ -3,7 +3,7 @@ import { ref } from "vue";
 import { RouterView, useRouter } from "vue-router";
 import SidebarNav from "./SidebarNav.vue";
 import { authApi } from "../auth/api";
-import { clearSession, sessionState } from "../../shared/session";
+import { clearSession, pinVersion, sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
 
 const router = useRouter();
@@ -28,6 +28,14 @@ function goSettings() {
   userMenuOpen.value = false;
   router.push({ name: "settings" });
 }
+
+async function handlePinVersion(versionId: number | null) {
+  try {
+    await pinVersion(versionId);
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  }
+}
 </script>
 
 <template>
@@ -37,11 +45,14 @@ function goSettings() {
       :tabs="tabs"
       :current-tab="$route.path"
       :user-menu-open="userMenuOpen"
+      :versions="sessionState.versions"
+      :pinned-version-id="sessionState.pinnedVersionId"
       @select="$router.push($event)"
       @toggle-user-menu="userMenuOpen = !userMenuOpen"
       @close-user-menu="userMenuOpen = false"
       @settings="goSettings"
       @logout="logout"
+      @pin-version="handlePinVersion"
     />
     <main class="flex-1 w-full px-4 py-6 sm:px-6">
       <RouterView />

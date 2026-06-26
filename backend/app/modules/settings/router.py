@@ -11,6 +11,7 @@ from app.modules.users.dependencies import get_current_user_settings
 from app.schemas import (
     IntegrationStatusItem,
     IntegrationStatusResponse,
+    IntegrationTestRequest,
     IntegrationTestResponse,
     SystemSettingsOut,
     SystemSettingsUpdate,
@@ -103,18 +104,20 @@ def get_integration_status(
 @router.post("/integrations/test/{service_name}", response_model=IntegrationTestResponse)
 def test_integration(
     service_name: str,
+    payload: IntegrationTestRequest | None = None,
     _: User = Depends(get_current_user),
     user_settings: UserSettings = Depends(get_current_user_settings),
     db: Session = Depends(get_db),
 ) -> IntegrationTestResponse:
     settings = get_system_settings_map(db)
+    raw_value = (payload.raw_value if payload else None) or None
     try:
         if service_name == "redmine_jp":
-            message = redmine.test_connection(settings.get("redmine_jp_host"), user_settings.redmine_jp_api_key_enc)
+            message = redmine.test_connection(settings.get("redmine_jp_host"), user_settings.redmine_jp_api_key_enc, raw_api_key=raw_value)
         elif service_name == "redmine_vn":
-            message = redmine.test_connection(settings.get("redmine_vn_host"), user_settings.redmine_vn_api_key_enc)
+            message = redmine.test_connection(settings.get("redmine_vn_host"), user_settings.redmine_vn_api_key_enc, raw_api_key=raw_value)
         elif service_name == "github":
-            message = github.test_connection(settings.get("git_repo"), user_settings.github_token_enc)
+            message = github.test_connection(settings.get("git_repo"), user_settings.github_token_enc, raw_token=raw_value)
         elif service_name == "box":
             message = box.test_connection(db, user_settings)
         else:

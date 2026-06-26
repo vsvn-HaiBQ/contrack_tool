@@ -46,6 +46,10 @@ const form = reactive({
   instructions: "",
 });
 
+const filesQueue = ref<string[]>([]);
+const queueRunning = ref(false);
+const queueIndex = ref(0);
+
 const job = ref<DocumentTranslationJob | null>(null);
 const polling = ref<number | null>(null);
 const logContainer = ref<HTMLElement | null>(null);
@@ -84,7 +88,7 @@ const progressPercent = computed(() => {
   if (!current || current.translatable_segments <= 0) return 0;
   return Math.min(100, Math.round((current.translated_segments / current.translatable_segments) * 100));
 });
-const canStart = computed(() => Boolean(form.filePath.trim()) && !running.value);
+const canStart = computed(() => filesQueue.value.length > 0 && !running.value && !queueRunning.value);
 const result = computed(() => job.value?.result ?? null);
 const logs = computed(() => job.value?.logs ?? []);
 const modelOptions = computed(() => {
@@ -269,13 +273,36 @@ async function refreshHealth(showMessage = false) {
 
 async function browseFile() {
   try {
-    const selected = await localServerApi.selectFile(form.filePath);
-    if (selected) {
-      form.filePath = await validateFile(selected);
+    const selected = await localServerApi.selectFiles(filesQueue.value[filesQueue.value.length - 1] || "");
+    if (!selected.length) return;
+    let added = 0;
+    let failed = 0;
+    for (const path of selected) {
+      try {
+        const validated = await validateFile(path);
+        if (!filesQueue.value.includes(validated)) {
+          filesQueue.value.push(validated);
+          added++;
+        }
+      } catch (error) {
+        failed++;
+        showToast(`${path}: ${(error as Error).message}`, "error");
+      }
+    }
+    if (added && selected.length > 1) {
+      showToast(`Added ${added} file${added === 1 ? "" : "s"}${failed ? ` (${failed} skipped)` : ""}`, failed ? "warning" : "success");
     }
   } catch (error) {
     showToast((error as Error).message, "error");
   }
+}
+
+function removeFileFromQueue(index: number) {
+  filesQueue.value.splice(index, 1);
+}
+
+function clearQueue() {
+  filesQueue.value = [];
 }
 
 async function browseOutputDirectory() {
@@ -324,43 +351,6 @@ async function validateDirectory(path: string, label: string) {
   return result.path;
 }
 
-function startPolling() {
-  stopPolling();
-  if (!job.value) return;
-  polling.value = window.setInterval(async () => {
-    if (!job.value) return;
-    try {
-      const next = await localServerApi.documentTranslation.getJob(job.value.job_id);
-      job.value = next;
-      if (["succeeded", "failed", "canceled"].includes(next.status)) {
-        stopPolling();
-        void auditApi.record({
-          action: "document_translation_complete",
-          target_type: "document_translation_job",
-          target_id: next.job_id,
-          payload_after: {
-            status: next.status,
-            error: next.error,
-            filePath: form.filePath,
-            outputPath: next.result?.output_path ?? null,
-            direction: direction.value,
-            model: (next.result?.model ?? form.model.trim()) || null,
-            totalSegments: next.result?.total_segments ?? null,
-            translatedSegments: next.progress?.translated_segments ?? null
-          }
-        }).catch(() => undefined);
-        showToast(
-          next.status === "succeeded" ? "Document translated" : next.status === "canceled" ? "Translation stopped" : next.error || "Translation failed",
-          next.status === "succeeded" ? "success" : "error"
-        );
-      }
-    } catch (error) {
-      stopPolling();
-      showToast((error as Error).message, "error");
-    }
-  }, 1500);
-}
-
 function stopPolling() {
   if (polling.value !== null) {
     window.clearInterval(polling.value);
@@ -368,14 +358,90 @@ function stopPolling() {
   }
 }
 
+async function runOneFile(filePath: string): Promise<void> {
+  const validated = await validateFile(filePath);
+  job.value = await localServerApi.documentTranslation.start({
+    filePath: validated,
+    outputDirectory: form.outputDirectory || undefined,
+    direction: direction.value,
+    model: form.model.trim() || undefined,
+    reasoningEffort: form.reasoningEffort,
+    fastMode: form.fastMode,
+    timeoutSeconds: form.timeoutSeconds,
+    batchSize: form.batchSize,
+    contextWindow: form.contextWindow,
+    glossary: form.glossary,
+    instructions: form.instructions,
+  });
+  void auditApi.record({
+    action: "document_translation_start",
+    target_type: "document_translation_job",
+    target_id: job.value.job_id,
+    payload_after: {
+      filePath: validated,
+      outputDirectory: form.outputDirectory || null,
+      direction: direction.value,
+      model: form.model.trim() || null,
+      reasoningEffort: form.reasoningEffort,
+      fastMode: form.fastMode,
+      timeoutSeconds: form.timeoutSeconds,
+      batchSize: form.batchSize,
+      contextWindow: form.contextWindow,
+    },
+  }).catch(() => undefined);
+
+  await new Promise<void>((resolve) => {
+    stopPolling();
+    const startedJobId = job.value?.job_id;
+    if (!startedJobId) {
+      resolve();
+      return;
+    }
+    polling.value = window.setInterval(async () => {
+      if (!job.value) {
+        stopPolling();
+        resolve();
+        return;
+      }
+      try {
+        const next = await localServerApi.documentTranslation.getJob(job.value.job_id);
+        job.value = next;
+        if (["succeeded", "failed", "canceled"].includes(next.status)) {
+          stopPolling();
+          void auditApi.record({
+            action: "document_translation_complete",
+            target_type: "document_translation_job",
+            target_id: next.job_id,
+            payload_after: {
+              status: next.status,
+              error: next.error,
+              filePath: validated,
+              outputPath: next.result?.output_path ?? null,
+              direction: direction.value,
+              model: (next.result?.model ?? form.model.trim()) || null,
+              totalSegments: next.result?.total_segments ?? null,
+              translatedSegments: next.progress?.translated_segments ?? null,
+            },
+          }).catch(() => undefined);
+          resolve();
+        }
+      } catch (error) {
+        stopPolling();
+        showToast((error as Error).message, "error");
+        resolve();
+      }
+    }, 1500);
+  });
+}
+
 async function startTranslation() {
-  if (!form.filePath.trim()) {
+  const pending = [...filesQueue.value];
+  if (!pending.length) {
     showToast("Document file is required", "warning");
     return;
   }
 
   try {
-    form.filePath = await validateFile(form.filePath);
     if (form.outputDirectory.trim()) {
       form.outputDirectory = await validateDirectory(form.outputDirectory, "Output folder");
     }
@@ -383,39 +449,46 @@ async function startTranslation() {
     form.batchSize = normalizeNumber(form.batchSize, 100, 1, 200);
     form.contextWindow = normalizeNumber(form.contextWindow, 20, 0, 200);
     await saveTranslationSettings();
-
-    job.value = await localServerApi.documentTranslation.start({
-      filePath: form.filePath,
-      outputDirectory: form.outputDirectory || undefined,
-      direction: direction.value,
-      model: form.model.trim() || undefined,
-      reasoningEffort: form.reasoningEffort,
-      fastMode: form.fastMode,
-      timeoutSeconds: form.timeoutSeconds,
-      batchSize: form.batchSize,
-      contextWindow: form.contextWindow,
-      glossary: form.glossary,
-      instructions: form.instructions,
-    });
-    void auditApi.record({
-      action: "document_translation_start",
-      target_type: "document_translation_job",
-      target_id: job.value.job_id,
-      payload_after: {
-        filePath: form.filePath,
-        outputDirectory: form.outputDirectory || null,
-        direction: direction.value,
-        model: form.model.trim() || null,
-        reasoningEffort: form.reasoningEffort,
-        fastMode: form.fastMode,
-        timeoutSeconds: form.timeoutSeconds,
-        batchSize: form.batchSize,
-        contextWindow: form.contextWindow
-      }
-    }).catch(() => undefined);
-    startPolling();
   } catch (error) {
     showToast((error as Error).message, "error");
+    return;
+  }
+
+  queueRunning.value = true;
+  queueIndex.value = 0;
+  let succeeded = 0;
+  let failed = 0;
+  try {
+    for (let i = 0; i < pending.length; i++) {
+      queueIndex.value = i + 1;
+      try {
+        await runOneFile(pending[i]);
+        if (job.value?.status === "succeeded") succeeded++;
+        else failed++;
+        if (job.value?.status === "canceled") {
+          break;
+        }
+      } catch (error) {
+        failed++;
+        showToast(`${pending[i]}: ${(error as Error).message}`, "error");
+      }
+    }
+  } finally {
+    queueRunning.value = false;
+  }
+
+  if (pending.length > 1) {
+    showToast(`Translated ${succeeded}/${pending.length} files${failed ? ` (${failed} failed)` : ""}`, failed ? "warning" : "success");
+  } else {
+    const status = job.value?.status;
+    showToast(
+      status === "succeeded" ? "Document translated" : status === "canceled" ? "Translation stopped" : job.value?.error || "Translation failed",
+      status === "succeeded" ? "success" : "error"
+    );
+  }
+
+  if (filesQueue.value.length && succeeded > 0) {
+    filesQueue.value = [];
   }
 }
 
@@ -501,16 +574,47 @@ onBeforeUnmount(() => {
 
       <div class="grid gap-4 lg:grid-cols-2">
         <div class="grid gap-2 lg:col-span-2">
-          <label class="text-sm font-medium text-[#393C41]">Document File</label>
-          <div class="flex gap-2">
-            <input
-              v-model="form.filePath"
-              class="min-w-0 flex-1 rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
-              placeholder="C:\\Docs\\source.docx / source.md"
-            />
-            <button class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="browseFile">
-              Browse
-            </button>
+          <div class="flex items-center justify-between">
+            <label class="text-sm font-medium text-[#393C41]">Document Files</label>
+            <div class="flex items-center gap-2">
+              <button
+                v-if="filesQueue.length"
+                class="rounded px-2 py-1 text-xs font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="queueRunning"
+                @click="clearQueue"
+              >
+                Clear
+              </button>
+              <button
+                class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
+                :disabled="queueRunning"
+                @click="browseFile"
+              >
+                Browse
+              </button>
+            </div>
+          </div>
+          <div class="grid gap-1 rounded border border-neutral-200 bg-neutral-50 p-2 min-h-12">
+            <p v-if="!filesQueue.length" class="m-0 px-1 py-2 text-sm text-[#7A7C80]">
+              No files selected. Click <strong>Browse</strong> to choose one or more documents.
+            </p>
+            <div v-else class="flex items-center justify-between px-1 pb-1">
+              <span class="text-xs font-medium text-[#393C41]">{{ filesQueue.length }} file{{ filesQueue.length === 1 ? "" : "s" }} selected<span v-if="queueRunning"> &middot; processing {{ queueIndex }}/{{ filesQueue.length }}</span></span>
+            </div>
+            <div
+              v-for="(filePath, index) in filesQueue"
+              :key="`${filePath}-${index}`"
+              class="flex items-center gap-2 rounded bg-white px-2 py-1 text-sm text-[#171A20]"
+            >
+              <span class="min-w-0 flex-1 truncate" :title="filePath">{{ filePath }}</span>
+              <button
+                class="rounded px-2 py-0.5 text-xs text-[#7A7C80] transition hover:bg-neutral-100 hover:text-[#171A20] disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="queueRunning"
+                @click="removeFileFromQueue(index)"
+              >
+                Remove
+              </button>
+            </div>
           </div>
         </div>
 

@@ -32,6 +32,7 @@ const syncState = reactive({
   existing_vn_issue_id: null as number | null,
   selected_subtasks: [] as string[],
   subtask_titles: { ...DEFAULT_SUBTASK_LABELS } as Record<string, string>,
+  subtask_assignees: {} as Record<string, number | null>,
   extra_tracker: "Story",
   force_create: false,
   syncing: false,
@@ -84,6 +85,22 @@ watch(
   () => [syncState.jp_issue_id, syncState.jp_subject, syncState.subject_prefix],
   () => {
     syncState.subject = buildStorySubject();
+  }
+);
+
+watch(
+  () => syncState.jp_issue_input,
+  (value) => {
+    const parsed = parseJpIssueInput(value);
+    if (parsed !== syncState.jp_issue_id) {
+      syncState.verified = false;
+      syncState.jp_subject = "";
+      syncState.jp_issue_url = "";
+      syncState.candidates = [];
+      syncState.existing_vn_issue_id = null;
+      syncState.subject = "";
+      syncState.jp_issue_id = null;
+    }
   }
 );
 
@@ -193,8 +210,11 @@ async function runSync(mode: "create_new" | "link" = "create_new", existingVnIss
       related_ticket_id: syncState.related_ticket_id,
       existing_vn_issue_id: linkedIssueId,
       create_subtasks: syncState.selected_subtasks
-        .map((key) => syncState.subtask_titles[key])
-        .filter(Boolean),
+        .map((key) => ({
+          title: syncState.subtask_titles[key],
+          assignee_id: syncState.subtask_assignees[key] ?? syncState.assignee_id ?? null,
+        }))
+        .filter((item) => Boolean(item.title)),
       extra_tracker: syncState.extra_tracker,
       force_create: syncState.force_create
     });

@@ -63,6 +63,23 @@ const noChangeFixedFiles = computed(() =>
   props.fixResult?.fixed_files.filter((f) => !hasFixedOutput(f)) ?? []
 );
 const processableCount = computed(() => props.preview?.files.filter((file) => file.processable).length ?? 0);
+const allProcessableSelected = computed(() => processableCount.value > 0 && props.selectedCount === processableCount.value);
+const someProcessableSelected = computed(() => props.selectedCount > 0 && !allProcessableSelected.value);
+const allResultSelected = computed(() => changedFixedFiles.value.length > 0 && props.selectedResultCount === changedFixedFiles.value.length);
+const someResultSelected = computed(() => props.selectedResultCount > 0 && !allResultSelected.value);
+
+function togglePreviewAll(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  if (checked) emit("selectAll");
+  else emit("clearSelection");
+}
+
+function toggleResultAll(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  for (const file of changedFixedFiles.value) {
+    props.selectedResultFiles[file.path] = checked;
+  }
+}
 const showLogPanel = computed(() => props.jobStatus !== "idle" || props.jobLogs.length > 0);
 const hasAnyFixOutput = computed(() =>
   Boolean(
@@ -245,12 +262,6 @@ function statusBadgeClass(status: string): string {
         </div>
         <div v-if="preview" class="flex flex-wrap items-center gap-2">
           <span class="text-sm text-[#5C5E62]">{{ selectedCount }} / {{ processableCount }} selected</span>
-          <button class="rounded border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="emit('selectAll')">
-            Select All
-          </button>
-          <button class="rounded border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="emit('clearSelection')">
-            Clear
-          </button>
         </div>
       </div>
 
@@ -258,7 +269,17 @@ function statusBadgeClass(status: string): string {
         <table class="w-full border-collapse text-left text-sm">
           <thead class="bg-neutral-50 text-xs font-medium text-[#5C5E62] uppercase">
             <tr>
-              <th class="w-10 px-2 py-2"></th>
+              <th class="w-10 px-3 py-2">
+                <input
+                  type="checkbox"
+                  class="size-4 accent-[#3E6AE1] align-middle"
+                  :checked="allProcessableSelected"
+                  :indeterminate.prop="someProcessableSelected"
+                  :disabled="!processableCount"
+                  :title="allProcessableSelected ? 'Clear all' : 'Select all'"
+                  @change="togglePreviewAll"
+                />
+              </th>
               <th class="px-3 py-2">File</th>
               <th class="w-24 px-3 py-2">Status</th>
               <th class="w-24 px-3 py-2">Base EOL</th>
@@ -334,14 +355,6 @@ function statusBadgeClass(status: string): string {
         <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Result</h3>
         <div v-if="changedFixedFiles.length" class="flex flex-wrap items-center gap-2">
           <span class="text-sm text-[#5C5E62]">{{ selectedResultCount }} / {{ changedFixedFiles.length }} selected</span>
-          <button
-            class="rounded border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100"
-            @click="changedFixedFiles.forEach(f => selectedResultFiles[f.path] = true)"
-          >Select All</button>
-          <button
-            class="rounded border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100"
-            @click="changedFixedFiles.forEach(f => selectedResultFiles[f.path] = false)"
-          >Clear</button>
         </div>
       </div>
       <div v-if="fixResult" class="grid gap-4">
@@ -376,7 +389,17 @@ function statusBadgeClass(status: string): string {
           <table class="w-full border-collapse text-left text-sm">
             <thead class="bg-neutral-50 text-xs font-medium text-[#5C5E62] uppercase">
               <tr>
-                <th class="w-10 px-2 py-2"></th>
+                <th class="w-10 px-2 py-2">
+                  <input
+                    type="checkbox"
+                    class="size-4 accent-[#3E6AE1] align-middle"
+                    :checked="allResultSelected"
+                    :indeterminate.prop="someResultSelected"
+                    :disabled="!changedFixedFiles.length"
+                    :title="allResultSelected ? 'Clear all' : 'Select all'"
+                    @change="toggleResultAll"
+                  />
+                </th>
                 <th class="px-3 py-2">File</th>
                 <th class="w-28 px-3 py-2 text-right">Restored EOL</th>
                 <th class="w-32 px-3 py-2 text-right">Changed</th>

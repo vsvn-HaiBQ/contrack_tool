@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import GitEolView from "./GitEolView.vue";
 import { gitEolApi } from "./api";
 import { localServerApi, localServerBase } from "../../shared/localServer";
-import { sessionState } from "../../shared/session";
+import { activeDefaultBaseBranch, sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
 import { auditApi } from "../audit/api";
 import { usersApi } from "../users/api";
@@ -478,11 +478,14 @@ async function loadLocalPathSetting() {
   }
 }
 
+let lastAutoBaseBranch = "";
 watch(
-  () => sessionState.systemSettings.default_base_branch,
+  activeDefaultBaseBranch,
   (defaultBaseBranch) => {
-    if (!form.base_branch.trim() && defaultBaseBranch) {
+    if (!defaultBaseBranch) return;
+    if (!form.base_branch.trim() || form.base_branch === lastAutoBaseBranch) {
       form.base_branch = defaultBaseBranch;
+      lastAutoBaseBranch = defaultBaseBranch;
     }
   },
   { immediate: true }

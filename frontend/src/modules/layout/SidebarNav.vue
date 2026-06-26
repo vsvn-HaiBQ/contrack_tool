@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import type { User } from "../../shared/types";
+import type { User, Version } from "../../shared/types";
 
 const props = defineProps<{
   me: User;
@@ -10,6 +10,8 @@ const props = defineProps<{
   nodeServerWarning?: string | null;
   nodeServerUpdate?: { currentVersion?: string | null; latestVersion: string; installing: boolean } | null;
   nodeServerDownload?: { latestVersion: string; downloading: boolean } | null;
+  versions?: Version[];
+  pinnedVersionId?: number | null;
 }>();
 
 const emit = defineEmits<{
@@ -20,6 +22,7 @@ const emit = defineEmits<{
   logout: [];
   installNodeUpdate: [];
   downloadNodeServer: [];
+  pinVersion: [versionId: number | null];
 }>();
 
 const userMenuRef = ref<HTMLElement | null>(null);
@@ -55,13 +58,25 @@ onBeforeUnmount(() => {
         >
           Contrack
         </button>
-        <div ref="userMenuRef" class="relative shrink-0">
-          <button class="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-2 text-left" @click="emit('toggleUserMenu')">
-            <p class="text-sm font-medium text-[#171A20]">{{ me.username }}</p>
-          </button>
-          <div v-if="userMenuOpen" class="absolute right-0 z-30 mt-2 w-40 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg">
-            <button class="block w-full px-4 py-2 text-left text-sm text-[#171A20] transition hover:bg-neutral-50" @click="emit('settings')">Settings</button>
-            <button class="block w-full px-4 py-2 text-left text-sm text-[#171A20] transition hover:bg-neutral-50" @click="emit('logout')">Logout</button>
+        <div class="flex min-w-0 flex-1 items-center justify-end gap-3">
+          <div v-if="(versions ?? []).length" class="flex items-center gap-2">
+            <label class="whitespace-nowrap text-xs font-medium text-[#5C5E62]">Version</label>
+            <select
+              class="rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+              :value="pinnedVersionId ?? (versions && versions[0] ? versions[0].id : '')"
+              @change="emit('pinVersion', Number(($event.target as HTMLSelectElement).value))"
+            >
+              <option v-for="version in versions" :key="version.id" :value="version.id">{{ version.name }}</option>
+            </select>
+          </div>
+          <div ref="userMenuRef" class="relative shrink-0">
+            <button class="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-2 text-left" @click="emit('toggleUserMenu')">
+              <p class="text-sm font-medium text-[#171A20]">{{ me.username }}</p>
+            </button>
+            <div v-if="userMenuOpen" class="absolute right-0 z-30 mt-2 w-40 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg">
+              <button class="block w-full px-4 py-2 text-left text-sm text-[#171A20] transition hover:bg-neutral-50" @click="emit('settings')">Settings</button>
+              <button class="block w-full px-4 py-2 text-left text-sm text-[#171A20] transition hover:bg-neutral-50" @click="emit('logout')">Logout</button>
+            </div>
           </div>
         </div>
       </div>

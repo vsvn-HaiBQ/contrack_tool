@@ -106,8 +106,6 @@ export type IntegrationStatus = {
 export type BoxSettings = {
   client_id?: string | null;
   client_secret_configured: boolean;
-  server_folder_id?: string | null;
-  client_folder_id?: string | null;
   shared_link_access: "open" | "company" | "collaborators" | string;
   updated_by?: string | null;
 };
@@ -125,6 +123,7 @@ export type BoxUploadAccess = {
   client_folder_id: string;
   server_folder_id: string;
   shared_link_access: string;
+  is_baseline?: boolean;
 };
 
 export type BuildJobLog = {
@@ -154,7 +153,20 @@ export type UserSettings = {
   github_token: string;
   team_automate_url: string;
   default_assignee_id: number | null;
+  pinned_version_id?: number | null;
   document_translation: DocumentTranslationSettings;
+};
+
+export type Version = {
+  id: number;
+  name: string;
+  default_base_branch?: string | null;
+  client_folder_id?: string | null;
+  server_folder_id?: string | null;
+  client_baseline_folder?: string | null;
+  server_baseline_folder?: string | null;
+  position?: number;
+  updated_by?: string | null;
 };
 
 export type BuildArtifact = {

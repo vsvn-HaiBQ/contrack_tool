@@ -39,6 +39,7 @@ def serialize_user_settings(settings: UserSettings) -> UserSettingsOut:
         github_token=decrypt_secret(settings.github_token_enc),
         team_automate_url=decrypt_secret(settings.team_automate_url_enc),
         default_assignee_id=settings.default_assignee_id,
+        pinned_version_id=settings.pinned_version_id,
         document_translation=serialize_document_translation_settings(settings),
     )
 

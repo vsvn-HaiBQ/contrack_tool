@@ -1,6 +1,9 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import type { Assignee, IntegrationStatus, User, UserSettings } from "../../shared/types";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
+import SearchableSelect from "../../shared/SearchableSelect.vue";
+import VersionsAdmin from "../versions/VersionsAdmin.vue";
 
 const props = defineProps<{
   me: User;
@@ -29,8 +32,6 @@ const props = defineProps<{
   boxSettings: {
     client_id: string;
     client_secret: string;
-    server_folder_id: string;
-    client_folder_id: string;
     shared_link_access: string;
   };
   boxClientSecretConfigured: boolean;
@@ -40,6 +41,10 @@ const props = defineProps<{
 function integrationStatus(service: string) {
   return props.integrationStatuses.find((item) => item.service === service);
 }
+
+const assigneeOptions = computed(() =>
+  props.assignees.map((assignee) => ({ value: assignee.id, label: `[${assignee.id}] ${assignee.name}` }))
+);
 
 const emit = defineEmits<{
   saveUserSettings: [];
@@ -121,11 +126,12 @@ const emit = defineEmits<{
           </div>
           <div class="grid gap-2">
             <label class="text-sm font-medium text-[#393C41]">Default Assignee</label>
-            <select v-model="userSettings.default_assignee_id" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
-              <option v-for="assignee in assignees" :key="assignee.id" :value="assignee.id">
-                [{{ assignee.id }}] {{ assignee.name }}
-              </option>
-            </select>
+            <SearchableSelect
+              :model-value="userSettings.default_assignee_id"
+              :options="assigneeOptions"
+              placeholder="Search assignee..."
+              @update:model-value="(value) => (userSettings.default_assignee_id = value as number | null)"
+            />
           </div>
         </div>
       </div>
@@ -208,14 +214,6 @@ const emit = defineEmits<{
             />
           </div>
           <div class="grid gap-2">
-            <label class="text-sm font-medium text-[#393C41]">Client Folder ID</label>
-            <input v-model="boxSettings.client_folder_id" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
-          </div>
-          <div class="grid gap-2">
-            <label class="text-sm font-medium text-[#393C41]">Server Folder ID</label>
-            <input v-model="boxSettings.server_folder_id" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
-          </div>
-          <div class="grid gap-2">
             <label class="text-sm font-medium text-[#393C41]">Shared Link Access</label>
             <select v-model="boxSettings.shared_link_access" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
               <option value="company">company</option>
@@ -231,6 +229,8 @@ const emit = defineEmits<{
           </button>
         </div>
       </div>
+
+      <VersionsAdmin />
 
       <div class="grid gap-4 rounded-xl border border-neutral-200 bg-neutral-50 p-4">
         <div>

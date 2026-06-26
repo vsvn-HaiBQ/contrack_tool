@@ -51,12 +51,32 @@ class UserSettings(Base):
     document_translation_fast_mode: Mapped[bool | None] = mapped_column(Boolean)
     document_translation_glossary: Mapped[str | None] = mapped_column(Text)
     document_translation_instructions: Mapped[str | None] = mapped_column(Text)
+    pinned_version_id: Mapped[int | None] = mapped_column(ForeignKey("versions.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
     user: Mapped["User"] = relationship(back_populates="settings")
+    pinned_version: Mapped["Version | None"] = relationship()
+
+
+class Version(Base):
+    __tablename__ = "versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    default_base_branch: Mapped[str | None] = mapped_column(String(200))
+    client_folder_id: Mapped[str | None] = mapped_column(String(100))
+    server_folder_id: Mapped[str | None] = mapped_column(String(100))
+    client_baseline_folder: Mapped[str | None] = mapped_column(String(100))
+    server_baseline_folder: Mapped[str | None] = mapped_column(String(100))
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    updated_by: Mapped[str | None] = mapped_column(String(100))
 
 
 class SystemSetting(Base):
@@ -76,8 +96,6 @@ class BoxIntegrationSetting(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     client_id: Mapped[str | None] = mapped_column(Text)
     client_secret_enc: Mapped[str | None] = mapped_column(Text)
-    server_folder_id: Mapped[str | None] = mapped_column(String(100))
-    client_folder_id: Mapped[str | None] = mapped_column(String(100))
     shared_link_access: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

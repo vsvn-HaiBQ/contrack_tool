@@ -4,7 +4,7 @@ import PullRequestView from "./PullRequestView.vue";
 import { pullRequestsApi } from "./api";
 import type { PrPreview, PrResult } from "../../shared/types";
 import { showToast } from "../../shared/toast";
-import { sessionState } from "../../shared/session";
+import { activeDefaultBaseBranch } from "../../shared/session";
 
 const prForm = reactive({
   jp_tickets: "",
@@ -100,11 +100,14 @@ watch(
   }
 );
 
+let lastAutoBaseBranch = "";
 watch(
-  () => sessionState.systemSettings.default_base_branch,
+  activeDefaultBaseBranch,
   (defaultBaseBranch) => {
-    if (!prForm.base_branch.trim() && defaultBaseBranch) {
+    if (!defaultBaseBranch) return;
+    if (!prForm.base_branch.trim() || prForm.base_branch === lastAutoBaseBranch) {
       prForm.base_branch = defaultBaseBranch;
+      lastAutoBaseBranch = defaultBaseBranch;
     }
   },
   { immediate: true }
