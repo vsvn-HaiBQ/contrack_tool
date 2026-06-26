@@ -14,7 +14,8 @@ async function uploadArtifactsToBox(input) {
   const folderMap = normalizeFolderMap(input || {});
   const sharedLinkAccess = normalizeSharedLinkAccess(input && (input.sharedLinkAccess || input.shared_link_access));
   const overwriteOnConflict = Boolean(input && (input.overwrite || input.overwrite_on_conflict));
-  const dateFolderName = currentDateFolderName();
+  const createDateFolder = input && (input.createDateFolder === false || input.create_date_folder === false) ? false : true;
+  const dateFolderName = createDateFolder ? currentDateFolderName() : "";
   const items = [];
 
   for (const artifact of artifacts) {
@@ -28,17 +29,20 @@ async function uploadArtifactsToBox(input) {
     if (!parentFolderId) {
       throw new Error(`Box folder id is not configured for artifact type: ${artifactType}`);
     }
-    const dayFolder = await ensureFolder(accessToken, parentFolderId, dateFolderName);
+    const uploadFolder = createDateFolder
+      ? await ensureFolder(accessToken, parentFolderId, dateFolderName)
+      : { id: parentFolderId, name: "" };
     const requestedName = stringValue(artifact.file_name || artifact.fileName || path.basename(filePath), "artifact.file_name");
-    const uploaded = await uploadFileWithConflictRetry(accessToken, dayFolder.id, filePath, requestedName, { overwriteOnConflict });
+    const uploaded = await uploadFileWithConflictRetry(accessToken, uploadFolder.id, filePath, requestedName, { overwriteOnConflict });
     const linked = await ensureSharedLink(accessToken, uploaded.id, sharedLinkAccess);
     items.push({
       type: artifactType,
       fileName: linked.name || uploaded.name || requestedName,
       sourcePath: filePath,
       parentFolderId,
-      dateFolderId: dayFolder.id,
+      dateFolderId: uploadFolder.id,
       dateFolderName,
+      isBaseline: !createDateFolder,
       boxFileId: linked.id || uploaded.id,
       sharedLink: linked.shared_link && linked.shared_link.url,
     });

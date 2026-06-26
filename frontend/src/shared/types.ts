@@ -182,6 +182,7 @@ export type BoxUploadedItem = {
   parentFolderId: string;
   dateFolderId: string;
   dateFolderName: string;
+  isBaseline?: boolean;
   boxFileId: string;
   sharedLink: string;
 };

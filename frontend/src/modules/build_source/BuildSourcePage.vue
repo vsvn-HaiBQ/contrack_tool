@@ -200,6 +200,9 @@ function boxTypeLabel(type: string): string {
 }
 
 function boxTicketLinkLabel(item: BoxUploadedItem): string {
+  if (item.isBaseline || !item.dateFolderName) {
+    return `${boxTypeLabel(item.type)} baseline build - ${item.fileName}`;
+  }
   return `${boxTypeLabel(item.type)} build ${item.dateFolderName} - ${item.fileName}`;
 }
 
@@ -544,6 +547,7 @@ async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
       serverFolderId: uploadAccess.server_folder_id,
       sharedLinkAccess: uploadAccess.shared_link_access,
       overwrite: Boolean(uploadAccess.is_baseline),
+      createDateFolder: !uploadAccess.is_baseline,
       artifacts: artifactsToUpload,
     });
     let linkedCount = 0;
