@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "Contrack"
+    app_name: str = "ConTrack"
     api_prefix: str = "/api"
     database_url: str = "postgresql+psycopg://contrack:contrack@localhost:5439/contrack"
     redis_url: str = "redis://localhost:6379/0"

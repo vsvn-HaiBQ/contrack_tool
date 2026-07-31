@@ -49,6 +49,8 @@ const form = reactive({
 const filesQueue = ref<string[]>([]);
 const queueRunning = ref(false);
 const queueIndex = ref(0);
+const dragActive = ref(false);
+const addingDroppedFiles = ref(false);
 
 const job = ref<DocumentTranslationJob | null>(null);
 const polling = ref<number | null>(null);
@@ -88,9 +90,10 @@ const progressPercent = computed(() => {
   if (!current || current.translatable_segments <= 0) return 0;
   return Math.min(100, Math.round((current.translated_segments / current.translatable_segments) * 100));
 });
-const canStart = computed(() => filesQueue.value.length > 0 && !running.value && !queueRunning.value);
+const canStart = computed(() => filesQueue.value.length > 0 && !running.value && !queueRunning.value && !addingDroppedFiles.value);
 const result = computed(() => job.value?.result ?? null);
-const logs = computed(() => job.value?.logs ?? []);
+const archivedLogs = ref<BuildJobLog[]>([]);
+const logs = computed(() => [...archivedLogs.value, ...(job.value?.logs ?? [])]);
 const modelOptions = computed(() => {
   const options = new Map<string, CodexModelOption>();
   for (const model of [...codexModels.value, ...fallbackModels]) {
@@ -297,6 +300,42 @@ async function browseFile() {
   }
 }
 
+async function addDroppedFiles(event: DragEvent) {
+  dragActive.value = false;
+  if (queueRunning.value || addingDroppedFiles.value) return;
+  const files = Array.from(event.dataTransfer?.files ?? []);
+  if (!files.length) return;
+
+  addingDroppedFiles.value = true;
+  let added = 0;
+  let failed = 0;
+  try {
+    for (const file of files) {
+      if (!isSupportedDocumentFile(file.name)) {
+        failed++;
+        showToast(`${file.name}: unsupported document type`, "error");
+        continue;
+      }
+      try {
+        const uploaded = await localServerApi.documentTranslation.uploadDroppedFile(file);
+        const validated = await validateFile(uploaded.path);
+        if (!filesQueue.value.includes(validated)) {
+          filesQueue.value.push(validated);
+          added++;
+        }
+      } catch (error) {
+        failed++;
+        showToast(`${file.name}: ${(error as Error).message}`, "error");
+      }
+    }
+    if (added) {
+      showToast(`Added ${added} dropped file${added === 1 ? "" : "s"}${failed ? ` (${failed} skipped)` : ""}`, failed ? "warning" : "success");
+    }
+  } finally {
+    addingDroppedFiles.value = false;
+  }
+}
+
 function removeFileFromQueue(index: number) {
   filesQueue.value.splice(index, 1);
 }
@@ -360,7 +399,14 @@ function stopPolling() {
 
 async function runOneFile(filePath: string): Promise<void> {
   const validated = await validateFile(filePath);
-  job.value = await localServerApi.documentTranslation.start({
+  const previousLogs = job.value?.logs ?? [];
+  const queueLog: BuildJobLog = {
+    ts: Date.now() / 1000,
+    level: "info",
+    source: "queue",
+    message: `Translating ${validated}`
+  };
+  const nextJob = await localServerApi.documentTranslation.start({
     filePath: validated,
     outputDirectory: form.outputDirectory || undefined,
     direction: direction.value,
@@ -373,6 +419,8 @@ async function runOneFile(filePath: string): Promise<void> {
     glossary: form.glossary,
     instructions: form.instructions,
   });
+  archivedLogs.value.push(...previousLogs, queueLog);
+  job.value = nextJob;
   void auditApi.record({
     action: "document_translation_start",
     target_type: "document_translation_job",
@@ -456,6 +504,8 @@ async function startTranslation() {
 
   queueRunning.value = true;
   queueIndex.value = 0;
+  archivedLogs.value = [];
+  job.value = null;
   let succeeded = 0;
   let failed = 0;
   try {
@@ -580,23 +630,30 @@ onBeforeUnmount(() => {
               <button
                 v-if="filesQueue.length"
                 class="rounded px-2 py-1 text-xs font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="queueRunning"
+                :disabled="queueRunning || addingDroppedFiles"
                 @click="clearQueue"
               >
                 Clear
               </button>
               <button
                 class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
-                :disabled="queueRunning"
+                :disabled="queueRunning || addingDroppedFiles"
                 @click="browseFile"
               >
                 Browse
               </button>
             </div>
           </div>
-          <div class="grid gap-1 rounded border border-neutral-200 bg-neutral-50 p-2 min-h-12">
+          <div
+            class="grid min-h-20 gap-1 rounded border-2 border-dashed p-2 transition"
+            :class="dragActive ? 'border-[#3E6AE1] bg-[#F5F8FF]' : 'border-neutral-200 bg-neutral-50'"
+            @dragenter.prevent="dragActive = true"
+            @dragover.prevent="dragActive = true"
+            @dragleave.self.prevent="dragActive = false"
+            @drop.prevent="addDroppedFiles"
+          >
             <p v-if="!filesQueue.length" class="m-0 px-1 py-2 text-sm text-[#7A7C80]">
-              No files selected. Click <strong>Browse</strong> to choose one or more documents.
+              {{ addingDroppedFiles ? "Adding dropped files..." : "Drop one or more documents here, or click Browse." }}
             </p>
             <div v-else class="flex items-center justify-between px-1 pb-1">
               <span class="text-xs font-medium text-[#393C41]">{{ filesQueue.length }} file{{ filesQueue.length === 1 ? "" : "s" }} selected<span v-if="queueRunning"> &middot; processing {{ queueIndex }}/{{ filesQueue.length }}</span></span>
@@ -609,7 +666,7 @@ onBeforeUnmount(() => {
               <span class="min-w-0 flex-1 truncate" :title="filePath">{{ filePath }}</span>
               <button
                 class="rounded px-2 py-0.5 text-xs text-[#7A7C80] transition hover:bg-neutral-100 hover:text-[#171A20] disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="queueRunning"
+                :disabled="queueRunning || addingDroppedFiles"
                 @click="removeFileFromQueue(index)"
               >
                 Remove
@@ -818,7 +875,7 @@ onBeforeUnmount(() => {
       <div ref="logContainer" class="translation-log max-h-104 overflow-auto scroll-smooth rounded bg-neutral-950 p-3">
         <div v-if="!logs.length" class="text-neutral-500">Waiting for log output...</div>
         <div v-else class="grid gap-1">
-          <div v-for="(entry, idx) in (logs as BuildJobLog[])" :key="entry.seq ?? `${entry.ts}-${idx}`" class="flex gap-2" :class="logLineClass(entry.level)">
+          <div v-for="(entry, idx) in (logs as BuildJobLog[])" :key="`${entry.source}-${entry.ts}-${entry.seq ?? 'local'}-${idx}`" class="flex gap-2" :class="logLineClass(entry.level)">
             <span class="shrink-0 text-neutral-500">{{ formatTs(entry.ts) }}</span>
             <span class="shrink-0 text-neutral-400">[{{ entry.source }}]</span>
             <span class="min-w-0 whitespace-pre-wrap wrap-break-word">{{ entry.message }}</span>

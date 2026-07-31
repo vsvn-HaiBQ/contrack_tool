@@ -32,7 +32,7 @@ function submitPrimary() {
     <div class="mx-auto grid min-h-screen max-w-6xl gap-10 px-4 py-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_420px] lg:px-8">
       <div class="flex items-center">
         <div class="max-w-2xl">
-          <p class="text-sm font-semibold uppercase tracking-[0.08em] text-[#3E6AE1]">Contrack</p>
+          <p class="text-sm font-semibold uppercase tracking-[0.08em] text-[#3E6AE1]">ConTrack</p>
           <h1 class="mt-4 text-4xl leading-tight font-semibold text-[#171A20]">Manage JP tickets, VN execution, logtime, and PR flow in one place.</h1>
           <p class="mt-4 text-base leading-7 text-[#5C5E62]">
             A cleaner operational workspace for sync, ticket management, daily logtime, and GitHub pull requests.

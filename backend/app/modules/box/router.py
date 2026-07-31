@@ -149,7 +149,7 @@ def box_oauth_callback(
         db.rollback()
         return _oauth_html("Box authorization failed", str(exc), status_code=400)
     db.commit()
-    return _oauth_html("Box connected", "You can close this tab and return to Contrack.")
+    return _oauth_html("Box connected", "You can close this tab and return to ConTrack.")
 
 
 @router.post("/upload-access", response_model=BoxUploadAccessResponse)

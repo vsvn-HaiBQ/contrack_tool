@@ -32,6 +32,7 @@ const emit = defineEmits<{
 type GroupedRow = {
   row: LogtimeRow;
   isLast: boolean;
+  depth: number;
 };
 
 type RowGroup = {
@@ -53,12 +54,22 @@ const groupedRows = computed<RowGroup[]>(() => {
     }
   }
 
+  function flattenChildren(parentId: number, depth: number, visited: Set<number>): GroupedRow[] {
+    const children = childrenOf.get(parentId) ?? [];
+    return children.flatMap((row, index) => {
+      if (visited.has(row.issue_id)) return [];
+      const nextVisited = new Set(visited);
+      nextVisited.add(row.issue_id);
+      return [
+        { row, depth, isLast: index === children.length - 1 },
+        ...flattenChildren(row.issue_id, depth + 1, nextVisited)
+      ];
+    });
+  }
+
   return roots.map((root) => ({
     root,
-    children: (childrenOf.get(root.issue_id) ?? []).map((row, idx, items) => ({
-      row,
-      isLast: idx === items.length - 1
-    }))
+    children: flattenChildren(root.issue_id, 1, new Set([root.issue_id]))
   }));
 });
 
@@ -249,9 +260,9 @@ const formattedHeaderDate = computed(() => {
                   </div>
                   <div class="grid min-w-0 gap-1">
                     <span class="text-[11px] font-medium uppercase tracking-wide text-[#5C5E62] md:hidden">Subject</span>
-                    <div class="relative min-w-0 pl-4">
-                      <span class="absolute top-0.5 left-0 h-2.5 w-3 border-l border-b border-neutral-300"></span>
-                      <span v-if="!item.isLast" class="absolute top-3 left-0 h-[calc(100%-0.75rem)] border-l border-neutral-300"></span>
+                    <div class="relative min-w-0" :style="{ paddingLeft: `${item.depth * 16}px` }">
+                      <span class="absolute top-0.5 h-2.5 w-3 border-l border-b border-neutral-300" :style="{ left: `${(item.depth - 1) * 16}px` }"></span>
+                      <span v-if="!item.isLast" class="absolute top-3 h-[calc(100%-0.75rem)] border-l border-neutral-300" :style="{ left: `${(item.depth - 1) * 16}px` }"></span>
                       <a :href="item.row.url" target="_blank" rel="noreferrer" class="block min-w-0 truncate text-sm text-[#171A20] hover:text-[#3E6AE1] hover:underline" :title="item.row.subject">
                         {{ item.row.subject }}
                       </a>

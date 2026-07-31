@@ -56,7 +56,7 @@ onBeforeUnmount(() => {
           class="shrink-0 rounded-lg px-2 py-1 text-lg font-semibold text-[#171A20] transition hover:bg-neutral-100"
           @click="emit('select', '/tickets/detail')"
         >
-          Contrack
+          ConTrack
         </button>
         <div class="flex min-w-0 flex-1 items-center justify-end gap-3">
           <div v-if="(versions ?? []).length" class="flex items-center gap-2">

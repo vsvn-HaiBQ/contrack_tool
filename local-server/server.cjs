@@ -1,6 +1,8 @@
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 
 function requireLocalModule(fileName) {
@@ -42,6 +44,7 @@ const host = process.env.CONTRACK_LOCAL_SERVER_HOST || "127.0.0.1";
 const port = Number(process.env.CONTRACK_LOCAL_SERVER_PORT || 3219);
 const backendUrl = (process.env.CONTRACK_BACKEND_URL || "http://127.0.0.1:8009").replace(/\/$/, "");
 const maxBodyBytes = 1024 * 1024 * 5;
+const maxDroppedFileBytes = 1024 * 1024 * 100;
 const allowedOrigins = (process.env.CONTRACK_ALLOWED_ORIGINS || process.env.CONTRACK_CORS_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
@@ -181,6 +184,24 @@ function readJson(req) {
         reject(new Error("Request body must be valid JSON"));
       }
     });
+    req.on("error", reject);
+  });
+}
+
+function readBuffer(req, limitBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (chunk) => {
+      total += chunk.length;
+      if (total > limitBytes) {
+        reject(new Error("Request body is too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
 }
@@ -601,6 +622,20 @@ async function route(req, res) {
     sendJson(req, res, 200, { models: listCodexModels() });
     return;
   }
+  if (req.method === "POST" && pathname === "/document-translation/drop-file") {
+    const requestedName = path.basename(String(url.searchParams.get("name") || "").trim());
+    if (!requestedName || !/\.(txt|md|docx|xlsx|pptx)$/i.test(requestedName)) {
+      sendJson(req, res, 400, { message: "A supported document file name is required" });
+      return;
+    }
+    const content = await readBuffer(req, maxDroppedFileBytes);
+    const dropDirectory = path.join(os.tmpdir(), "contrack-document-drops", crypto.randomUUID());
+    fs.mkdirSync(dropDirectory, { recursive: true });
+    const droppedPath = path.join(dropDirectory, requestedName);
+    fs.writeFileSync(droppedPath, content, { flag: "wx" });
+    sendJson(req, res, 200, { path: droppedPath });
+    return;
+  }
   if (req.method === "POST" && pathname === "/document-translation/sheets") {
     const body = await readJson(req);
     sendJson(req, res, 200, {
@@ -697,7 +732,7 @@ server = http.createServer((req, res) => {
 
 server.listen(port, host, () => {
   const versionInfo = localServerVersion();
-  console.log(`Contrack Node processing server ${versionInfo.version} listening at http://${host}:${port}`);
+  console.log(`ConTrack Node processing server ${versionInfo.version} listening at http://${host}:${port}`);
   if (versionInfo.commit_sha) {
     console.log(`Build commit: ${versionInfo.commit_sha}`);
   }

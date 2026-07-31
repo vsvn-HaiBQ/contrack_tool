@@ -154,6 +154,15 @@ export const localServerApi = {
       const response = await localHttp<{ models: CodexModelOption[] }>("/document-translation/models");
       return response.models;
     },
+    uploadDroppedFile: (file: File) =>
+      localHttp<{ path: string }>(
+        `/document-translation/drop-file?name=${encodeURIComponent(file.name)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: file
+        }
+      ),
     sheets: async (payload: unknown) => {
       const response = await localHttp<{ sheets: string[] }>("/document-translation/sheets", jsonBody(withOpenXmlBase(payload)));
       return response.sheets;

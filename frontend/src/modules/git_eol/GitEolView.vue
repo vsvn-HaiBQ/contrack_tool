@@ -53,6 +53,11 @@ const canPreview = computed(() => {
   }
   return Boolean(props.form.base_branch.trim() && props.form.source_branch.trim());
 });
+const showEolOnlyFiles = ref(false);
+const visiblePreviewFiles = computed(() =>
+  props.preview?.files.filter((file) => !showEolOnlyFiles.value || file.eol_only_lines > 0) ?? []
+);
+const commitAndPushCompleted = computed(() => Boolean(props.commitResult?.committed && props.pushResult?.pushed));
 function hasFixedOutput(file: GitEolFixResult["fixed_files"][number]) {
   return Boolean(file.committable || file.worktree_changed || file.restored_eol_lines > 0);
 }
@@ -261,6 +266,10 @@ function statusBadgeClass(status: string): string {
           </p>
         </div>
         <div v-if="preview" class="flex flex-wrap items-center gap-2">
+          <label class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-[#393C41]">
+            <input v-model="showEolOnlyFiles" type="checkbox" class="size-4 accent-[#3E6AE1]" />
+            Only files with EOL-only changes
+          </label>
           <span class="text-sm text-[#5C5E62]">{{ selectedCount }} / {{ processableCount }} selected</span>
         </div>
       </div>
@@ -291,7 +300,7 @@ function statusBadgeClass(status: string): string {
             </tr>
           </thead>
           <tbody>
-            <template v-for="file in preview.files" :key="file.path">
+            <template v-for="file in visiblePreviewFiles" :key="file.path">
               <tr class="border-t border-neutral-200 cursor-pointer hover:bg-neutral-50" @click="emit('toggleFile', file.path)">
                 <td class="px-3 py-2" @click.stop>
                   <input v-model="selectedFiles[file.path]" type="checkbox" :disabled="!file.processable" class="size-4 accent-[#3E6AE1]" />
@@ -335,6 +344,9 @@ function statusBadgeClass(status: string): string {
             </template>
           </tbody>
         </table>
+        <p v-if="showEolOnlyFiles && !visiblePreviewFiles.length" class="m-0 border-t border-neutral-200 px-4 py-6 text-center text-sm text-[#5C5E62]">
+          No files have EOL-only changes.
+        </p>
       </div>
       <p v-else-if="!loadingPreview" class="text-sm text-[#5C5E62]">No preview loaded.</p>
 
@@ -463,11 +475,11 @@ function statusBadgeClass(status: string): string {
           <div class="flex flex-wrap items-center gap-3">
             <button
               class="inline-flex min-h-10 min-w-[160px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="committing || pushing"
+              :disabled="committing || pushing || commitAndPushCompleted"
               @click="emit('commitAndPush')"
             >
               <LoadingCircle v-if="committing || pushing" />
-              {{ pushing ? "Pushing..." : committing ? "Committing..." : "Commit & Push" }}
+              {{ pushing ? "Pushing..." : committing ? "Committing..." : commitAndPushCompleted ? "Committed & Pushed" : "Commit & Push" }}
             </button>
             <span v-if="commitResult" class="text-sm text-[#5C5E62]">
               {{ commitResult.committed ? `Committed ${commitResult.commit_sha?.slice(0, 12)}` : commitResult.message }}
