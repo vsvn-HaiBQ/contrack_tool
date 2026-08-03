@@ -484,15 +484,36 @@ def post_team_thread(
     try:
         response = httpx.post(team_automate_url, json=body, timeout=20)
         response.raise_for_status()
-        response_body = response.json()
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=502, detail=f"Team Automate request failed: HTTP {exc.response.status_code}") from exc
-    except (httpx.HTTPError, ValueError) as exc:
+    except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Team Automate request failed: {exc}") from exc
 
-    thread_url = response_body.get("webUrl") if isinstance(response_body, dict) else None
+    if not response.content:
+        raise HTTPException(
+            status_code=502,
+            detail='Team Automate returned an empty response; configure its Response action to return JSON like {"webUrl":"https://..."}',
+        )
+
+    try:
+        response_body = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail='Team Automate returned a non-JSON response; expected JSON like {"webUrl":"https://..."}',
+        ) from exc
+
+    thread_url = None
+    if isinstance(response_body, dict):
+        thread_url = response_body.get("webUrl")
+        nested_body = response_body.get("body")
+        if not thread_url and isinstance(nested_body, dict):
+            thread_url = nested_body.get("webUrl")
     if not isinstance(thread_url, str) or not thread_url.strip():
-        raise HTTPException(status_code=502, detail="Team Automate response must include url")
+        raise HTTPException(
+            status_code=502,
+            detail='Team Automate response must include a non-empty "webUrl" or "body.webUrl"',
+        )
 
     link_payload = TicketLinkIn(type="thread", label="Teams Thread", url=thread_url.strip())
     _upsert_ticket_link(db, managed, link_payload)
