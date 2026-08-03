@@ -490,7 +490,7 @@ def post_team_thread(
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(status_code=502, detail=f"Team Automate request failed: {exc}") from exc
 
-    thread_url = response_body.get("url") if isinstance(response_body, dict) else None
+    thread_url = response_body.get("webUrl") if isinstance(response_body, dict) else None
     if not isinstance(thread_url, str) or not thread_url.strip():
         raise HTTPException(status_code=502, detail="Team Automate response must include url")
 
