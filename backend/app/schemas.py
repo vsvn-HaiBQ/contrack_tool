@@ -437,7 +437,7 @@ class TicketStatusAssigneeUpdate(BaseModel):
 
 
 class TeamThreadPostResponse(BaseModel):
-    url: str
+    url: str | None = None
     links: list[TicketLinkOut]
 
 

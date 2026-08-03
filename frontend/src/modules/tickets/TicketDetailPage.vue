@@ -354,7 +354,7 @@ async function postToTeams() {
   try {
     const result = await ticketsApi.postTeamThread(ticketDetail.value.jp_issue_id);
     ticketDetail.value.links = result.links;
-    showToast("Posted to Teams and saved thread link", "success");
+    showToast(result.url ? "Posted to Teams and saved thread link" : "Posted to Teams (thread link unavailable)", "success");
   } catch (error) {
     showToast((error as Error).message, "error");
   } finally {

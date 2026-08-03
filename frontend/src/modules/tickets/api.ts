@@ -21,7 +21,7 @@ export const ticketsApi = {
   createIssueChild: (issueId: number, payload: unknown) =>
     http<SyncIssueSummary>(`/tickets/issues/${issueId}/child`, { method: "POST", body: JSON.stringify(payload) }),
   postTeamThread: (jpIssueId: number) =>
-    http<{ url: string; links: TicketDetail["links"] }>(`/tickets/${jpIssueId}/team-thread`, { method: "POST" }),
+    http<{ url: string | null; links: TicketDetail["links"] }>(`/tickets/${jpIssueId}/team-thread`, { method: "POST" }),
   updateTicket: (jpIssueId: number, payload: unknown) =>
     http(`/tickets/${jpIssueId}/status-assignee`, { method: "PUT", body: JSON.stringify(payload) }),
   updateIssue: (issueId: number, payload: unknown) =>

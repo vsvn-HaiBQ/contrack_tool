@@ -489,34 +489,25 @@ def post_team_thread(
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Team Automate request failed: {exc}") from exc
 
-    if not response.content:
-        raise HTTPException(
-            status_code=502,
-            detail='Team Automate returned an empty response; configure its Response action to return JSON like {"webUrl":"https://..."}',
-        )
-
-    try:
-        response_body = response.json()
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail='Team Automate returned a non-JSON response; expected JSON like {"webUrl":"https://..."}',
-        ) from exc
+    response_body = None
+    if response.content:
+        try:
+            response_body = response.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail="Team Automate returned a non-JSON response") from exc
 
     thread_url = None
     if isinstance(response_body, dict):
-        thread_url = response_body.get("webUrl")
+        thread_url = response_body.get("url") or response_body.get("webUrl")
         nested_body = response_body.get("body")
         if not thread_url and isinstance(nested_body, dict):
             thread_url = nested_body.get("webUrl")
-    if not isinstance(thread_url, str) or not thread_url.strip():
-        raise HTTPException(
-            status_code=502,
-            detail='Team Automate response must include a non-empty "webUrl" or "body.webUrl"',
-        )
-
-    link_payload = TicketLinkIn(type="thread", label="Teams Thread", url=thread_url.strip())
-    _upsert_ticket_link(db, managed, link_payload)
+    if isinstance(thread_url, str) and thread_url.strip():
+        thread_url = thread_url.strip()
+        link_payload = TicketLinkIn(type="thread", label="Teams Thread", url=thread_url)
+        _upsert_ticket_link(db, managed, link_payload)
+    else:
+        thread_url = None
 
     meta = request_meta(request)
     write_audit_log(
@@ -531,7 +522,7 @@ def post_team_thread(
     db.commit()
     db.refresh(managed)
     return TeamThreadPostResponse(
-        url=thread_url.strip(),
+        url=thread_url,
         links=[TicketLinkOut.model_validate(link) for link in managed.links],
     )
 
