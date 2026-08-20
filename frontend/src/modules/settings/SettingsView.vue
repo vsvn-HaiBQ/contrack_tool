@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Assignee, IntegrationStatus, User, UserSettings } from "../../shared/types";
+import type { Assignee, IntegrationStatus, MenuPermission, Role, User, UserSettings } from "../../shared/types";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
 import SearchableSelect from "../../shared/SearchableSelect.vue";
 import VersionsAdmin from "../versions/VersionsAdmin.vue";
@@ -9,6 +9,8 @@ const props = defineProps<{
   me: User;
   assignees: Assignee[];
   users: User[];
+  roles: Role[];
+  menuPermissions: MenuPermission[];
   userSettings: UserSettings;
   systemSettings: Record<string, string>;
   integrationStatuses: IntegrationStatus[];
@@ -25,6 +27,14 @@ const props = defineProps<{
   };
   showCreateUserRow: boolean;
   passwordDrafts: Record<number, string>;
+  roleDrafts: Record<number, string>;
+  roleForm: {
+    name: string;
+    permissions: string[];
+  };
+  showRoleForm: boolean;
+  editingRoleName: string | null;
+  savingRole: boolean;
   passwordForm: {
     current_password: string;
     new_password: string;
@@ -56,8 +66,15 @@ const emit = defineEmits<{
   saveSystemSettings: [];
   saveBoxSettings: [];
   createUser: [];
+  updateUserRole: [userId: number];
   resetPassword: [userId: number];
   deleteUser: [userId: number];
+  createRole: [];
+  editRole: [roleName: string];
+  cancelRoleEdit: [];
+  toggleRolePermission: [permission: string];
+  saveRole: [];
+  deleteRole: [roleName: string];
   testIntegration: [serviceName: string];
 }>();
 </script>
@@ -273,8 +290,61 @@ const emit = defineEmits<{
         </div>
       </div>
 
+      <div class="grid gap-4 rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h4 class="text-base font-semibold text-[#171A20]">Roles</h4>
+            <p class="mt-1 text-sm text-[#5C5E62]">Choose which menus are available for each role.</p>
+          </div>
+          <button class="rounded border border-[#171A20] bg-[#171A20] px-3 py-2 text-sm font-medium text-white transition hover:bg-black" @click="emit('createRole')">
+            Add Role
+          </button>
+        </div>
+
+        <div v-if="showRoleForm" class="grid gap-4 rounded-lg border border-neutral-200 bg-white p-4">
+          <div class="grid gap-2 md:max-w-sm">
+            <label class="text-sm font-medium text-[#393C41]">Role Name</label>
+            <input v-model="roleForm.name" placeholder="e.g. reviewer" class="rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+          </div>
+          <div class="grid gap-2">
+            <span class="text-sm font-medium text-[#393C41]">Menu Permissions</span>
+            <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <label v-for="permission in menuPermissions" :key="permission.key" class="flex items-center gap-2 rounded border border-neutral-200 px-3 py-2 text-sm text-[#393C41]">
+                <input
+                  type="checkbox"
+                  class="size-3.5 accent-[#3E6AE1]"
+                  :checked="roleForm.permissions.includes(permission.key)"
+                  @change="emit('toggleRolePermission', permission.key)"
+                />
+                {{ permission.label }}
+              </label>
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button class="rounded bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60" :disabled="savingRole" @click="emit('saveRole')">
+              {{ savingRole ? 'Saving...' : editingRoleName ? 'Save Role' : 'Create Role' }}
+            </button>
+            <button class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="emit('cancelRoleEdit')">Cancel</button>
+          </div>
+        </div>
+
+        <div class="grid gap-2">
+          <div v-for="role in roles" :key="role.name" class="flex flex-wrap items-center justify-between gap-3 rounded border border-neutral-200 bg-white px-3 py-2">
+            <div>
+              <span class="font-medium text-[#171A20]">{{ role.name }}</span>
+              <span class="ml-2 text-sm text-[#5C5E62]">{{ role.permissions.length }} menu permission{{ role.permissions.length === 1 ? '' : 's' }}</span>
+            </div>
+            <div v-if="role.name === 'admin'" class="text-sm text-[#5C5E62]">Built-in administrator</div>
+            <div v-else class="flex gap-2">
+              <button class="rounded border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="emit('editRole', role.name)">Edit</button>
+              <button class="rounded border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 transition hover:bg-red-100" @click="emit('deleteRole', role.name)">Delete</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="overflow-hidden border border-neutral-200">
-        <div class="grid grid-cols-[40px_220px_120px_320px_120px] gap-3 border-b border-neutral-200 px-3 py-2 text-xs font-medium text-[#5C5E62]">
+        <div class="grid grid-cols-[40px_220px_200px_320px_120px] gap-3 border-b border-neutral-200 px-3 py-2 text-xs font-medium text-[#5C5E62]">
           <span>
             <button class="flex size-7 items-center justify-center rounded-full border border-neutral-200 bg-white text-sm text-[#171A20] transition hover:bg-neutral-100" @click="emit('createUser')">+</button>
           </span>
@@ -283,21 +353,24 @@ const emit = defineEmits<{
           <span>Reset Password</span>
           <span>Action</span>
         </div>
-        <div v-if="showCreateUserRow" class="grid grid-cols-[40px_220px_120px_320px_120px] items-start gap-3 border-b border-neutral-200 px-3 py-2">
+        <div v-if="showCreateUserRow" class="grid grid-cols-[40px_220px_200px_320px_120px] items-start gap-3 border-b border-neutral-200 px-3 py-2">
           <span></span>
           <input v-model="createUserForm.username" placeholder="username" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
           <select v-model="createUserForm.role" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
-            <option value="dev">dev</option>
-            <option value="qa">qa</option>
-            <option value="admin">admin</option>
+            <option v-for="role in roles" :key="role.name" :value="role.name">{{ role.name }}</option>
           </select>
           <input v-model="createUserForm.password" type="password" placeholder="password" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
           <button class="rounded border border-[#171A20] bg-[#171A20] px-3 py-2 text-sm font-medium text-white transition hover:bg-black" @click="emit('createUser')">Save</button>
         </div>
-        <div v-for="user in users" :key="user.id" class="grid grid-cols-[40px_220px_120px_320px_120px] items-start gap-3 border-b border-neutral-200 px-3 py-2 last:border-b-0">
+        <div v-for="user in users" :key="user.id" class="grid grid-cols-[40px_220px_200px_320px_120px] items-start gap-3 border-b border-neutral-200 px-3 py-2 last:border-b-0">
           <span></span>
           <span>{{ user.username }}</span>
-          <span>{{ user.role }}</span>
+          <div class="flex items-center gap-2">
+            <select v-model="roleDrafts[user.id]" :disabled="user.id === me.id" class="min-w-0 flex-1 rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1] disabled:cursor-not-allowed disabled:bg-neutral-100">
+              <option v-for="role in roles" :key="role.name" :value="role.name">{{ role.name }}</option>
+            </select>
+            <button class="rounded border border-neutral-200 bg-white px-2 py-2 text-xs font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50" :disabled="user.id === me.id || roleDrafts[user.id] === user.role" @click="emit('updateUserRole', user.id)">Save</button>
+          </div>
           <div class="flex items-center gap-2">
             <input v-model="passwordDrafts[user.id]" type="password" class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
             <button class="rounded border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="emit('resetPassword', user.id)">Reset</button>

@@ -2,7 +2,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 
 const sessions = new Map();
 const previewJobs = new Map();
@@ -25,6 +25,40 @@ function git(repoPath, args, options = {}) {
     throw new Error((stderr || stdout || `git ${args.join(" ")} failed`).trim());
   }
   return result.stdout;
+}
+
+function gitAsync(repoPath, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, {
+      cwd: repoPath,
+      env: { ...tokenEnv(options.token), ...(options.env || {}) },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
+    child.stderr.on("data", (chunk) => {
+      stderr.push(chunk);
+      if (typeof options.onProgress === "function") {
+        for (const rawLine of chunk.toString("utf8").split(/[\r\n]+/)) {
+          const line = rawLine.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").trim();
+          if (line) options.onProgress(line);
+        }
+      }
+    });
+    child.on("error", (error) => {
+      reject(new Error(error.code === "ENOENT" ? "git command is not available" : error.message));
+    });
+    child.on("close", (code) => {
+      const output = Buffer.concat(stdout);
+      if (code === 0 || options.check === false) {
+        resolve(output);
+        return;
+      }
+      const errorOutput = Buffer.concat(stderr).toString("utf8").trim() || output.toString("utf8").trim();
+      reject(new Error(errorOutput || `git ${args.join(" ")} failed`));
+    });
+  });
 }
 
 function tokenEnv(token) {
@@ -54,6 +88,72 @@ function ensureRepo(repoPath) {
     throw new Error("Source folder is not a git working tree");
   }
   return gitText(repoPath, ["rev-parse", "--show-toplevel"]).trim();
+}
+
+function normalizeRepo(repo) {
+  const value = String(repo || "").trim();
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value)) {
+    throw new Error("git_repo must use owner/repo format in system settings");
+  }
+  return value;
+}
+
+function isEmptyDirectory(folder) {
+  return fs.existsSync(folder)
+    && fs.statSync(folder).isDirectory()
+    && fs.readdirSync(folder).length === 0;
+}
+
+function normalizeSourceBranch(repoPath, branch) {
+  const value = String(branch || "").trim().replace(/^(?:origin\/|refs\/heads\/|refs\/remotes\/origin\/)/, "");
+  if (!value || value.startsWith("-")) {
+    throw new Error("sourceBranch is required");
+  }
+  git(repoPath, ["check-ref-format", "--branch", value]);
+  return value;
+}
+
+async function ensureBranchRepository({ sourceFolder, repo, githubToken, gitUserName, gitUserEmail, onStatus }) {
+  const report = onStatus || (() => {});
+  const reportProgress = (step) => (line) => report(`${step}: ${line}`);
+  const target = path.resolve(String(sourceFolder || "").trim());
+  if (!sourceFolder || !String(sourceFolder).trim()) {
+    throw new Error("Local clone folder is required");
+  }
+  if (fs.existsSync(target) && !fs.statSync(target).isDirectory()) {
+    throw new Error("Local clone folder must be a directory");
+  }
+  const normalizedRepo = normalizeRepo(repo);
+  const repoUrl = `https://github.com/${normalizedRepo}.git`;
+  if (!fs.existsSync(target) || isEmptyDirectory(target)) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    report(`Cloning ${normalizedRepo} locally`);
+    await gitAsync(path.dirname(target), ["-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "clone", "--progress", "--", repoUrl, target], {
+      token: githubToken,
+      onProgress: reportProgress("Cloning"),
+    });
+  } else {
+    report("Using existing local clone");
+  }
+
+  const repoPath = ensureRepo(target);
+  report("Configuring local repository");
+  git(repoPath, ["config", "core.autocrlf", "false"]);
+  git(repoPath, ["config", "core.safecrlf", "false"]);
+  if (gitUserName) git(repoPath, ["config", "user.name", String(gitUserName)]);
+  if (gitUserEmail) git(repoPath, ["config", "user.email", String(gitUserEmail)]);
+  git(repoPath, ["remote", "set-url", "origin", repoUrl]);
+  report("Reverting tracked local changes");
+  await gitAsync(repoPath, ["reset", "--hard", "HEAD"], {
+    token: githubToken,
+    onProgress: reportProgress("Reverting"),
+  });
+  report("Fetching origin");
+  await gitAsync(repoPath, ["fetch", "--prune", "--progress", "origin"], {
+    token: githubToken,
+    onProgress: reportProgress("Fetching"),
+  });
+  return { repoPath, repo: normalizedRepo };
 }
 
 function parseChangedFiles(raw) {
@@ -586,6 +686,182 @@ function getWorkingTreePreviewJob(jobId) {
   return job;
 }
 
+function resolveBranchRef(repoPath, branch, fieldName) {
+  const value = String(branch || "").trim();
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${fieldName} is required`);
+  }
+  const candidates = value.startsWith("origin/") ? [value] : [`origin/${value}`, value];
+  for (const candidate of candidates) {
+    if (git(repoPath, ["rev-parse", "--verify", "--quiet", `${candidate}^{commit}`], { check: false }).length) {
+      return candidate;
+    }
+  }
+  throw new Error(`${fieldName} does not exist locally or on origin`);
+}
+
+async function prepareBranchPreview({ sourceFolder, repo, githubToken, gitUserName, gitUserEmail, baseBranch, sourceBranch }, onStatus) {
+  const { repoPath } = await ensureBranchRepository({
+    sourceFolder,
+    repo,
+    githubToken,
+    gitUserName,
+    gitUserEmail,
+    onStatus,
+  });
+  const sourceBranchName = normalizeSourceBranch(repoPath, sourceBranch);
+  const baseRef = resolveBranchRef(repoPath, baseBranch, "baseBranch");
+  const sourceRef = `origin/${sourceBranchName}`;
+  if (!git(repoPath, ["rev-parse", "--verify", "--quiet", `${sourceRef}^{commit}`], { check: false }).length) {
+    throw new Error("sourceBranch does not exist on origin");
+  }
+
+  const reportProgress = (step) => (line) => {
+    if (onStatus) onStatus(`${step}: ${line}`);
+  };
+  const localSourceRef = `refs/heads/${sourceBranchName}`;
+  if (git(repoPath, ["rev-parse", "--verify", "--quiet", `${localSourceRef}^{commit}`], { check: false }).length) {
+    if (onStatus) onStatus(`Switching to ${sourceBranchName}`);
+    await gitAsync(repoPath, ["checkout", sourceBranchName], {
+      token: githubToken,
+      onProgress: reportProgress("Switching branch"),
+    });
+  } else {
+    if (onStatus) onStatus(`Creating local branch ${sourceBranchName}`);
+    await gitAsync(repoPath, ["checkout", "--track", "-b", sourceBranchName, sourceRef], {
+      token: githubToken,
+      onProgress: reportProgress("Switching branch"),
+    });
+  }
+  if (onStatus) onStatus(`Pulling latest ${sourceBranchName}`);
+  await gitAsync(repoPath, ["pull", "--ff-only", "origin", sourceBranchName], {
+    token: githubToken,
+    onProgress: reportProgress("Pulling"),
+  });
+  const mergeBase = gitText(repoPath, ["merge-base", baseRef, "HEAD"]).trim();
+  if (!mergeBase) {
+    throw new Error("Could not find merge-base");
+  }
+  const changed = parseChangedFiles(git(repoPath, ["diff", "--name-status", "-z", "-M", mergeBase, "HEAD", "--"]));
+  return {
+    repoPath,
+    baseBranch: String(baseBranch).trim(),
+    mergeBase,
+    sourceBranch: sourceBranchName,
+    changed,
+  };
+}
+
+function previewBranchFile(context, entry) {
+  if (!["modified", "renamed"].includes(entry.status)) {
+    return {
+      path: entry.path,
+      old_path: entry.old_path,
+      status: entry.status,
+      selected: false,
+      processable: false,
+      reason: entry.status,
+      changed_lines: 0,
+      eol_only_lines: 0,
+      space_only_lines: 0,
+    };
+  }
+  try {
+    const oldPath = entry.old_path || entry.path;
+    // Branch compare must use the committed bytes.  Reading the checkout here
+    // would let core.autocrlf or .gitattributes change the preview.
+    const baseBytes = gitObject(context.repoPath, context.mergeBase, oldPath);
+    const sourceBytes = gitObject(context.repoPath, "HEAD", entry.path);
+    if (isBinary(baseBytes) || isBinary(sourceBytes)) {
+      return { ...entry, selected: false, processable: false, reason: "Binary file", changed_lines: 0, eol_only_lines: 0, space_only_lines: 0 };
+    }
+    return {
+      path: entry.path,
+      old_path: entry.old_path,
+      status: entry.status,
+      selected: true,
+      processable: true,
+      ...diffStats(baseBytes, sourceBytes),
+    };
+  } catch (error) {
+    return {
+      path: entry.path,
+      old_path: entry.old_path,
+      status: entry.status,
+      selected: false,
+      processable: false,
+      reason: error.message,
+      changed_lines: 0,
+      eol_only_lines: 0,
+      space_only_lines: 0,
+    };
+  }
+}
+
+function finishBranchPreview(context, files) {
+  const sessionId = crypto.randomBytes(16).toString("hex");
+  const preview = {
+    session_id: sessionId,
+    base_branch: context.baseBranch,
+    source_branch: context.sourceBranch,
+    merge_base: context.mergeBase,
+    files,
+  };
+  sessions.set(sessionId, {
+    user_id: "local-node",
+    mode: "branch",
+    repoPath: context.repoPath,
+    base_ref: context.mergeBase,
+    source_branch: context.sourceBranch,
+    files,
+    fixed_files: [],
+    fixed_blobs: new Map(),
+    commit_sha: null,
+  });
+  return preview;
+}
+
+function startBranchPreview(input) {
+  const jobId = crypto.randomBytes(16).toString("hex");
+  const job = { job_id: jobId, status: "running", current: 0, total: 0, path: "", message: "Preparing local repository", result: null, error: null };
+  previewJobs.set(jobId, job);
+  setImmediate(async () => {
+    let context;
+    try {
+      context = await prepareBranchPreview(input, (message) => { job.message = message; });
+      job.total = context.changed.length;
+      job.message = "Scanning changed files";
+    } catch (error) {
+      job.status = "failed";
+      job.error = error && error.message ? error.message : String(error);
+      return;
+    }
+    const files = [];
+    let index = 0;
+    const scanNext = () => {
+      try {
+        if (index >= context.changed.length) {
+          job.result = finishBranchPreview(context, files);
+          job.status = "succeeded";
+          return;
+        }
+        const entry = context.changed[index];
+        job.current = index + 1;
+        job.path = entry.path;
+        const file = previewBranchFile(context, entry);
+        if (file.processable && (file.eol_only_lines > 0 || file.space_only_lines > 0)) files.push(file);
+        index += 1;
+        setImmediate(scanNext);
+      } catch (error) {
+        job.status = "failed";
+        job.error = error && error.message ? error.message : String(error);
+      }
+    };
+    scanNext();
+  });
+  return { job_id: jobId, status: job.status };
+}
+
 function previewFile(repoPath, entry) {
   if (!["modified", "renamed"].includes(entry.status)) {
     return {
@@ -657,17 +933,28 @@ function structuredDiff(input = {}) {
   }
   const oldPath = entry.old_path || filePath;
   const includeFixed = Boolean(input.includeFixed || input.include_fixed);
+  const isBranch = value.mode === "branch";
+  const worktreePath = value.worktreePath || value.repoPath;
+  const baseRef = value.base_ref || "HEAD";
   let baseBytes = Buffer.alloc(0);
   let sourceBytes = Buffer.alloc(0);
   try {
-    baseBytes = gitObjectForWorktree(value.repoPath, "HEAD", oldPath);
+    baseBytes = isBranch
+      ? gitObject(worktreePath, baseRef, oldPath)
+      : gitObjectForWorktree(value.repoPath, "HEAD", oldPath);
   } catch {
     baseBytes = Buffer.alloc(0);
   }
   try {
-    sourceBytes = includeFixed
-      ? worktreeBytes(value.repoPath, filePath)
-      : value.source_snapshots?.get(filePath) || worktreeBytes(value.repoPath, filePath);
+    if (isBranch) {
+      sourceBytes = includeFixed
+        ? worktreeBytes(worktreePath, filePath)
+        : gitObject(worktreePath, "HEAD", filePath);
+    } else {
+      sourceBytes = includeFixed
+        ? worktreeBytes(value.repoPath, filePath)
+        : value.source_snapshots?.get(filePath) || worktreeBytes(value.repoPath, filePath);
+    }
   } catch {
     sourceBytes = Buffer.alloc(0);
   }
@@ -944,7 +1231,7 @@ function fixWorkingTree(input = {}) {
         skippedFiles.push({ path: filePath, reason: "Enable the space-only option to fix this file" });
         continue;
       }
-      const fixed = fixFile(value.repoPath, entry, { fixSpaceOnly });
+      const fixed = fixFile(value, entry, { fixSpaceOnly });
       fixedFiles.push(fixed.result);
       existingFixedFiles.set(entry.path, fixed.result);
       fixedBlobs.delete(entry.path);
@@ -970,11 +1257,21 @@ function fixWorkingTree(input = {}) {
   };
 }
 
-function fixFile(repoPath, entry, { fixSpaceOnly = false } = {}) {
+function fixFile(value, entry, { fixSpaceOnly = false } = {}) {
+  const repoPath = value.repoPath;
+  const isBranch = value.mode === "branch";
+  const worktreePath = value.worktreePath || repoPath;
+  const baseRef = value.base_ref || "HEAD";
   const oldPath = entry.old_path || entry.path;
-  const baseBytes = gitObjectForWorktree(repoPath, "HEAD", oldPath);
-  const baseBlobBytes = gitObject(repoPath, "HEAD", oldPath);
-  const sourceBytes = worktreeBytes(repoPath, entry.path);
+  const baseBytes = isBranch
+    ? gitObject(worktreePath, baseRef, oldPath)
+    : gitObjectForWorktree(repoPath, "HEAD", oldPath);
+  const baseBlobBytes = isBranch
+    ? baseBytes
+    : gitObject(repoPath, "HEAD", oldPath);
+  const sourceBytes = isBranch
+    ? gitObject(worktreePath, "HEAD", entry.path)
+    : worktreeBytes(repoPath, entry.path);
   if (isBinary(baseBytes) || isBinary(baseBlobBytes) || isBinary(sourceBytes)) {
     throw new Error("Binary file");
   }
@@ -988,7 +1285,33 @@ function fixFile(repoPath, entry, { fixSpaceOnly = false } = {}) {
   const nextWorktreeBytes = joinLines(sourceLines);
   const worktreeChanged = !sourceBytes.equals(nextWorktreeBytes);
   if (worktreeChanged) {
-    fs.writeFileSync(safeFile(repoPath, entry.path), nextWorktreeBytes);
+    fs.writeFileSync(safeFile(worktreePath, entry.path), nextWorktreeBytes);
+  }
+
+  if (isBranch) {
+    const remaining = diffStats(baseBytes, nextWorktreeBytes);
+    let message = null;
+    if (!worktreeChanged && (restored > 0 || restoredSpaceOnly > 0)) {
+      message = "Selected changes were already aligned with the source blob";
+    } else if (restored === 0 && restoredSpaceOnly === 0) {
+      message = "No EOL changes were needed";
+    }
+    return {
+      result: {
+        path: entry.path,
+        restored_eol_lines: restored,
+        fixed_eol_lines: fixedEolLines,
+        restored_space_only_lines: restoredSpaceOnly,
+        fixed_space_only_lines: fixedSpaceOnlyLines,
+        remaining_changed_lines: remaining.changed_lines,
+        remaining_eol_only_lines: remaining.eol_only_lines,
+        remaining_space_only_lines: remaining.space_only_lines,
+        worktree_changed: worktreeChanged,
+        committable: worktreeChanged,
+        message,
+      },
+      blobBytes: null,
+    };
   }
 
   const baseBlobLines = splitLines(baseBlobBytes);
@@ -1091,6 +1414,9 @@ function dominantEol(lines) {
 
 function commitWorkingTree({ sessionId, message }) {
   const value = session(sessionId);
+  if (value.mode === "branch") {
+    return commitBranchRepository(value, sessionId, message);
+  }
   const fixedBlobs = value.fixed_blobs instanceof Map ? value.fixed_blobs : new Map();
   const files = (value.fixed_files || []).map((item) => item.path).filter((filePath) => fixedBlobs.has(filePath));
   if (!files.length) {
@@ -1136,6 +1462,35 @@ function commitWorkingTree({ sessionId, message }) {
   }
 }
 
+function commitBranchRepository(value, sessionId, message) {
+  const repoPath = value.repoPath;
+  const files = (value.fixed_files || []).map((item) => item.path).filter(Boolean);
+  if (!files.length) {
+    return { session_id: sessionId, committed: false, commit_sha: null, message: "No fixed files to commit", changed_files: [] };
+  }
+  if (!repoPath || !fs.existsSync(repoPath)) {
+    throw new Error("Local clone folder is no longer available");
+  }
+
+  for (const filePath of files) {
+    stageExactFile(repoPath, filePath);
+  }
+  const changed = git(repoPath, ["diff", "--cached", "--name-only", "-z", "--", ...files])
+    .toString("utf8")
+    .split("\0")
+    .filter(Boolean);
+  if (!changed.length) {
+    return { session_id: sessionId, committed: false, commit_sha: null, message: "No committable EOL changes after staging", changed_files: [] };
+  }
+
+  const commitMessage = message && message.trim() ? message.trim() : "fix eol";
+  git(repoPath, ["commit", "-m", commitMessage]);
+  const commitSha = gitText(repoPath, ["rev-parse", "HEAD"]).trim();
+  value.commit_sha = commitSha;
+  value.committed_files = changed;
+  return { session_id: sessionId, committed: true, commit_sha: commitSha, message: commitMessage, changed_files: changed };
+}
+
 function trackedFileMode(repoPath, filePath, env) {
   const modeOutput = gitText(repoPath, ["ls-files", "-s", "--", filePath], { env }).trim();
   return modeOutput ? modeOutput.split(/\s+/, 1)[0] : "100644";
@@ -1149,10 +1504,29 @@ function updateIndexBlob(repoPath, filePath, mode, blob, env) {
   git(repoPath, ["update-index", "--add", "--cacheinfo", `${mode},${blob},${filePath}`], { env });
 }
 
+function stageExactFile(repoPath, filePath) {
+  const absolute = safeFile(repoPath, filePath);
+  if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) {
+    throw new Error(`Fixed file no longer exists: ${filePath}`);
+  }
+  const mode = trackedFileMode(repoPath, filePath);
+  const blob = gitText(repoPath, ["hash-object", "-w", "--no-filters", "--", filePath]).trim();
+  updateIndexBlob(repoPath, filePath, mode, blob);
+}
+
 function pushWorkingTree({ sessionId, githubToken }) {
   const value = session(sessionId);
   if (!value.commit_sha) {
     throw new Error("Commit is required before push");
+  }
+  if (value.mode === "branch") {
+    const repoPath = value.repoPath;
+    const branch = value.source_branch;
+    if (!repoPath || !branch) {
+      throw new Error("Local clone folder is no longer available");
+    }
+    git(repoPath, ["push", "origin", `HEAD:refs/heads/${branch}`], { token: githubToken });
+    return { session_id: sessionId, pushed: true, source_branch: branch, message: `Pushed ${branch}` };
   }
   const branch = gitText(value.repoPath, ["branch", "--show-current"]).trim();
   if (!branch) {
@@ -1168,6 +1542,7 @@ module.exports = {
   getWorkingTreePreviewJob,
   previewWorkingTree,
   pushWorkingTree,
+  startBranchPreview,
   startWorkingTreePreview,
   structuredDiff,
 };

@@ -23,29 +23,29 @@ let nodeHealthTimer: number | null = null;
 let lastReleaseCheckAt = 0;
 
 const tabs = [
-  { key: "/tickets/detail", label: "Ticket Detail" },
-  { key: "/tickets/sync", label: "Sync Ticket" },
-  { key: "/pull-requests", label: "Create PR", hiddenForRoles: ["qa"] },
-  { key: "/git-eol", label: "Fix EOL", requiresNode: true, hiddenForRoles: ["qa"] },
-  { key: "/build-source", label: "Build Source", requiresNode: true, hiddenForRoles: ["qa"] },
-  { key: "/confluence-preview", label: "Confluence Preview" },
-  { key: "/document-translation", label: "Translate Docs", requiresNode: true },
-  { key: "/logtime", label: "Logtime" },
-  { key: "/notes", label: "Notes" },
-  { key: "/audit", label: "Audit Logs", adminOnly: true },
+  { key: "/tickets/detail", label: "Ticket Detail", permission: "ticket_detail" },
+  { key: "/tickets/sync", label: "Sync Ticket", permission: "ticket_sync" },
+  { key: "/pull-requests", label: "Create PR", permission: "pull_requests" },
+  { key: "/git-eol", label: "Fix EOL", requiresNode: true, permission: "git_eol" },
+  { key: "/build-source", label: "Build Source", requiresNode: true, permission: "build_source" },
+  { key: "/confluence-preview", label: "Confluence Preview", permission: "confluence_preview" },
+  { key: "/document-translation", label: "Translate Docs", requiresNode: true, permission: "document_translation" },
+  { key: "/logtime", label: "Logtime", permission: "logtime" },
+  { key: "/notes", label: "Notes", permission: "notes" },
+  { key: "/audit", label: "Audit Logs", permission: "audit" },
 ];
 
 const nodeOnlyRoutes = new Set(["/git-eol", "/build-source", "/document-translation"]);
-function normalizedRole() {
-  return String(sessionState.me?.role ?? "").trim().toLowerCase();
+function hasPermission(permission?: string) {
+  if (!permission || sessionState.me?.role === "admin") return true;
+  return sessionState.me?.permissions?.includes(permission) ?? false;
 }
 
 const visibleTabs = computed(() =>
   tabs.filter(
     (tab) =>
       (!tab.requiresNode || nodeServerOnline.value) &&
-      (!tab.adminOnly || sessionState.me?.role === "admin") &&
-      !(tab.hiddenForRoles ?? []).includes(normalizedRole())
+      hasPermission(tab.permission)
   )
 );
 const nodeServerWarning = computed(() => {

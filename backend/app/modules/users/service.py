@@ -4,24 +4,76 @@ from sqlalchemy.orm import Session
 from urllib.parse import urlparse
 
 from app.core.security import decrypt_secret, encrypt_secret, hash_password
-from app.models import User, UserSettings
+from app.models import Role, User, UserSettings
 from app.schemas import DocumentTranslationSettingsOut, UserSettingsOut
 
 _UNSET = object()
-VALID_USER_ROLES = {"admin", "dev", "qa"}
+
+MENU_PERMISSIONS = (
+    ("ticket_detail", "Ticket Detail"),
+    ("ticket_sync", "Sync Ticket"),
+    ("pull_requests", "Create PR"),
+    ("git_eol", "Fix EOL"),
+    ("build_source", "Build Source"),
+    ("confluence_preview", "Confluence Preview"),
+    ("document_translation", "Translate Docs"),
+    ("logtime", "Logtime"),
+    ("notes", "Notes"),
+    ("audit", "Audit Logs"),
+)
+MENU_PERMISSION_KEYS = frozenset(key for key, _ in MENU_PERMISSIONS)
+DEFAULT_ROLE_PERMISSIONS = {
+    "admin": [key for key, _ in MENU_PERMISSIONS],
+    "dev": [key for key, _ in MENU_PERMISSIONS if key != "audit"],
+    "qa": ["ticket_detail", "ticket_sync", "confluence_preview", "document_translation", "logtime", "notes"],
+}
+_ROLE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,99}$")
 
 
-def validate_role(role: str) -> str:
+def normalize_role_name(role: str) -> str:
     value = str(role or "").strip().lower()
     if value == "user":
         value = "dev"
-    if value not in VALID_USER_ROLES:
-        raise ValueError("Role must be admin, dev, or qa")
+    if not _ROLE_NAME_PATTERN.fullmatch(value):
+        raise ValueError("Role must use lowercase letters, numbers, hyphens, or underscores")
     return value
 
 
+def validate_permissions(permissions: list[str]) -> list[str]:
+    normalized = []
+    for permission in permissions:
+        value = str(permission or "").strip()
+        if value and value not in normalized:
+            normalized.append(value)
+    unknown = set(normalized) - MENU_PERMISSION_KEYS
+    if unknown:
+        raise ValueError(f"Unknown menu permissions: {', '.join(sorted(unknown))}")
+    return normalized
+
+
+def ensure_default_roles(db: Session) -> None:
+    for name, permissions in DEFAULT_ROLE_PERMISSIONS.items():
+        if not db.get(Role, name):
+            db.add(Role(name=name, permissions=permissions))
+    db.commit()
+
+
+def validate_role(db: Session, role: str) -> str:
+    value = normalize_role_name(role)
+    if not db.get(Role, value):
+        raise ValueError("Role does not exist")
+    return value
+
+
+def role_permissions(db: Session, role: str) -> list[str]:
+    if role == "admin":
+        return [key for key, _ in MENU_PERMISSIONS]
+    definition = db.get(Role, role)
+    return validate_permissions(list(definition.permissions or [])) if definition else []
+
+
 def create_user_record(db: Session, *, username: str, password: str, role: str) -> User:
-    user = User(username=username, password_hash=hash_password(password), role=validate_role(role))
+    user = User(username=username, password_hash=hash_password(password), role=validate_role(db, role))
     db.add(user)
     db.flush()
     db.add(UserSettings(user_id=user.id))

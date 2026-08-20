@@ -36,8 +36,8 @@ const form = reactive({
   outputDirectory: "",
   fromLang: "Japanese" as string,
   toLang: "Vietnamese" as string,
-  model: "gpt-5.4",
-  reasoningEffort: "low",
+  model: "",
+  reasoningEffort: "",
   fastMode: false,
   timeoutSeconds: 120,
   batchSize: 100,
@@ -49,8 +49,6 @@ const form = reactive({
 const filesQueue = ref<string[]>([]);
 const queueRunning = ref(false);
 const queueIndex = ref(0);
-const dragActive = ref(false);
-const addingDroppedFiles = ref(false);
 
 const job = ref<DocumentTranslationJob | null>(null);
 const polling = ref<number | null>(null);
@@ -69,14 +67,6 @@ const activeDirectionField = ref<"from" | "to" | null>(null);
 let saveSettingsTimer: number | null = null;
 let directionMenuTimer: number | null = null;
 
-const fallbackModels: CodexModelOption[] = [
-  { slug: "gpt-5.5", display_name: "GPT-5.5" },
-  { slug: "gpt-5.4", display_name: "gpt-5.4" },
-  { slug: "gpt-5.4-mini", display_name: "GPT-5.4-Mini" },
-  { slug: "gpt-5.3-codex", display_name: "gpt-5.3-codex" },
-  { slug: "gpt-5.2", display_name: "gpt-5.2" }
-];
-
 const direction = computed(() => {
   const from = langToKey(form.fromLang || "Japanese");
   const to = langToKey(form.toLang || "Vietnamese");
@@ -90,17 +80,32 @@ const progressPercent = computed(() => {
   if (!current || current.translatable_segments <= 0) return 0;
   return Math.min(100, Math.round((current.translated_segments / current.translatable_segments) * 100));
 });
-const canStart = computed(() => filesQueue.value.length > 0 && !running.value && !queueRunning.value && !addingDroppedFiles.value);
+const canStart = computed(() => filesQueue.value.length > 0 && Boolean(form.model.trim()) && !running.value && !queueRunning.value);
 const result = computed(() => job.value?.result ?? null);
 const archivedLogs = ref<BuildJobLog[]>([]);
-const logs = computed(() => [...archivedLogs.value, ...(job.value?.logs ?? [])]);
+const archivedJobIds = new Set<string>();
+const logs = computed(() => [
+  ...archivedLogs.value,
+  ...(job.value && !archivedJobIds.has(job.value.job_id) ? job.value.logs : []),
+]);
 const modelOptions = computed(() => {
   const options = new Map<string, CodexModelOption>();
-  for (const model of [...codexModels.value, ...fallbackModels]) {
+  for (const model of codexModels.value) {
     if (model.slug) options.set(model.slug, model);
   }
   if (form.model && !options.has(form.model)) {
     options.set(form.model, { slug: form.model, display_name: `${form.model} (saved)` });
+  }
+  return Array.from(options.values());
+});
+const selectedModel = computed(() => modelOptions.value.find((model) => model.slug === form.model.trim()));
+const reasoningOptions = computed(() => {
+  const options = new Map<string, { effort: string; description?: string }>();
+  for (const level of selectedModel.value?.supported_reasoning_levels ?? []) {
+    if (level.effort) options.set(level.effort, level);
+  }
+  if (form.reasoningEffort && !options.has(form.reasoningEffort)) {
+    options.set(form.reasoningEffort, { effort: form.reasoningEffort, description: "Saved setting" });
   }
   return Array.from(options.values());
 });
@@ -195,7 +200,7 @@ function translationSettingsPayload(): DocumentTranslationSettings {
     output_directory: form.outputDirectory.trim() || null,
     direction: direction.value,
     model: form.model.trim() || null,
-    reasoning_effort: form.reasoningEffort,
+    reasoning_effort: form.reasoningEffort || null,
     timeout_seconds: normalizeNumber(form.timeoutSeconds, 120, 5, 3600),
     batch_size: normalizeNumber(form.batchSize, 100, 1, 200),
     context_window: normalizeNumber(form.contextWindow, 20, 0, 200),
@@ -249,9 +254,22 @@ function scheduleSaveTranslationSettings() {
 async function loadCodexModels() {
   try {
     codexModels.value = await localServerApi.documentTranslation.models();
+    if (!form.model.trim()) {
+      form.model = codexModels.value[0]?.slug ?? "";
+    }
+    applyModelDefaultReasoning();
   } catch {
-    codexModels.value = fallbackModels;
+    codexModels.value = [];
   }
+}
+
+function applyModelDefaultReasoning() {
+  const model = selectedModel.value;
+  const supported = model?.supported_reasoning_levels ?? [];
+  if (form.reasoningEffort && (!supported.length || supported.some((level) => level.effort === form.reasoningEffort))) {
+    return;
+  }
+  form.reasoningEffort = model?.default_reasoning_level || supported[0]?.effort || "";
 }
 
 async function refreshHealth(showMessage = false) {
@@ -275,64 +293,33 @@ async function refreshHealth(showMessage = false) {
 }
 
 async function browseFile() {
+  if (queueRunning.value) return;
   try {
     const selected = await localServerApi.selectFiles(filesQueue.value[filesQueue.value.length - 1] || "");
-    if (!selected.length) return;
-    let added = 0;
-    let failed = 0;
-    for (const path of selected) {
-      try {
-        const validated = await validateFile(path);
-        if (!filesQueue.value.includes(validated)) {
-          filesQueue.value.push(validated);
-          added++;
-        }
-      } catch (error) {
-        failed++;
-        showToast(`${path}: ${(error as Error).message}`, "error");
-      }
-    }
-    if (added && selected.length > 1) {
-      showToast(`Added ${added} file${added === 1 ? "" : "s"}${failed ? ` (${failed} skipped)` : ""}`, failed ? "warning" : "success");
-    }
+    await addFilesToQueue(selected);
   } catch (error) {
     showToast((error as Error).message, "error");
   }
 }
 
-async function addDroppedFiles(event: DragEvent) {
-  dragActive.value = false;
-  if (queueRunning.value || addingDroppedFiles.value) return;
-  const files = Array.from(event.dataTransfer?.files ?? []);
-  if (!files.length) return;
-
-  addingDroppedFiles.value = true;
+async function addFilesToQueue(paths: string[]) {
+  if (!paths.length) return;
   let added = 0;
   let failed = 0;
-  try {
-    for (const file of files) {
-      if (!isSupportedDocumentFile(file.name)) {
-        failed++;
-        showToast(`${file.name}: unsupported document type`, "error");
-        continue;
+  for (const path of paths) {
+    try {
+      const validated = await validateFile(path);
+      if (!filesQueue.value.includes(validated)) {
+        filesQueue.value.push(validated);
+        added++;
       }
-      try {
-        const uploaded = await localServerApi.documentTranslation.uploadDroppedFile(file);
-        const validated = await validateFile(uploaded.path);
-        if (!filesQueue.value.includes(validated)) {
-          filesQueue.value.push(validated);
-          added++;
-        }
-      } catch (error) {
-        failed++;
-        showToast(`${file.name}: ${(error as Error).message}`, "error");
-      }
+    } catch (error) {
+      failed++;
+      showToast(`${path}: ${(error as Error).message}`, "error");
     }
-    if (added) {
-      showToast(`Added ${added} dropped file${added === 1 ? "" : "s"}${failed ? ` (${failed} skipped)` : ""}`, failed ? "warning" : "success");
-    }
-  } finally {
-    addingDroppedFiles.value = false;
+  }
+  if (added) {
+    showToast(`Added ${added} file${added === 1 ? "" : "s"}${failed ? ` (${failed} skipped)` : ""}`, failed ? "warning" : "success");
   }
 }
 
@@ -397,29 +384,52 @@ function stopPolling() {
   }
 }
 
-async function runOneFile(filePath: string): Promise<void> {
-  const validated = await validateFile(filePath);
-  const previousLogs = job.value?.logs ?? [];
-  const queueLog: BuildJobLog = {
+function appendQueueLog(level: BuildJobLog["level"], message: string) {
+  archivedLogs.value.push({
     ts: Date.now() / 1000,
-    level: "info",
+    level,
     source: "queue",
-    message: `Translating ${validated}`
-  };
-  const nextJob = await localServerApi.documentTranslation.start({
-    filePath: validated,
-    outputDirectory: form.outputDirectory || undefined,
-    direction: direction.value,
-    model: form.model.trim() || undefined,
-    reasoningEffort: form.reasoningEffort,
-    fastMode: form.fastMode,
-    timeoutSeconds: form.timeoutSeconds,
-    batchSize: form.batchSize,
-    contextWindow: form.contextWindow,
-    glossary: form.glossary,
-    instructions: form.instructions,
+    message,
   });
-  archivedLogs.value.push(...previousLogs, queueLog);
+}
+
+function archiveJobLogs(completedJob: DocumentTranslationJob) {
+  if (archivedJobIds.has(completedJob.job_id)) return;
+  archivedJobIds.add(completedJob.job_id);
+  archivedLogs.value.push(...completedJob.logs);
+}
+
+async function runOneFile(filePath: string, position: number, total: number): Promise<void> {
+  const label = `[${position}/${total}]`;
+  appendQueueLog("info", `${label} Validating ${filePath}`);
+  let validated: string;
+  try {
+    validated = await validateFile(filePath);
+  } catch (error) {
+    appendQueueLog("error", `${label} Skipped ${filePath}: ${(error as Error).message}`);
+    throw error;
+  }
+
+  appendQueueLog("info", `${label} Translating ${validated}`);
+  let nextJob: DocumentTranslationJob;
+  try {
+    nextJob = await localServerApi.documentTranslation.start({
+      filePath: validated,
+      outputDirectory: form.outputDirectory || undefined,
+      direction: direction.value,
+      model: form.model.trim() || undefined,
+      reasoningEffort: form.reasoningEffort || undefined,
+      fastMode: form.fastMode,
+      timeoutSeconds: form.timeoutSeconds,
+      batchSize: form.batchSize,
+      contextWindow: form.contextWindow,
+      glossary: form.glossary,
+      instructions: form.instructions,
+    });
+  } catch (error) {
+    appendQueueLog("error", `${label} Could not start ${validated}: ${(error as Error).message}`);
+    throw error;
+  }
   job.value = nextJob;
   void auditApi.record({
     action: "document_translation_start",
@@ -456,6 +466,7 @@ async function runOneFile(filePath: string): Promise<void> {
         job.value = next;
         if (["succeeded", "failed", "canceled"].includes(next.status)) {
           stopPolling();
+          archiveJobLogs(next);
           void auditApi.record({
             action: "document_translation_complete",
             target_type: "document_translation_job",
@@ -505,6 +516,7 @@ async function startTranslation() {
   queueRunning.value = true;
   queueIndex.value = 0;
   archivedLogs.value = [];
+  archivedJobIds.clear();
   job.value = null;
   let succeeded = 0;
   let failed = 0;
@@ -512,7 +524,7 @@ async function startTranslation() {
     for (let i = 0; i < pending.length; i++) {
       queueIndex.value = i + 1;
       try {
-        await runOneFile(pending[i]);
+        await runOneFile(pending[i], queueIndex.value, pending.length);
         if (job.value?.status === "succeeded") succeeded++;
         else failed++;
         if (job.value?.status === "canceled") {
@@ -575,6 +587,11 @@ watch(
 );
 
 watch(
+  () => form.model,
+  applyModelDefaultReasoning
+);
+
+watch(
   () => translationSettingsPayload(),
   scheduleSaveTranslationSettings,
   { deep: true }
@@ -630,14 +647,14 @@ onBeforeUnmount(() => {
               <button
                 v-if="filesQueue.length"
                 class="rounded px-2 py-1 text-xs font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="queueRunning || addingDroppedFiles"
+                :disabled="queueRunning"
                 @click="clearQueue"
               >
                 Clear
               </button>
               <button
                 class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
-                :disabled="queueRunning || addingDroppedFiles"
+                :disabled="queueRunning"
                 @click="browseFile"
               >
                 Browse
@@ -645,15 +662,10 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div
-            class="grid min-h-20 gap-1 rounded border-2 border-dashed p-2 transition"
-            :class="dragActive ? 'border-[#3E6AE1] bg-[#F5F8FF]' : 'border-neutral-200 bg-neutral-50'"
-            @dragenter.prevent="dragActive = true"
-            @dragover.prevent="dragActive = true"
-            @dragleave.self.prevent="dragActive = false"
-            @drop.prevent="addDroppedFiles"
+            class="grid min-h-20 gap-1 rounded border border-neutral-200 bg-neutral-50 p-2"
           >
             <p v-if="!filesQueue.length" class="m-0 px-1 py-2 text-sm text-[#7A7C80]">
-              {{ addingDroppedFiles ? "Adding dropped files..." : "Drop one or more documents here, or click Browse." }}
+              Choose documents with Browse.
             </p>
             <div v-else class="flex items-center justify-between px-1 pb-1">
               <span class="text-xs font-medium text-[#393C41]">{{ filesQueue.length }} file{{ filesQueue.length === 1 ? "" : "s" }} selected<span v-if="queueRunning"> &middot; processing {{ queueIndex }}/{{ filesQueue.length }}</span></span>
@@ -666,8 +678,8 @@ onBeforeUnmount(() => {
               <span class="min-w-0 flex-1 truncate" :title="filePath">{{ filePath }}</span>
               <button
                 class="rounded px-2 py-0.5 text-xs text-[#7A7C80] transition hover:bg-neutral-100 hover:text-[#171A20] disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="queueRunning || addingDroppedFiles"
-                @click="removeFileFromQueue(index)"
+                :disabled="queueRunning"
+                @click.stop="removeFileFromQueue(index)"
               >
                 Remove
               </button>
@@ -759,6 +771,7 @@ onBeforeUnmount(() => {
         <div class="grid gap-2">
           <label class="text-sm font-medium text-[#393C41]">Model</label>
           <select v-model="form.model" class="w-full rounded border border-[#D0D1D2] bg-white px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
+            <option v-if="!modelOptions.length" disabled value="">No models returned by Codex CLI</option>
             <option v-for="model in modelOptions" :key="model.slug" :value="model.slug">
               {{ model.display_name || model.slug }}
             </option>
@@ -768,10 +781,10 @@ onBeforeUnmount(() => {
         <div class="grid gap-2">
           <label class="text-sm font-medium text-[#393C41]">Reasoning</label>
           <select v-model="form.reasoningEffort" class="w-full rounded border border-[#D0D1D2] bg-white px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-            <option value="xhigh">xhigh</option>
+            <option v-if="!reasoningOptions.length" value="">Default for selected model</option>
+            <option v-for="level in reasoningOptions" :key="level.effort" :value="level.effort" :title="level.description">
+              {{ level.effort }}
+            </option>
           </select>
         </div>
 

@@ -6,7 +6,7 @@ import { showToast } from "../../shared/toast";
 import { boxApi } from "../box/api";
 import { settingsApi } from "./api";
 import { usersApi } from "../users/api";
-import type { BoxSettings, IntegrationStatus } from "../../shared/types";
+import type { BoxSettings, IntegrationStatus, MenuPermission, Role } from "../../shared/types";
 
 const integrationStatuses = ref<IntegrationStatus[]>([]);
 const testingService = ref<string | null>(null);
@@ -29,6 +29,16 @@ const boxSettings = reactive({
 });
 const boxClientSecretConfigured = ref(false);
 const passwordDrafts = reactive<Record<number, string>>({});
+const roleDrafts = reactive<Record<number, string>>({});
+const roles = ref<Role[]>([]);
+const menuPermissions = ref<MenuPermission[]>([]);
+const showRoleForm = ref(false);
+const editingRoleName = ref<string | null>(null);
+const savingRole = ref(false);
+const roleForm = reactive({
+  name: "",
+  permissions: [] as string[]
+});
 const passwordForm = reactive({
   current_password: "",
   new_password: ""
@@ -196,14 +206,114 @@ async function createUser() {
       password: createUserForm.password,
       role: createUserForm.role
     });
-    sessionState.users = await usersApi.list();
+    await refreshUsers();
     createUserForm.username = "";
     createUserForm.password = "";
-    createUserForm.role = "dev";
+    createUserForm.role = roles.value.find((role) => role.name === "dev")?.name ?? roles.value[0]?.name ?? "";
     showCreateUserRow.value = false;
     showToast("User created", "success");
   } catch (error) {
     showToast((error as Error).message, "error");
+  }
+}
+
+function syncRoleDrafts() {
+  for (const user of sessionState.users) {
+    roleDrafts[user.id] = user.role;
+  }
+}
+
+async function refreshUsers() {
+  sessionState.users = await usersApi.list();
+  syncRoleDrafts();
+}
+
+async function loadRoles() {
+  try {
+    const response = await usersApi.roles();
+    roles.value = response.items;
+    menuPermissions.value = response.permissions;
+    if (!roles.value.some((role) => role.name === createUserForm.role)) {
+      createUserForm.role = roles.value.find((role) => role.name === "dev")?.name ?? roles.value[0]?.name ?? "";
+    }
+    syncRoleDrafts();
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  }
+}
+
+function createRole() {
+  editingRoleName.value = null;
+  roleForm.name = "";
+  roleForm.permissions = [];
+  showRoleForm.value = true;
+}
+
+function editRole(roleName: string) {
+  const role = roles.value.find((item) => item.name === roleName);
+  if (!role || role.name === "admin") return;
+  editingRoleName.value = role.name;
+  roleForm.name = role.name;
+  roleForm.permissions = [...role.permissions];
+  showRoleForm.value = true;
+}
+
+function cancelRoleEdit() {
+  showRoleForm.value = false;
+  editingRoleName.value = null;
+  roleForm.name = "";
+  roleForm.permissions = [];
+}
+
+function toggleRolePermission(permission: string) {
+  const index = roleForm.permissions.indexOf(permission);
+  if (index >= 0) roleForm.permissions.splice(index, 1);
+  else roleForm.permissions.push(permission);
+}
+
+async function saveRole() {
+  if (!roleForm.name.trim()) {
+    showToast("Role name is required", "warning");
+    return;
+  }
+  savingRole.value = true;
+  try {
+    const isEditing = Boolean(editingRoleName.value);
+    const payload = { name: roleForm.name.trim(), permissions: [...roleForm.permissions] };
+    if (editingRoleName.value) await usersApi.updateRole(editingRoleName.value, payload);
+    else await usersApi.createRole(payload);
+    await loadRoles();
+    await refreshUsers();
+    cancelRoleEdit();
+    showToast(isEditing ? "Role updated" : "Role created", "success");
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  } finally {
+    savingRole.value = false;
+  }
+}
+
+async function deleteRole(roleName: string) {
+  if (!window.confirm(`Delete role ${roleName}?`)) return;
+  try {
+    await usersApi.removeRole(roleName);
+    await loadRoles();
+    showToast("Role deleted", "success");
+  } catch (error) {
+    showToast((error as Error).message, "error");
+  }
+}
+
+async function updateUserRole(userId: number) {
+  const role = roleDrafts[userId]?.trim();
+  if (!role) return;
+  try {
+    await usersApi.updateUserRole(userId, role);
+    await refreshUsers();
+    showToast("User role updated", "success");
+  } catch (error) {
+    showToast((error as Error).message, "error");
+    syncRoleDrafts();
   }
 }
 
@@ -224,7 +334,7 @@ async function resetPassword(userId: number) {
 async function deleteUser(userId: number) {
   try {
     await usersApi.remove(userId);
-    sessionState.users = await usersApi.list();
+    await refreshUsers();
     delete passwordDrafts[userId];
     showToast("User deleted", "success");
   } catch (error) {
@@ -254,7 +364,7 @@ async function testIntegration(serviceName: string) {
 onMounted(async () => {
   await loadIntegrationStatuses();
   if (sessionState.me?.role === "admin") {
-    await loadBoxSettings();
+    await Promise.all([loadBoxSettings(), loadRoles()]);
   }
   await loadBoxUserStatus();
 });
@@ -266,6 +376,8 @@ onMounted(async () => {
     :me="sessionState.me"
     :assignees="sessionState.assignees"
     :users="sessionState.users"
+    :roles="roles"
+    :menu-permissions="menuPermissions"
     :user-settings="sessionState.userSettings"
     :system-settings="sessionState.systemSettings"
     :integration-statuses="integrationStatuses"
@@ -278,6 +390,11 @@ onMounted(async () => {
     :create-user-form="createUserForm"
     :show-create-user-row="showCreateUserRow"
     :password-drafts="passwordDrafts"
+    :role-drafts="roleDrafts"
+    :role-form="roleForm"
+    :show-role-form="showRoleForm"
+    :editing-role-name="editingRoleName"
+    :saving-role="savingRole"
     :password-form="passwordForm"
     :box-settings="boxSettings"
     :box-client-secret-configured="boxClientSecretConfigured"
@@ -291,8 +408,15 @@ onMounted(async () => {
     @save-system-settings="saveSystemSettings"
     @save-box-settings="saveBoxSettings"
     @create-user="createUser"
+    @update-user-role="updateUserRole"
     @reset-password="resetPassword"
     @delete-user="deleteUser"
+    @create-role="createRole"
+    @edit-role="editRole"
+    @cancel-role-edit="cancelRoleEdit"
+    @toggle-role-permission="toggleRolePermission"
+    @save-role="saveRole"
+    @delete-role="deleteRole"
     @test-integration="testIntegration"
   />
 </template>

@@ -29,11 +29,13 @@ from app.modules.tickets.router import router as tickets_router
 from app.modules.users.router import router as users_router
 from app.modules.versions.router import router as versions_router
 from app.modules.settings.service import ensure_system_settings
+from app.modules.users.service import ensure_default_roles
 
 logger = logging.getLogger(__name__)
 
 
 def bootstrap(db: Session) -> None:
+    ensure_default_roles(db)
     ensure_system_settings(db)
 
 

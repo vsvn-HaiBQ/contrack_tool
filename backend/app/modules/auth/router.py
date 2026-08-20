@@ -7,7 +7,7 @@ from app.dependencies import get_current_user, get_optional_user
 from app.models import User
 from app.schemas import LoginRequest, MeResponse, MessageResponse, SetupAdminRequest, SetupStatusResponse, UserOut
 from app.modules.auth.service import login_user, logout_user
-from app.modules.users.service import create_user_record, validate_password, validate_username
+from app.modules.users.service import create_user_record, role_permissions, validate_password, validate_username
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -28,7 +28,16 @@ def logout(
 
 @router.get("/me", response_model=MeResponse)
 def me(user: User | None = Depends(get_optional_user), db: Session = Depends(get_db)) -> MeResponse:
-    return MeResponse(authenticated=bool(user), needs_setup=db.query(User).count() == 0, user=user)
+    serialized_user = None
+    if user:
+        serialized_user = UserOut(
+            id=user.id,
+            username=user.username,
+            role=user.role,
+            permissions=role_permissions(db, user.role),
+            created_at=user.created_at,
+        )
+    return MeResponse(authenticated=bool(user), needs_setup=db.query(User).count() == 0, user=serialized_user)
 
 
 @router.get("/setup-status", response_model=SetupStatusResponse)

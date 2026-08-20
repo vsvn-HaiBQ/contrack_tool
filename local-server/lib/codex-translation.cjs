@@ -15,13 +15,6 @@ const {
 
 const jobs = new Map();
 const maxLogsPerJob = 500;
-const fallbackCodexModels = [
-  { slug: "gpt-5.5", display_name: "GPT-5.5", default_reasoning_level: "xhigh", additional_speed_tiers: ["priority", "fast"] },
-  { slug: "gpt-5.4", display_name: "gpt-5.4", default_reasoning_level: "medium", additional_speed_tiers: ["priority", "fast"] },
-  { slug: "gpt-5.4-mini", display_name: "GPT-5.4-Mini", default_reasoning_level: "medium", additional_speed_tiers: [] },
-  { slug: "gpt-5.3-codex", display_name: "gpt-5.3-codex", default_reasoning_level: "medium", additional_speed_tiers: [] },
-  { slug: "gpt-5.2", display_name: "gpt-5.2", default_reasoning_level: "medium", additional_speed_tiers: [] },
-];
 const officeFileExtensions = new Set([".docx", ".pptx", ".xlsx"]);
 const textFileExtensions = new Set([".txt", ".md"]);
 
@@ -73,18 +66,14 @@ function defaultTranslationConfig() {
   return {
     openxml_base_url: defaultOpenXmlBaseUrl(),
     codex_command: resolveCodexCommand(configuredCodexCommand),
-    model: process.env.CODEX_DEFAULT_MODEL || process.env.CONTRACK_CODEX_MODEL || "gpt-5.4",
-    reasoning_effort: process.env.CODEX_DEFAULT_REASONING_EFFORT || process.env.CONTRACK_CODEX_REASONING_EFFORT || "low",
+    model: normalizeText(process.env.CODEX_DEFAULT_MODEL || process.env.CONTRACK_CODEX_MODEL),
+    reasoning_effort: normalizeText(process.env.CODEX_DEFAULT_REASONING_EFFORT || process.env.CONTRACK_CODEX_REASONING_EFFORT),
     timeout_seconds: positiveInt(process.env.CONTRACK_CODEX_TIMEOUT_SECONDS || process.env.CODEX_TIMEOUT, 120, 5, 3600),
     context_window: positiveInt(process.env.CONTRACK_CODEX_CONTEXT_WINDOW || process.env.CODEX_CONTEXT_WINDOW, 20, 0, 200),
     batch_size: positiveInt(process.env.CONTRACK_CODEX_BATCH_SIZE || process.env.CODEX_MAX_BATCH_SIZE, 100, 1, 200),
     concurrency: positiveInt(process.env.CONTRACK_CODEX_CONCURRENCY, 2, 1, 4),
     fast_mode: parseBoolean(process.env.CONTRACK_CODEX_FAST_MODE, false),
   };
-}
-
-function codexModelsCachePath() {
-  return path.join(codexHomePath(), "models_cache.json");
 }
 
 function codexHomePath() {
@@ -96,27 +85,35 @@ function normalizeModelOption(model) {
     slug: normalizeText(model?.slug),
     display_name: normalizeText(model?.display_name, normalizeText(model?.slug)),
     description: normalizeText(model?.description),
-    default_reasoning_level: normalizeText(model?.default_reasoning_level, "medium"),
-    supported_reasoning_levels: Array.isArray(model?.supported_reasoning_levels) ? model.supported_reasoning_levels : [],
+    default_reasoning_level: normalizeText(model?.default_reasoning_level),
+    supported_reasoning_levels: Array.isArray(model?.supported_reasoning_levels)
+      ? model.supported_reasoning_levels
+        .filter((level) => level && normalizeText(level.effort))
+        .map((level) => ({ effort: normalizeText(level.effort), description: normalizeText(level.description) }))
+      : [],
     additional_speed_tiers: Array.isArray(model?.additional_speed_tiers) ? model.additional_speed_tiers.map((item) => String(item)) : [],
   };
 }
 
-function listCodexModels() {
+async function listCodexModels() {
+  const configuredCodexCommand = process.env.CONTRACK_CODEX_COMMAND || "codex";
+  const command = resolveCodexCommand(configuredCodexCommand);
+  const result = await runProcess(command, ["debug", "models"], { timeoutMs: 10000 });
+  let catalog;
   try {
-    const cache = JSON.parse(fs.readFileSync(codexModelsCachePath(), "utf8"));
-    const models = Array.isArray(cache.models) ? cache.models : [];
-    const visible = models
-      .filter((model) => model && model.visibility !== "hide" && model.slug)
-      .sort((left, right) => Number(left.priority ?? 999) - Number(right.priority ?? 999))
-      .map(normalizeModelOption);
-    if (visible.length) {
-      return visible;
-    }
-  } catch {
-    // The Codex CLI creates this cache after opening /model. Fall back to known defaults.
+    catalog = JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(`Codex CLI returned an invalid model catalog: ${error.message}`);
   }
-  return fallbackCodexModels.map(normalizeModelOption);
+  const models = Array.isArray(catalog?.models) ? catalog.models : [];
+  return models
+    .filter((model) => model && model.visibility !== "hide" && normalizeText(model.slug))
+    .sort((left, right) => {
+      const leftPriority = Number.isFinite(Number(left.priority)) ? Number(left.priority) : Number.MAX_SAFE_INTEGER;
+      const rightPriority = Number.isFinite(Number(right.priority)) ? Number(right.priority) : Number.MAX_SAFE_INTEGER;
+      return leftPriority - rightPriority || String(left.slug).localeCompare(String(right.slug));
+    })
+    .map(normalizeModelOption);
 }
 
 function resolveCodexCommand(command) {
@@ -717,6 +714,9 @@ function cleanupTempFiles(files) {
 
 async function runCodex(prompt, expectedCount, options, callbacks = {}) {
   throwIfCanceled(callbacks);
+  if (!options.model) {
+    throw new Error("Select a model from the Codex CLI catalog before starting translation");
+  }
   const runId = crypto.randomUUID();
   const keepFiles = parseBoolean(process.env.CONTRACK_CODEX_KEEP_FILES, false);
   const promptDir = keepFiles ? codexTempRoot("prompts") : null;
@@ -744,13 +744,14 @@ async function runCodex(prompt, expectedCount, options, callbacks = {}) {
     "--ignore-rules",
     "-m",
     options.model,
-    "-c",
-    `model_reasoning_effort='${options.reasoningEffort}'`,
     "--output-schema",
     schemaPath,
     "--output-last-message",
     outputPath,
   ];
+  if (options.reasoningEffort) {
+    args.push("-c", `model_reasoning_effort='${options.reasoningEffort}'`);
+  }
   if (options.fastMode) {
     args.push("-c", "features.fast=true");
   }

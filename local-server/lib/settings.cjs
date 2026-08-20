@@ -29,6 +29,7 @@ function defaults() {
   return {
     paths: {
       gitEolSourceFolder: "",
+      gitEolBranchSourceFolder: "",
       buildSourceFolder: paths.sourceFolder,
       buildOutputFolder: paths.buildFolder,
     },

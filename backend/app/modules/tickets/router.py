@@ -9,7 +9,7 @@ import httpx
 
 from app.core.security import decrypt_secret
 from app.db import get_db
-from app.dependencies import get_admin_user, get_current_user, request_meta
+from app.dependencies import get_admin_user, get_current_user, require_any_menu_permission, request_meta
 from app.models import ManagedTicket, TicketLink, User, UserManagedTicketFollow, UserSettings
 from app.modules.redmine import provider as redmine
 from app.modules.tickets.service import ensure_managed_ticket, ensure_ticket_follow, ensure_ticket_follow_schema, remove_ticket_follow
@@ -34,7 +34,11 @@ from app.schemas import (
 from app.modules.audit.service import write_audit_log
 from app.modules.settings.service import get_system_settings_map
 
-router = APIRouter(prefix="/tickets", tags=["tickets"])
+router = APIRouter(
+    prefix="/tickets",
+    tags=["tickets"],
+    dependencies=[Depends(require_any_menu_permission("ticket_detail", "ticket_sync"))],
+)
 
 
 _JP_ISSUE_URL_RE = re.compile(r"/issues/(\d+)")

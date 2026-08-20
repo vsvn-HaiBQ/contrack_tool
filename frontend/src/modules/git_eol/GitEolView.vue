@@ -5,7 +5,13 @@ import LoadingCircle from "../../shared/LoadingCircle.vue";
 import GitEolDiffTable from "./GitEolDiffTable.vue";
 
 const props = defineProps<{
-  form: { mode: "branch" | "working_tree"; base_branch: string; source_branch: string; local_source_folder: string };
+  form: {
+    mode: "branch" | "working_tree";
+    base_branch: string;
+    source_branch: string;
+    local_source_folder: string;
+    branch_source_folder: string;
+  };
   localClient: boolean;
   localServerOnline: boolean;
   localServerBase: string;
@@ -55,7 +61,9 @@ const canPreview = computed(() => {
   if (props.form.mode === "working_tree") {
     return props.localClient && Boolean(props.form.local_source_folder.trim());
   }
-  return Boolean(props.form.base_branch.trim() && props.form.source_branch.trim());
+  return props.localClient && Boolean(
+    props.form.branch_source_folder.trim() && props.form.base_branch.trim() && props.form.source_branch.trim()
+  );
 });
 function hasRelevantChange(file: GitEolPreview["files"][number]) {
   return file.eol_only_lines > 0 || file.space_only_lines > 0;
@@ -154,11 +162,10 @@ function statusBadgeClass(status: string): string {
           <div>
             <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">Fix EOL</h3>
             <p class="mt-1 text-sm text-[#5C5E62]">
-              Branch compare runs on the shared server; working tree runs on the Node processing server.
+              Branch Compare clones, fetches, pulls, commits, and pushes through the Node processing server on your machine.
             </p>
           </div>
           <span
-            v-if="form.mode === 'working_tree'"
             class="rounded px-2 py-1 text-xs ring-1"
             :class="localServerOnline ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-amber-50 text-amber-800 ring-amber-200'"
           >
@@ -184,31 +191,46 @@ function statusBadgeClass(status: string): string {
           </button>
         </div>
 
-        <div v-if="form.mode === 'branch'" class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div class="grid w-full gap-4 md:grid-cols-2">
-            <div class="grid gap-2">
-              <label class="text-sm font-medium text-[#393C41]">Base Branch</label>
+        <div v-if="form.mode === 'branch'" class="grid gap-3">
+          <div class="grid gap-2">
+            <label class="text-sm font-medium text-[#393C41]">Source</label>
+            <div class="flex gap-2">
               <input
-                v-model="form.base_branch"
-                class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                v-model="form.branch_source_folder"
+                placeholder="Local Clone Folder"
+                class="min-w-0 flex-1 rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
               />
-            </div>
-            <div class="grid gap-2">
-              <label class="text-sm font-medium text-[#393C41]">Source Branch</label>
-              <input
-                v-model="form.source_branch"
-                class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
-              />
+              <button class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="emit('browseLocalSourceFolder')">
+                Browse
+              </button>
             </div>
           </div>
-          <button
-            class="inline-flex min-h-10 min-w-[160px] items-center justify-center gap-2 rounded-lg bg-[#171A20] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
-            :disabled="!canPreview || loadingPreview"
-            @click="emit('preview')"
-          >
-            <LoadingCircle v-if="loadingPreview" />
-            {{ loadingPreview ? "Running..." : "Preview" }}
-          </button>
+          <div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div class="grid w-full gap-4 md:grid-cols-2">
+              <div class="grid gap-2">
+                <label class="text-sm font-medium text-[#393C41]">Base Branch</label>
+                <input
+                  v-model="form.base_branch"
+                  class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                />
+              </div>
+              <div class="grid gap-2">
+                <label class="text-sm font-medium text-[#393C41]">Source Branch</label>
+                <input
+                  v-model="form.source_branch"
+                  class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
+                />
+              </div>
+            </div>
+            <button
+              class="inline-flex min-h-10 min-w-[160px] items-center justify-center gap-2 rounded-lg bg-[#171A20] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="!canPreview || loadingPreview"
+              @click="emit('preview')"
+            >
+              <LoadingCircle v-if="loadingPreview" />
+              {{ loadingPreview ? "Running..." : "Preview" }}
+            </button>
+          </div>
         </div>
 
         <div v-else class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -358,7 +380,7 @@ function statusBadgeClass(status: string): string {
         <span v-if="previewProgress && previewProgress.total > 0">
           Scanning file {{ previewProgress.current }} / {{ previewProgress.total }}: {{ previewProgress.path }}
         </span>
-        <span v-else>Scanning changed files...</span>
+        <span v-else>{{ previewProgress?.path || "Preparing local repository..." }}</span>
       </div>
       <p v-else class="text-sm text-[#5C5E62]">No preview loaded.</p>
 

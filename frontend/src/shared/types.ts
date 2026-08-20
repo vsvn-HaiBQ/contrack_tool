@@ -1,4 +1,13 @@
-export type User = { id: number; username: string; role: string };
+export type User = { id: number; username: string; role: string; permissions?: string[] };
+
+export type Role = {
+  name: string;
+  permissions: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type MenuPermission = { key: string; label: string };
 
 export type AuditLog = {
   id: number;

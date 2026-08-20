@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.dependencies import get_non_qa_user, request_meta
+from app.dependencies import require_menu_permission, request_meta
 from app.models import ManagedTicket, TicketLink, User, UserSettings
 from app.modules.github import provider as github
 from app.modules.redmine import provider as redmine
@@ -35,7 +35,7 @@ def _resolve_pr_preview(
 @router.post("/preview", response_model=PullRequestPreviewResponse)
 def preview_pull_request(
     payload: PullRequestCreateRequest,
-    user: User = Depends(get_non_qa_user),
+    user: User = Depends(require_menu_permission("pull_requests")),
     user_settings: UserSettings = Depends(get_current_user_settings),
     db: Session = Depends(get_db),
 ) -> PullRequestPreviewResponse:
@@ -68,7 +68,7 @@ def preview_pull_request(
 def create_pull_request(
     payload: PullRequestCreateRequest,
     request: Request,
-    user: User = Depends(get_non_qa_user),
+    user: User = Depends(require_menu_permission("pull_requests")),
     user_settings: UserSettings = Depends(get_current_user_settings),
     db: Session = Depends(get_db),
 ) -> PullRequestCreateResponse:

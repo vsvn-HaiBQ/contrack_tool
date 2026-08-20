@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.dependencies import get_current_user, request_meta
+from app.dependencies import require_menu_permission, request_meta
 from app.models import User, UserSettings
 from app.modules.redmine import provider as redmine
 from app.modules.settings.service import get_system_settings_map
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/logtime", tags=["logtime"])
 @router.get("/source", response_model=LogtimeSourceResponse)
 def get_logtime_source(
     date: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_menu_permission("logtime")),
     user_settings: UserSettings = Depends(get_current_user_settings),
     db: Session = Depends(get_db),
 ) -> LogtimeSourceResponse:
@@ -39,7 +39,7 @@ def get_logtime_source(
 def save_logtime(
     payload: LogtimeSaveRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_menu_permission("logtime")),
     user_settings: UserSettings = Depends(get_current_user_settings),
     db: Session = Depends(get_db),
 ) -> list[LogtimeSaveResult]:

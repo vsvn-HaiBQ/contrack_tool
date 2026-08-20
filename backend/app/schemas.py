@@ -87,6 +87,7 @@ class UserOut(BaseModel):
     id: int
     username: str
     role: str
+    permissions: list[str] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -105,6 +106,39 @@ class UserCreateRequest(BaseModel):
     username: str
     password: str
     role: str = "dev"
+
+
+class UserRoleUpdateRequest(BaseModel):
+    role: str
+
+
+class RoleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    permissions: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class RoleCreateRequest(BaseModel):
+    name: str
+    permissions: list[str] = Field(default_factory=list)
+
+
+class RoleUpdateRequest(BaseModel):
+    name: str
+    permissions: list[str] = Field(default_factory=list)
+
+
+class MenuPermissionOut(BaseModel):
+    key: str
+    label: str
+
+
+class RoleListResponse(BaseModel):
+    items: list[RoleOut]
+    permissions: list[MenuPermissionOut]
 
 
 class ChangePasswordRequest(BaseModel):

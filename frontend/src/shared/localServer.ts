@@ -154,15 +154,6 @@ export const localServerApi = {
       const response = await localHttp<{ models: CodexModelOption[] }>("/document-translation/models");
       return response.models;
     },
-    uploadDroppedFile: (file: File) =>
-      localHttp<{ path: string }>(
-        `/document-translation/drop-file?name=${encodeURIComponent(file.name)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/octet-stream" },
-          body: file
-        }
-      ),
     sheets: async (payload: unknown) => {
       const response = await localHttp<{ sheets: string[] }>("/document-translation/sheets", jsonBody(withOpenXmlBase(payload)));
       return response.sheets;
@@ -184,6 +175,19 @@ export const localServerApi = {
       localHttp<import("./types").GitEolPreview>("/git-eol/working-tree/preview", jsonBody(payload)),
     startWorkingTreePreview: (payload: unknown) =>
       localHttp<{ job_id: string; status: string }>("/git-eol/working-tree/preview/start", jsonBody(payload)),
+    startBranchPreview: (payload: unknown) =>
+      localHttp<{ job_id: string; status: string }>("/git-eol/branch/preview/start", jsonBody(payload)),
+    previewJob: (jobId: string) =>
+      localHttp<{
+        job_id: string;
+        status: "running" | "succeeded" | "failed" | string;
+        current: number;
+        total: number;
+        path: string;
+        message?: string;
+        result: import("./types").GitEolPreview | null;
+        error: string | null;
+      }>(`/git-eol/preview/jobs/${encodeURIComponent(jobId)}`),
     workingTreePreviewJob: (jobId: string) =>
       localHttp<{
         job_id: string;

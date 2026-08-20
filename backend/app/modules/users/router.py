@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings as app_settings
 from app.db import get_db
 from app.dependencies import get_admin_user, get_current_user, request_meta
-from app.models import User, UserSettings
+from app.models import Role, User, UserSettings
 from app.core.session_store import session_store
 from app.modules.users.dependencies import get_current_user_settings
 from app.schemas import (
@@ -17,9 +17,14 @@ from app.schemas import (
     LocalPathsOut,
     MessageResponse,
     PasswordResetRequest,
+    RoleCreateRequest,
+    RoleListResponse,
+    RoleOut,
+    RoleUpdateRequest,
     TrackerOption,
     UserCreateRequest,
     UserOut,
+    UserRoleUpdateRequest,
     UserSettingsIn,
     UserSettingsOut,
 )
@@ -28,9 +33,14 @@ from app.modules.users.service import (
     apply_user_settings,
     apply_local_paths,
     create_user_record,
+    MENU_PERMISSIONS,
+    normalize_role_name,
+    role_permissions,
     serialize_local_paths,
     serialize_user_settings,
     update_password,
+    validate_permissions,
+    validate_role,
     validate_password,
     validate_user_settings_input,
     validate_username,
@@ -71,6 +81,120 @@ def list_users(_: User = Depends(get_admin_user), db: Session = Depends(get_db))
     return db.query(User).order_by(User.username.asc()).all()
 
 
+@router.get("/roles", response_model=RoleListResponse)
+def list_roles(_: User = Depends(get_admin_user), db: Session = Depends(get_db)) -> RoleListResponse:
+    rows = db.query(Role).order_by(Role.name.asc()).all()
+    return RoleListResponse(
+        items=[RoleOut.model_validate(row) for row in rows],
+        permissions=[{"key": key, "label": label} for key, label in MENU_PERMISSIONS],
+    )
+
+
+@router.post("/roles", response_model=RoleOut)
+def create_role(
+    payload: RoleCreateRequest,
+    request: Request,
+    actor: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> Role:
+    try:
+        name = normalize_role_name(payload.name)
+        permissions = validate_permissions(payload.permissions)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if name == "admin":
+        raise HTTPException(status_code=400, detail="The admin role is built in and cannot be created")
+    if db.get(Role, name):
+        raise HTTPException(status_code=400, detail="Role already exists")
+    role = Role(name=name, permissions=permissions)
+    db.add(role)
+    db.flush()
+    write_audit_log(
+        db,
+        actor=actor,
+        action="create_role",
+        target_type="role",
+        target_id=name,
+        payload_after={"permissions": permissions},
+        **request_meta(request),
+    )
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+@router.put("/roles/{role_name}", response_model=RoleOut)
+def update_role(
+    role_name: str,
+    payload: RoleUpdateRequest,
+    request: Request,
+    actor: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> Role:
+    role = db.get(Role, role_name)
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if role.name == "admin":
+        raise HTTPException(status_code=400, detail="The admin role is built in and cannot be changed")
+    try:
+        new_name = normalize_role_name(payload.name)
+        permissions = validate_permissions(payload.permissions)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if new_name == "admin":
+        raise HTTPException(status_code=400, detail="The admin role is built in and cannot be used")
+    if new_name != role.name and db.get(Role, new_name):
+        raise HTTPException(status_code=400, detail="Role already exists")
+    before = {"name": role.name, "permissions": role_permissions(db, role.name)}
+    old_name = role.name
+    role.name = new_name
+    role.permissions = permissions
+    if new_name != old_name:
+        db.query(User).filter(User.role == old_name).update({User.role: new_name}, synchronize_session=False)
+    write_audit_log(
+        db,
+        actor=actor,
+        action="update_role",
+        target_type="role",
+        target_id=new_name,
+        payload_before=before,
+        payload_after={"name": new_name, "permissions": permissions},
+        **request_meta(request),
+    )
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+@router.delete("/roles/{role_name}", response_model=MessageResponse)
+def delete_role(
+    role_name: str,
+    request: Request,
+    actor: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    role = db.get(Role, role_name)
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if role.name == "admin":
+        raise HTTPException(status_code=400, detail="The admin role is built in and cannot be deleted")
+    if db.query(User).filter(User.role == role.name).first():
+        raise HTTPException(status_code=400, detail="Reassign users before deleting this role")
+    before = {"name": role.name, "permissions": role_permissions(db, role.name)}
+    db.delete(role)
+    write_audit_log(
+        db,
+        actor=actor,
+        action="delete_role",
+        target_type="role",
+        target_id=role_name,
+        payload_before=before,
+        **request_meta(request),
+    )
+    db.commit()
+    return MessageResponse(message=f"Deleted role {role_name}")
+
+
 @router.post("", response_model=UserOut)
 def create_user(
     payload: UserCreateRequest,
@@ -95,6 +219,42 @@ def create_user(
         target_id=str(user.id),
         payload_after={"username": user.username, "role": user.role},
         **meta,
+    )
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.put("/{user_id}/role", response_model=UserOut)
+def update_user_role(
+    user_id: int,
+    payload: UserRoleUpdateRequest,
+    request: Request,
+    actor: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> User:
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == actor.id:
+        raise HTTPException(status_code=400, detail="Cannot change your own role")
+    try:
+        new_role = validate_role(db, payload.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if user.role == "admin" and new_role != "admin" and db.query(User).filter(User.role == "admin").count() <= 1:
+        raise HTTPException(status_code=400, detail="At least one admin user is required")
+    before = {"role": user.role}
+    user.role = new_role
+    write_audit_log(
+        db,
+        actor=actor,
+        action="update_user_role",
+        target_type="user",
+        target_id=str(user.id),
+        payload_before=before,
+        payload_after={"role": user.role},
+        **request_meta(request),
     )
     db.commit()
     db.refresh(user)

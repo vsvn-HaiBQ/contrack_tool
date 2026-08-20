@@ -15,11 +15,25 @@ import AuditPage from "./modules/audit/AuditPage.vue";
 import { hasRequiredRedmineKeys, sessionReady, sessionState } from "./shared/session";
 import { localServerApi } from "./shared/localServer";
 
+const defaultMenuRoutes: Array<[string, string]> = [
+  ["detail", "ticket_detail"],
+  ["sync", "ticket_sync"],
+  ["pull-requests", "pull_requests"],
+  ["confluence-preview", "confluence_preview"],
+  ["logtime", "logtime"],
+  ["notes", "notes"],
+  ["audit", "audit"],
+  ["git-eol", "git_eol"],
+  ["build-source", "build_source"],
+  ["document-translation", "document_translation"],
+];
+
 function defaultRouteName() {
   if (!sessionState.me) {
     return "login";
   }
-  return hasRequiredRedmineKeys() ? "detail" : "settings";
+  if (!hasRequiredRedmineKeys()) return "settings";
+  return defaultMenuRoutes.find(([, permission]) => hasPermission(permission))?.[0] ?? "settings";
 }
 
 const router = createRouter({
@@ -35,26 +49,25 @@ const router = createRouter({
           redirect: () => ({ name: defaultRouteName() })
         },
         { path: "settings", name: "settings", component: SettingsPage },
-        { path: "tickets/sync", name: "sync", component: SyncTicketPage },
-        { path: "tickets/detail/:jpIssueId?", name: "detail", component: TicketDetailPage },
-        { path: "logtime", name: "logtime", component: LogtimePage },
-        { path: "pull-requests", name: "pull-requests", component: PullRequestPage },
-        { path: "git-eol", name: "git-eol", component: GitEolPage, meta: { keepAlive: true } },
-        { path: "build-source", name: "build-source", component: BuildSourcePage, meta: { keepAlive: true } },
-        { path: "confluence-preview", name: "confluence-preview", component: ConfluencePreviewPage, meta: { keepAlive: true } },
-        { path: "document-translation", name: "document-translation", component: DocumentTranslationPage, meta: { keepAlive: true } },
-        { path: "notes", name: "notes", component: NotesPage },
-        { path: "audit", name: "audit", component: AuditPage, meta: { adminOnly: true } },
+        { path: "tickets/sync", name: "sync", component: SyncTicketPage, meta: { permission: "ticket_sync" } },
+        { path: "tickets/detail/:jpIssueId?", name: "detail", component: TicketDetailPage, meta: { permission: "ticket_detail" } },
+        { path: "logtime", name: "logtime", component: LogtimePage, meta: { permission: "logtime" } },
+        { path: "pull-requests", name: "pull-requests", component: PullRequestPage, meta: { permission: "pull_requests" } },
+        { path: "git-eol", name: "git-eol", component: GitEolPage, meta: { keepAlive: true, permission: "git_eol" } },
+        { path: "build-source", name: "build-source", component: BuildSourcePage, meta: { keepAlive: true, permission: "build_source" } },
+        { path: "confluence-preview", name: "confluence-preview", component: ConfluencePreviewPage, meta: { keepAlive: true, permission: "confluence_preview" } },
+        { path: "document-translation", name: "document-translation", component: DocumentTranslationPage, meta: { keepAlive: true, permission: "document_translation" } },
+        { path: "notes", name: "notes", component: NotesPage, meta: { permission: "notes" } },
+        { path: "audit", name: "audit", component: AuditPage, meta: { permission: "audit" } },
       ]
     }
   ]
 });
 
 const nodeOnlyRouteNames = new Set(["git-eol", "build-source", "document-translation"]);
-const qaRestrictedRouteNames = new Set(["pull-requests", "git-eol", "build-source"]);
-
-function isQaUser() {
-  return String(sessionState.me?.role ?? "").trim().toLowerCase() === "qa";
+function hasPermission(permission: unknown) {
+  if (!permission || sessionState.me?.role === "admin") return true;
+  return sessionState.me?.permissions?.includes(String(permission)) ?? false;
 }
 
 async function isNodeServerAvailable() {
@@ -87,10 +100,7 @@ router.beforeEach(async (to) => {
   if (authenticated && to.name === "login") {
     return { name: defaultRouteName() };
   }
-  if (authenticated && to.meta.adminOnly && sessionState.me?.role !== "admin") {
-    return { name: defaultRouteName() };
-  }
-  if (authenticated && isQaUser() && qaRestrictedRouteNames.has(String(to.name))) {
+  if (authenticated && !hasPermission(to.meta.permission)) {
     return { name: defaultRouteName() };
   }
   if (authenticated && nodeOnlyRouteNames.has(String(to.name)) && !(await isNodeServerAvailable())) {

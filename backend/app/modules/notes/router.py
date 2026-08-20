@@ -2,12 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.dependencies import get_admin_user, get_current_user, request_meta
+from app.dependencies import get_admin_user, get_current_user, require_menu_permission, request_meta
 from app.models import Note, User
 from app.modules.audit.service import write_audit_log
 from app.schemas import NoteCreateRequest, NoteOut, NoteReorderRequest, NoteUpdateRequest
 
-router = APIRouter(prefix="/notes", tags=["notes"])
+router = APIRouter(prefix="/notes", tags=["notes"], dependencies=[Depends(require_menu_permission("notes"))])
 
 
 @router.get("", response_model=list[NoteOut])

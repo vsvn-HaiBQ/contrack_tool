@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import GitEolView from "./GitEolView.vue";
-import { gitEolApi } from "./api";
 import { localServerApi, localServerBase } from "../../shared/localServer";
 import { activeDefaultBaseBranch, sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
@@ -21,7 +20,8 @@ const form = reactive({
   mode: "working_tree" as "branch" | "working_tree",
   base_branch: "",
   source_branch: "",
-  local_source_folder: ""
+  local_source_folder: "",
+  branch_source_folder: ""
 });
 const commitForm = reactive({
   message: "fix eol"
@@ -50,7 +50,6 @@ const jobStatus = ref<"queued" | "running" | "succeeded" | "failed" | "idle">("i
 const jobLogs = ref<GitEolJobLog[]>([]);
 const jobError = ref<string | null>(null);
 const localServerOnline = ref(false);
-let eventSource: EventSource | null = null;
 
 const loadingPreview = computed(() => jobStatus.value === "queued" || jobStatus.value === "running");
 const isWorkingTreeMode = computed(() => form.mode === "working_tree");
@@ -101,13 +100,6 @@ function clearResults() {
   clearMap(selectedResultFiles);
 }
 
-function closeStream() {
-  if (eventSource) {
-    eventSource.close();
-    eventSource = null;
-  }
-}
-
 function pushLog(entry: GitEolJobLog) {
   jobLogs.value.push(entry);
   const progress = /^Scanning file (\d+)\/(\d+): (.+)$/.exec(entry.message);
@@ -128,37 +120,7 @@ async function loadPreview() {
     await loadWorkingTreePreview();
     return;
   }
-  if (!form.base_branch.trim() || !form.source_branch.trim()) {
-    showToast("Base branch and source branch are required", "warning");
-    return;
-  }
-
-  closeStream();
-  preview.value = null;
-  clearResults();
-  jobLogs.value = [];
-  jobError.value = null;
-  previewProgress.value = null;
-  jobStatus.value = "queued";
-
-  try {
-    const enqueue = await gitEolApi.preview({
-      base_branch: form.base_branch.trim(),
-      source_branch: form.source_branch.trim()
-    });
-    jobId.value = enqueue.job_id;
-    pushLog({
-      ts: Date.now() / 1000,
-      level: "info",
-      source: "system",
-      message: `Job ${enqueue.job_id} queued, waiting for worker...`
-    });
-    openStream(enqueue.job_id);
-  } catch (error) {
-    jobStatus.value = "failed";
-    jobError.value = (error as Error).message;
-    showToast((error as Error).message, "error");
-  }
+  await loadBranchPreview();
 }
 
 async function loadWorkingTreePreview() {
@@ -167,7 +129,6 @@ async function loadWorkingTreePreview() {
     return;
   }
 
-  closeStream();
   preview.value = null;
   clearResults();
   jobLogs.value = [];
@@ -188,7 +149,7 @@ async function loadWorkingTreePreview() {
     jobId.value = started.job_id;
     let loggedScanIndex = 0;
     while (true) {
-      const job = await localServerApi.gitEol.workingTreePreviewJob(started.job_id);
+      const job = await localServerApi.gitEol.previewJob(started.job_id);
       previewProgress.value = { current: job.current, total: job.total, path: job.path };
       if (job.current > 0 && job.current !== loggedScanIndex) {
         loggedScanIndex = job.current;
@@ -235,53 +196,109 @@ async function loadWorkingTreePreview() {
   }
 }
 
-function openStream(id: string) {
-  const source = new EventSource(gitEolApi.jobStreamUrl(id), { withCredentials: true });
-  eventSource = source;
+async function loadBranchPreview() {
+  if (!form.branch_source_folder.trim()) {
+    showToast("Local clone folder is required", "warning");
+    return;
+  }
+  if (!form.base_branch.trim() || !form.source_branch.trim()) {
+    showToast("Base branch and source branch are required", "warning");
+    return;
+  }
+  if (!sessionState.systemSettings.git_repo.trim()) {
+    showToast("Git repository is not configured", "warning");
+    return;
+  }
+  if (!sessionState.userSettings.github_token.trim()) {
+    showToast("GitHub token is required", "warning");
+    return;
+  }
 
-  source.onmessage = (event) => {
-    let payload: any;
-    try {
-      payload = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    if (payload.type === "log" && payload.log) {
-      pushLog(payload.log);
-    } else if (payload.type === "status" && payload.status) {
-      const status = payload.status.status;
-      jobStatus.value = status;
-      if (status === "succeeded" && payload.status.result) {
-        preview.value = payload.status.result as GitEolPreview;
-        syncSelectedFiles(preview.value);
-        previewProgress.value = null;
-        const processableCount = preview.value.files.filter((file) => file.processable).length;
-        showToast(`Preview ready: ${processableCount} processable files`, processableCount ? "success" : "warning");
-        closeStream();
-      } else if (status === "failed") {
-        jobError.value = payload.status.error || "Preview failed";
-        previewProgress.value = null;
-        showToast(jobError.value, "error");
-        closeStream();
-      }
-    } else if (payload.type === "error") {
-      jobError.value = payload.message;
-      showToast(payload.message, "error");
-    }
-  };
-
-  source.onerror = () => {
-    if (jobStatus.value === "succeeded" || jobStatus.value === "failed") {
-      closeStream();
-      return;
-    }
+  preview.value = null;
+  clearResults();
+  jobLogs.value = [];
+  jobError.value = null;
+  previewProgress.value = { current: 0, total: 0, path: "" };
+  jobStatus.value = "running";
+  jobId.value = null;
+  try {
+    form.branch_source_folder = await ensureLocalCloneDirectory(form.branch_source_folder);
+    await localServerApi.setSetting("paths.gitEolBranchSourceFolder", form.branch_source_folder);
+    const baseBranch = form.base_branch.trim();
+    const sourceBranch = form.source_branch.trim();
     pushLog({
       ts: Date.now() / 1000,
-      level: "warn",
-      source: "system",
-      message: "Log stream disconnected, retrying..."
+      level: "info",
+      source: "local-node",
+      message: `Preparing local clone for ${sessionState.systemSettings.git_repo}`
     });
-  };
+    const started = await localServerApi.gitEol.startBranchPreview({
+      sourceFolder: form.branch_source_folder,
+      repo: sessionState.systemSettings.git_repo,
+      githubToken: sessionState.userSettings.github_token,
+      gitUserName: sessionState.me?.username ?? "Contrack",
+      gitUserEmail: `${sessionState.me?.username ?? "contrack"}@contrack.local`,
+      baseBranch,
+      sourceBranch,
+    });
+    jobId.value = started.job_id;
+    let loggedScanIndex = 0;
+    let loggedMessage = "";
+    while (true) {
+      const job = await localServerApi.gitEol.previewJob(started.job_id);
+      previewProgress.value = { current: job.current, total: job.total, path: job.path || job.message || "" };
+      if (job.message && job.message !== loggedMessage) {
+        loggedMessage = job.message;
+        pushLog({
+          ts: Date.now() / 1000,
+          level: "info",
+          source: "local-node",
+          message: job.message,
+        });
+      }
+      if (job.current > 0 && job.current !== loggedScanIndex) {
+        loggedScanIndex = job.current;
+        pushLog({
+          ts: Date.now() / 1000,
+          level: "info",
+          source: "local-node",
+          message: `Scanning file ${job.current}/${job.total}: ${job.path}`,
+        });
+      }
+      if (job.status === "succeeded") {
+        if (!job.result) throw new Error("Preview completed without a result");
+        preview.value = job.result;
+        break;
+      }
+      if (job.status === "failed") {
+        throw new Error(job.error || "Preview failed");
+      }
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+    }
+    localServerOnline.value = true;
+    syncSelectedFiles(preview.value);
+    jobStatus.value = "succeeded";
+    previewProgress.value = null;
+    const processableCount = preview.value.files.filter((file) => file.processable).length;
+    pushLog({
+      ts: Date.now() / 1000,
+      level: "info",
+      source: "local-node",
+      message: `Preview ready: ${processableCount} processable files`
+    });
+    showToast(`Preview ready: ${processableCount} processable files`, processableCount ? "success" : "warning");
+  } catch (error) {
+    jobStatus.value = "failed";
+    previewProgress.value = null;
+    jobError.value = (error as Error).message;
+    pushLog({
+      ts: Date.now() / 1000,
+      level: "error",
+      source: "local-node",
+      message: (error as Error).message
+    });
+    showToast((error as Error).message, "error");
+  }
 }
 
 async function loadDiff(
@@ -295,9 +312,13 @@ async function loadDiff(
   if (!force && cache[path]) return;
   loading[path] = true;
   try {
-    cache[path] = isWorkingTreeMode.value
-      ? await localServerApi.gitEol.structuredDiff({ sessionId: preview.value.session_id, path, foldUnchanged: true, context: 3, includeFixed })
-      : await gitEolApi.diff(preview.value.session_id, path, { foldUnchanged: true, context: 3, includeFixed });
+    cache[path] = await localServerApi.gitEol.structuredDiff({
+      sessionId: preview.value.session_id,
+      path,
+      foldUnchanged: true,
+      context: 3,
+      includeFixed,
+    });
   } catch (error) {
     cache[path] = {
       session_id: preview.value.session_id,
@@ -321,23 +342,15 @@ async function loadHiddenRows(path: string, row: GitEolDiffRow, includeFixed = f
   if (!leftStart || !leftEnd || !rightStart || !rightEnd) {
     throw new Error("Hidden diff range is missing");
   }
-  const diff = isWorkingTreeMode.value
-    ? await localServerApi.gitEol.structuredDiff({
-        sessionId: preview.value.session_id,
-        path,
-        leftStart,
-        leftEnd,
-        rightStart,
-        rightEnd,
-        includeFixed
-      })
-    : await gitEolApi.diff(preview.value.session_id, path, {
-        leftStart,
-        leftEnd,
-        rightStart,
-        rightEnd,
-        includeFixed
-      });
+  const diff = await localServerApi.gitEol.structuredDiff({
+    sessionId: preview.value.session_id,
+    path,
+    leftStart,
+    leftEnd,
+    rightStart,
+    rightEnd,
+    includeFixed
+  });
   return diff.rows;
 }
 
@@ -388,19 +401,12 @@ async function fixSelectedFiles() {
     for (let index = 0; index < paths.length; index += 1) {
       const path = paths[index];
       fixProgress.value = { current: index + 1, total: paths.length, path };
-      const result = isWorkingTreeMode.value
-        ? await localServerApi.gitEol.fixWorkingTree({
-            sessionId: preview.value.session_id,
-            files: [path],
-            fixSpaceOnly: fixSpaceOnly.value,
-            resetExisting: index === 0,
-          })
-        : await gitEolApi.fix({
-            session_id: preview.value.session_id,
-            files: [path],
-            fix_space_only: fixSpaceOnly.value,
-            reset_existing: index === 0,
-          });
+      const result = await localServerApi.gitEol.fixWorkingTree({
+        sessionId: preview.value.session_id,
+        files: [path],
+        fixSpaceOnly: fixSpaceOnly.value,
+        resetExisting: index === 0,
+      });
       combined.fixed_files.push(...result.fixed_files);
       combined.skipped_files.push(...result.skipped_files);
       combined.failed_files.push(...result.failed_files);
@@ -409,36 +415,27 @@ async function fixSelectedFiles() {
         (combined.total_restored_space_only_lines ?? 0) + (result.total_restored_space_only_lines ?? 0);
     }
     fixResult.value = combined;
-    if (isWorkingTreeMode.value) {
-      void auditApi.record({
-        action: "git_eol_fix",
-        target_type: "git_eol_session",
-        target_id: preview.value.session_id,
-        payload_after: {
-          mode: "working_tree",
-          files: selectedPaths.value,
-          fix_space_only: fixSpaceOnly.value,
-          fixed_files: fixResult.value.fixed_files.map((file) => file.path),
-          total_restored_eol_lines: fixResult.value.total_restored_eol_lines,
-          total_restored_space_only_lines: fixResult.value.total_restored_space_only_lines,
-        }
-      }).catch(() => undefined);
-    }
-    if (isWorkingTreeMode.value) {
-      const appliedCount = fixResult.value.fixed_files.filter((f) => f.worktree_changed).length;
-      const committableCount = fixResult.value.fixed_files.filter((f) => f.committable).length;
-      showToast(
-        appliedCount || committableCount
-          ? `Applied ${appliedCount} file(s); ${committableCount} file(s) ready to commit`
-          : "No EOL changes were needed",
-        appliedCount || committableCount ? "success" : "warning"
-      );
-    } else {
-      showToast(
-        `Restored ${fixResult.value.total_restored_eol_lines} EOL line(s); reverted ${fixResult.value.total_restored_space_only_lines ?? 0} whitespace-only line(s)`,
-        "success"
-      );
-    }
+    void auditApi.record({
+      action: "git_eol_fix",
+      target_type: "git_eol_session",
+      target_id: preview.value.session_id,
+      payload_after: {
+        mode: form.mode,
+        files: selectedPaths.value,
+        fix_space_only: fixSpaceOnly.value,
+        fixed_files: fixResult.value.fixed_files.map((file) => file.path),
+        total_restored_eol_lines: fixResult.value.total_restored_eol_lines,
+        total_restored_space_only_lines: fixResult.value.total_restored_space_only_lines,
+      }
+    }).catch(() => undefined);
+    const appliedCount = fixResult.value.fixed_files.filter((f) => f.worktree_changed).length;
+    const committableCount = fixResult.value.fixed_files.filter((f) => f.committable).length;
+    showToast(
+      appliedCount || committableCount
+        ? `Applied ${appliedCount} file(s); ${committableCount} file(s) ready to commit`
+        : "No EOL changes were needed",
+      appliedCount || committableCount ? "success" : "warning"
+    );
     // Auto-select all changed fixed files for commit
     clearMap(selectedResultFiles);
     fixResult.value.fixed_files
@@ -463,25 +460,18 @@ async function commitAndPushBranch() {
   commitResult.value = null;
   pushResult.value = null;
   try {
-    commitResult.value = isWorkingTreeMode.value
-      ? await localServerApi.gitEol.commitWorkingTree({
-          sessionId: preview.value.session_id,
-          message: commitForm.message
-        })
-      : await gitEolApi.commit({
-          session_id: preview.value.session_id,
-          message: commitForm.message
-        });
+    commitResult.value = await localServerApi.gitEol.commitWorkingTree({
+      sessionId: preview.value.session_id,
+      message: commitForm.message
+    });
     if (!commitResult.value.committed) {
       showToast(commitResult.value.message, "warning");
       return;
     }
-    pushResult.value = isWorkingTreeMode.value
-      ? await localServerApi.gitEol.pushWorkingTree({
-          sessionId: preview.value.session_id,
-          githubToken: sessionState.userSettings.github_token
-        })
-      : await gitEolApi.push({ session_id: preview.value.session_id });
+    pushResult.value = await localServerApi.gitEol.pushWorkingTree({
+      sessionId: preview.value.session_id,
+      githubToken: sessionState.userSettings.github_token
+    });
     showToast("Committed and pushed", "success");
   } catch (error) {
     showToast((error as Error).message, "error");
@@ -510,7 +500,7 @@ function clearLogs() {
 }
 
 watch(
-  () => [form.mode, form.base_branch, form.source_branch, form.local_source_folder],
+  () => [form.mode, form.base_branch, form.source_branch, form.local_source_folder, form.branch_source_folder],
   () => {
     preview.value = null;
     clearResults();
@@ -519,10 +509,19 @@ watch(
 
 async function browseLocalSourceFolder() {
   try {
-    const selected = await localServerApi.selectDirectory(form.local_source_folder);
+    const isBranchMode = form.mode === "branch";
+    const selected = await localServerApi.selectDirectory(
+      isBranchMode ? form.branch_source_folder : form.local_source_folder
+    );
     if (selected) {
-      form.local_source_folder = await validateLocalDirectory(selected, "Source folder");
-      await usersApi.updateLocalPaths({ git_eol_source_folder: form.local_source_folder });
+      const folder = await validateLocalDirectory(selected, isBranchMode ? "Local clone folder" : "Source folder");
+      if (isBranchMode) {
+        form.branch_source_folder = folder;
+        await localServerApi.setSetting("paths.gitEolBranchSourceFolder", folder);
+      } else {
+        form.local_source_folder = folder;
+        await usersApi.updateLocalPaths({ git_eol_source_folder: form.local_source_folder });
+      }
     }
   } catch (error) {
     showToast((error as Error).message, "error");
@@ -536,6 +535,20 @@ async function validateLocalDirectory(path: string, label: string) {
   }
   localServerOnline.value = true;
   return result.path;
+}
+
+async function ensureLocalCloneDirectory(path: string) {
+  const result = await localServerApi.validatePath(path, true);
+  if (result.valid) {
+    localServerOnline.value = true;
+    return result.path;
+  }
+  if (!result.exists) {
+    const created = await localServerApi.createDirectory(path);
+    localServerOnline.value = true;
+    return created.path;
+  }
+  throw new Error(`Local clone folder: ${result.message}`);
 }
 
 async function loadLocalPathSetting() {
@@ -555,6 +568,15 @@ async function loadLocalPathSetting() {
   } catch (error) {
     showToast((error as Error).message, "warning");
   }
+
+  try {
+    const branchPath = await localServerApi.getSetting<string>("paths.gitEolBranchSourceFolder");
+    if (branchPath?.trim()) {
+      form.branch_source_folder = branchPath;
+    }
+  } catch (error) {
+    showToast((error as Error).message, "warning");
+  }
 }
 
 let lastAutoBaseBranch = "";
@@ -570,7 +592,6 @@ watch(
   { immediate: true }
 );
 
-onBeforeUnmount(closeStream);
 onMounted(loadLocalPathSetting);
 </script>
 

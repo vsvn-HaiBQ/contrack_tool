@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Query as SAQuery, Session
 
 from app.db import get_db
-from app.dependencies import get_admin_user, get_current_user, request_meta
+from app.dependencies import get_audit_user, get_current_user, request_meta
 from app.models import AuditLog, User
 from app.modules.audit.service import write_audit_log
 from app.schemas import AuditDeleteRequest, AuditEventCreateRequest, AuditLogListResponse, AuditLogOptionsResponse, AuditLogOut, MessageResponse
@@ -44,7 +44,7 @@ def list_audit_logs(
     date_to: datetime | None = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    _: User = Depends(get_admin_user),
+    _: User = Depends(get_audit_user),
     db: Session = Depends(get_db),
 ) -> AuditLogListResponse:
     query = _filtered_query(
@@ -67,7 +67,7 @@ def list_audit_logs(
 
 @router.get("/options", response_model=AuditLogOptionsResponse)
 def list_audit_options(
-    _: User = Depends(get_admin_user),
+    _: User = Depends(get_audit_user),
     db: Session = Depends(get_db),
 ) -> AuditLogOptionsResponse:
     actions = [row[0] for row in db.query(AuditLog.action).distinct().order_by(AuditLog.action.asc()).all() if row[0]]
@@ -108,7 +108,7 @@ def create_audit_event(
 def delete_audit_logs(
     payload: AuditDeleteRequest,
     request: Request,
-    actor: User = Depends(get_admin_user),
+    actor: User = Depends(get_audit_user),
     db: Session = Depends(get_db),
 ) -> MessageResponse:
     query = db.query(AuditLog)

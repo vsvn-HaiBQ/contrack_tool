@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.dependencies import get_current_user
+from app.dependencies import require_menu_permission
 from app.models import User
 from app.modules.confluence_preview.service import convert_content
 
@@ -20,7 +20,7 @@ class ConfluencePreviewOut(BaseModel):
 async def preview_confluence(
     file: UploadFile = File(...),
     assets_dir: str | None = Form(default=None),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_menu_permission("confluence_preview")),
 ) -> ConfluencePreviewOut:
     file_name = file.filename or "page.confluence"
     if not file_name.lower().endswith(".confluence"):
