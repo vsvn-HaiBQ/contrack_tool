@@ -182,6 +182,18 @@ export const localServerApi = {
   gitEol: {
     previewWorkingTree: (payload: unknown) =>
       localHttp<import("./types").GitEolPreview>("/git-eol/working-tree/preview", jsonBody(payload)),
+    startWorkingTreePreview: (payload: unknown) =>
+      localHttp<{ job_id: string; status: string }>("/git-eol/working-tree/preview/start", jsonBody(payload)),
+    workingTreePreviewJob: (jobId: string) =>
+      localHttp<{
+        job_id: string;
+        status: "running" | "succeeded" | "failed" | string;
+        current: number;
+        total: number;
+        path: string;
+        result: import("./types").GitEolPreview | null;
+        error: string | null;
+      }>(`/git-eol/working-tree/preview/jobs/${encodeURIComponent(jobId)}`),
     structuredDiff: (payload: unknown) =>
       localHttp<import("./types").GitEolStructuredDiff>("/git-eol/working-tree/structured-diff", jsonBody(payload)),
     fixWorkingTree: (payload: unknown) =>

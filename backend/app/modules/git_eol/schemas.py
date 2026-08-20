@@ -17,6 +17,7 @@ class GitEolFilePreview(BaseModel):
     source_eol: str | None = None
     changed_lines: int = 0
     eol_only_lines: int = 0
+    space_only_lines: int = 0
 
 
 class GitEolPreviewResponse(BaseModel):
@@ -30,14 +31,19 @@ class GitEolPreviewResponse(BaseModel):
 class GitEolFixRequest(BaseModel):
     session_id: str
     files: list[str]
+    fix_space_only: bool = False
+    reset_existing: bool = False
 
 
 class GitEolFixedFile(BaseModel):
     path: str
     restored_eol_lines: int
     fixed_eol_lines: list[int] = Field(default_factory=list)
+    restored_space_only_lines: int = 0
+    fixed_space_only_lines: list[int] = Field(default_factory=list)
     remaining_changed_lines: int
     remaining_eol_only_lines: int
+    remaining_space_only_lines: int = 0
     worktree_changed: bool = False
     message: str | None = None
 
@@ -58,6 +64,7 @@ class GitEolFixResponse(BaseModel):
     skipped_files: list[GitEolSkippedFile]
     failed_files: list[GitEolFailedFile]
     total_restored_eol_lines: int
+    total_restored_space_only_lines: int = 0
 
 
 class GitEolCommitRequest(BaseModel):
@@ -118,7 +125,7 @@ class GitEolDiffSide(BaseModel):
 
 
 class GitEolDiffRow(BaseModel):
-    type: str  # equal | eol | fixed_eol | replace | delete | insert | fold
+    type: str  # equal | eol | fixed_eol | fixed_space | replace | delete | insert | fold
     left: GitEolDiffSide | None = None
     right: GitEolDiffSide | None = None
     count: int | None = None

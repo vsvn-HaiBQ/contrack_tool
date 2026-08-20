@@ -13,6 +13,9 @@ const props = defineProps<{
   preview: GitEolPreview | null;
   selectedFiles: Record<string, boolean>;
   selectedCount: number;
+  fixSpaceOnly: boolean;
+  fixProgress: { current: number; total: number; path: string } | null;
+  previewProgress: { current: number; total: number; path: string } | null;
   expandedFiles: Record<string, boolean>;
   diffCache: Record<string, GitEolStructuredDiff>;
   diffLoading: Record<string, boolean>;
@@ -43,6 +46,7 @@ const emit = defineEmits<{
   clearSelection: [];
   toggleFile: [path: string];
   toggleResultFile: [path: string];
+  updateFixSpaceOnly: [value: boolean];
   clearLogs: [];
   browseLocalSourceFolder: [];
 }>();
@@ -53,13 +57,18 @@ const canPreview = computed(() => {
   }
   return Boolean(props.form.base_branch.trim() && props.form.source_branch.trim());
 });
-const showEolOnlyFiles = ref(false);
-const visiblePreviewFiles = computed(() =>
-  props.preview?.files.filter((file) => !showEolOnlyFiles.value || file.eol_only_lines > 0) ?? []
-);
+function hasRelevantChange(file: GitEolPreview["files"][number]) {
+  return file.eol_only_lines > 0 || file.space_only_lines > 0;
+}
+
+function isFixable(file: GitEolPreview["files"][number]) {
+  return file.processable && (file.eol_only_lines > 0 || (props.fixSpaceOnly && file.space_only_lines > 0));
+}
+
+const visiblePreviewFiles = computed(() => props.preview?.files.filter(hasRelevantChange) ?? []);
 const commitAndPushCompleted = computed(() => Boolean(props.commitResult?.committed && props.pushResult?.pushed));
 function hasFixedOutput(file: GitEolFixResult["fixed_files"][number]) {
-  return Boolean(file.committable || file.worktree_changed || file.restored_eol_lines > 0);
+  return Boolean(file.committable || file.worktree_changed || file.restored_eol_lines > 0 || (file.restored_space_only_lines ?? 0) > 0);
 }
 const changedFixedFiles = computed(() =>
   props.fixResult?.fixed_files.filter(hasFixedOutput) ?? []
@@ -67,7 +76,7 @@ const changedFixedFiles = computed(() =>
 const noChangeFixedFiles = computed(() =>
   props.fixResult?.fixed_files.filter((f) => !hasFixedOutput(f)) ?? []
 );
-const processableCount = computed(() => props.preview?.files.filter((file) => file.processable).length ?? 0);
+const processableCount = computed(() => props.preview?.files.filter(isFixable).length ?? 0);
 const allProcessableSelected = computed(() => processableCount.value > 0 && props.selectedCount === processableCount.value);
 const someProcessableSelected = computed(() => props.selectedCount > 0 && !allProcessableSelected.value);
 const allResultSelected = computed(() => changedFixedFiles.value.length > 0 && props.selectedResultCount === changedFixedFiles.value.length);
@@ -267,8 +276,13 @@ function statusBadgeClass(status: string): string {
         </div>
         <div v-if="preview" class="flex flex-wrap items-center gap-2">
           <label class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-[#393C41]">
-            <input v-model="showEolOnlyFiles" type="checkbox" class="size-4 accent-[#3E6AE1]" />
-            Only files with EOL-only changes
+            <input
+              type="checkbox"
+              class="size-4 accent-[#3E6AE1]"
+              :checked="fixSpaceOnly"
+              @change="emit('updateFixSpaceOnly', ($event.target as HTMLInputElement).checked)"
+            />
+            Revert space-only lines
           </label>
           <span class="text-sm text-[#5C5E62]">{{ selectedCount }} / {{ processableCount }} selected</span>
         </div>
@@ -290,12 +304,11 @@ function statusBadgeClass(status: string): string {
                 />
               </th>
               <th class="px-3 py-2">File</th>
-              <th class="w-24 px-3 py-2">Status</th>
               <th class="w-24 px-3 py-2">Base EOL</th>
               <th class="w-24 px-3 py-2">Source EOL</th>
               <th class="w-20 px-3 py-2 text-right">Changed</th>
               <th class="w-24 px-3 py-2 text-right">EOL-only</th>
-              <th class="w-24 px-3 py-2">State</th>
+              <th class="w-24 px-3 py-2 text-right">Space only</th>
               <th class="w-10 px-2 py-2"></th>
             </tr>
           </thead>
@@ -303,13 +316,12 @@ function statusBadgeClass(status: string): string {
             <template v-for="file in visiblePreviewFiles" :key="file.path">
               <tr class="border-t border-neutral-200 cursor-pointer hover:bg-neutral-50" @click="emit('toggleFile', file.path)">
                 <td class="px-3 py-2" @click.stop>
-                  <input v-model="selectedFiles[file.path]" type="checkbox" :disabled="!file.processable" class="size-4 accent-[#3E6AE1]" />
+                  <input v-model="selectedFiles[file.path]" type="checkbox" :disabled="!isFixable(file)" class="size-4 accent-[#3E6AE1]" />
                 </td>
                 <td class="px-3 py-2">
                   <div class="break-all font-medium text-[#171A20]">{{ file.path }}</div>
                   <div v-if="file.old_path && file.old_path !== file.path" class="break-all text-xs text-[#5C5E62]">{{ file.old_path }}</div>
                 </td>
-                <td class="px-3 py-2 text-[#393C41]">{{ file.status }}</td>
                 <td class="px-3 py-2">
                   <span class="rounded bg-neutral-100 px-2 py-1 text-xs font-medium text-[#393C41]">{{ eolLabel(file.base_eol) }}</span>
                 </td>
@@ -317,15 +329,8 @@ function statusBadgeClass(status: string): string {
                   <span class="rounded bg-neutral-100 px-2 py-1 text-xs font-medium text-[#393C41]">{{ eolLabel(file.source_eol) }}</span>
                 </td>
                 <td class="px-3 py-2 text-right tabular-nums">{{ file.changed_lines }}</td>
-                <td class="px-3 py-2 text-right tabular-nums">{{ file.eol_only_lines }}</td>
-                <td class="px-3 py-2">
-                  <span
-                    class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium"
-                    :class="file.processable ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'bg-neutral-100 text-[#5C5E62] ring-1 ring-neutral-200'"
-                  >
-                    {{ file.processable ? "Ready" : file.reason }}
-                  </span>
-                </td>
+                <td class="px-3 py-2 text-right tabular-nums">{{ file.eol_only_lines ?? 0 }}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{{ file.space_only_lines ?? 0 }}</td>
                 <td class="px-2 py-2 text-right">
                   <svg viewBox="0 0 10 10" class="size-3 transition-transform" :class="expandedFiles[file.path] ? 'rotate-90' : ''" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M3 1.5l4 3.5-4 3.5" />
@@ -333,7 +338,7 @@ function statusBadgeClass(status: string): string {
                 </td>
               </tr>
               <tr v-if="expandedFiles[file.path]" class="border-t border-neutral-100 bg-neutral-50">
-                <td colspan="9" class="p-0">
+                <td colspan="8" class="p-0">
                   <GitEolDiffTable
                     :diff="diffCache[file.path] ?? null"
                     :loading="diffLoading[file.path] ?? false"
@@ -344,13 +349,20 @@ function statusBadgeClass(status: string): string {
             </template>
           </tbody>
         </table>
-        <p v-if="showEolOnlyFiles && !visiblePreviewFiles.length" class="m-0 border-t border-neutral-200 px-4 py-6 text-center text-sm text-[#5C5E62]">
-          No files have EOL-only changes.
+        <p v-if="!visiblePreviewFiles.length" class="m-0 border-t border-neutral-200 px-4 py-6 text-center text-sm text-[#5C5E62]">
+          No files have EOL-only or space-only changes.
         </p>
       </div>
-      <p v-else-if="!loadingPreview" class="text-sm text-[#5C5E62]">No preview loaded.</p>
+      <div v-else-if="loadingPreview" class="flex items-center gap-2 text-sm text-[#5C5E62]">
+        <LoadingCircle />
+        <span v-if="previewProgress && previewProgress.total > 0">
+          Scanning file {{ previewProgress.current }} / {{ previewProgress.total }}: {{ previewProgress.path }}
+        </span>
+        <span v-else>Scanning changed files...</span>
+      </div>
+      <p v-else class="text-sm text-[#5C5E62]">No preview loaded.</p>
 
-      <div v-if="preview" class="flex items-center gap-3">
+      <div v-if="preview" class="flex flex-wrap items-center gap-3">
         <button
           class="inline-flex min-h-10 min-w-[180px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
           :disabled="!selectedCount || fixing"
@@ -359,6 +371,9 @@ function statusBadgeClass(status: string): string {
           <LoadingCircle v-if="fixing" />
           {{ fixing ? "Fixing..." : "Fix EOL" }}
         </button>
+        <span v-if="fixing && fixProgress" class="text-sm text-[#5C5E62]">
+          Scanning file {{ fixProgress.current }} / {{ fixProgress.total }}: {{ fixProgress.path }}
+        </span>
       </div>
     </div>
 
@@ -370,10 +385,14 @@ function statusBadgeClass(status: string): string {
         </div>
       </div>
       <div v-if="fixResult" class="grid gap-4">
-        <div class="grid gap-3 md:grid-cols-4">
+        <div class="grid gap-3 md:grid-cols-5">
           <div class="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
             <p class="text-xs font-medium text-[#5C5E62] uppercase">{{ form.mode === "working_tree" ? "Applied EOL Lines" : "Restored Lines" }}</p>
             <p class="mt-1 text-2xl font-semibold text-[#171A20]">{{ fixResult.total_restored_eol_lines }}</p>
+          </div>
+          <div class="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+            <p class="text-xs font-medium text-[#5C5E62] uppercase">Reverted Whitespace</p>
+            <p class="mt-1 text-2xl font-semibold text-[#171A20]">{{ fixResult.total_restored_space_only_lines ?? 0 }}</p>
           </div>
           <div class="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
             <p class="text-xs font-medium text-[#5C5E62] uppercase">Checked Files</p>
@@ -390,10 +409,10 @@ function statusBadgeClass(status: string): string {
         </div>
 
         <div
-          v-if="!hasAnyFixOutput || (fixResult.total_restored_eol_lines === 0 && !fixResult.skipped_files.length && !fixResult.failed_files.length)"
+          v-if="!hasAnyFixOutput || (fixResult.total_restored_eol_lines === 0 && (fixResult.total_restored_space_only_lines ?? 0) === 0 && !fixResult.skipped_files.length && !fixResult.failed_files.length)"
           class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
         >
-          No EOL changes were needed for the selected files.
+          No EOL or whitespace changes were needed for the selected files.
         </div>
 
         <!-- Fixed files with checkboxes + expandable diff -->
@@ -401,7 +420,7 @@ function statusBadgeClass(status: string): string {
           <table class="w-full border-collapse text-left text-sm">
             <thead class="bg-neutral-50 text-xs font-medium text-[#5C5E62] uppercase">
               <tr>
-                <th class="w-10 px-2 py-2">
+                <th class="w-10 px-3 py-2">
                   <input
                     type="checkbox"
                     class="size-4 accent-[#3E6AE1] align-middle"
@@ -416,7 +435,7 @@ function statusBadgeClass(status: string): string {
                 <th class="w-28 px-3 py-2 text-right">Restored EOL</th>
                 <th class="w-32 px-3 py-2 text-right">Changed</th>
                 <th class="w-32 px-3 py-2 text-right">EOL-only</th>
-                <th class="w-28 px-3 py-2">Git Diff</th>
+                <th class="w-28 px-3 py-2 text-right">Space only</th>
                 <th class="w-10 px-2 py-2"></th>
               </tr>
             </thead>
@@ -430,9 +449,7 @@ function statusBadgeClass(status: string): string {
                   <td class="px-3 py-2 text-right tabular-nums">{{ file.restored_eol_lines }}</td>
                   <td class="px-3 py-2 text-right tabular-nums">{{ file.remaining_changed_lines }}</td>
                   <td class="px-3 py-2 text-right tabular-nums">{{ file.remaining_eol_only_lines }}</td>
-                  <td class="px-3 py-2">
-                    <span class="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">Ready</span>
-                  </td>
+                  <td class="px-3 py-2 text-right tabular-nums">{{ file.remaining_space_only_lines ?? 0 }}</td>
                   <td class="px-2 py-2 text-right">
                     <svg viewBox="0 0 10 10" class="size-3 transition-transform" :class="expandedResultFiles[file.path] ? 'rotate-90' : ''" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M3 1.5l4 3.5-4 3.5" />

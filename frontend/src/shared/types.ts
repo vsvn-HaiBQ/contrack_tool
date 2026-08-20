@@ -323,6 +323,7 @@ export type GitEolFilePreview = {
   source_eol?: string | null;
   changed_lines: number;
   eol_only_lines: number;
+  space_only_lines: number;
 };
 
 export type GitEolPreview = {
@@ -339,8 +340,11 @@ export type GitEolFixResult = {
     path: string;
     restored_eol_lines: number;
     fixed_eol_lines?: number[];
+    restored_space_only_lines?: number;
+    fixed_space_only_lines?: number[];
     remaining_changed_lines: number;
     remaining_eol_only_lines: number;
+    remaining_space_only_lines?: number;
     worktree_changed?: boolean;
     committable?: boolean;
     message?: string | null;
@@ -348,6 +352,7 @@ export type GitEolFixResult = {
   skipped_files: Array<{ path: string; reason: string }>;
   failed_files: Array<{ path: string; error: string }>;
   total_restored_eol_lines: number;
+  total_restored_space_only_lines?: number;
 };
 
 export type GitEolCommitResult = {

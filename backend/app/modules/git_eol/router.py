@@ -190,7 +190,13 @@ def fix_git_eol(
     db: Session = Depends(get_db),
 ) -> GitEolFixResponse:
     try:
-        result = service.fix(user=user, session_id=payload.session_id, selected_files=payload.files)
+        result = service.fix(
+            user=user,
+            session_id=payload.session_id,
+            selected_files=payload.files,
+            fix_space_only=payload.fix_space_only,
+            reset_existing=payload.reset_existing,
+        )
     except GitEolError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     write_audit_log(
@@ -201,8 +207,11 @@ def fix_git_eol(
         target_id=payload.session_id,
         payload_after={
             "files": payload.files,
+            "fix_space_only": payload.fix_space_only,
+            "reset_existing": payload.reset_existing,
             "fixed_files": [item.path for item in result.fixed_files],
             "total_restored_eol_lines": result.total_restored_eol_lines,
+            "total_restored_space_only_lines": result.total_restored_space_only_lines,
         },
         **request_meta(request),
     )

@@ -32,8 +32,10 @@ const {
 const {
   commitWorkingTree,
   fixWorkingTree,
+  getWorkingTreePreviewJob,
   previewWorkingTree,
   pushWorkingTree,
+  startWorkingTreePreview,
   structuredDiff,
 } = requireLocalModule("git-eol-local.cjs");
 const { defaultPaths, getSetting, setSetting } = requireLocalModule("settings.cjs");
@@ -704,6 +706,15 @@ async function route(req, res) {
   }
   if (req.method === "POST" && pathname === "/git-eol/working-tree/preview") {
     sendJson(req, res, 200, previewWorkingTree(await readJson(req)));
+    return;
+  }
+  if (req.method === "POST" && pathname === "/git-eol/working-tree/preview/start") {
+    sendJson(req, res, 200, startWorkingTreePreview(await readJson(req)));
+    return;
+  }
+  if (req.method === "GET" && pathname.startsWith("/git-eol/working-tree/preview/jobs/")) {
+    const jobId = decodeURIComponent(pathname.slice("/git-eol/working-tree/preview/jobs/".length));
+    sendJson(req, res, 200, getWorkingTreePreviewJob(jobId));
     return;
   }
   if (req.method === "POST" && pathname === "/git-eol/working-tree/structured-diff") {

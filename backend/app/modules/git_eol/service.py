@@ -45,6 +45,7 @@ class DiffStats:
     source_eol: str
     changed_lines: int
     eol_only_lines: int
+    space_only_lines: int
 
 
 @dataclass
@@ -84,7 +85,7 @@ class GitEolService:
         emit("info", "system", f"merge-base = {merge_base[:12]}")
 
         emit("info", "system", "Computing changed files")
-        files = self._preview_files(worktree, merge_base)
+        files = self._preview_files(worktree, merge_base, log=emit)
         session_id = uuid4().hex
         self._save_session(
             session_id,
@@ -111,7 +112,15 @@ class GitEolService:
             files=files,
         )
 
-    def fix(self, *, user: User, session_id: str, selected_files: list[str]) -> GitEolFixResponse:
+    def fix(
+        self,
+        *,
+        user: User,
+        session_id: str,
+        selected_files: list[str],
+        fix_space_only: bool = False,
+        reset_existing: bool = False,
+    ) -> GitEolFixResponse:
         session = self._load_session(session_id, user)
         worktree = Path(session["worktree_path"])
         merge_base = session["merge_base"]
@@ -128,13 +137,34 @@ class GitEolService:
             if not file.get("processable"):
                 skipped_files.append(GitEolSkippedFile(path=path, reason=file.get("reason") or "File is not processable"))
                 continue
+            if not (file.get("eol_only_lines") or file.get("space_only_lines")):
+                skipped_files.append(GitEolSkippedFile(path=path, reason="File has no EOL-only or space-only changes"))
+                continue
+            if not file.get("eol_only_lines") and not fix_space_only:
+                skipped_files.append(GitEolSkippedFile(path=path, reason="Enable the space-only option to fix this file"))
+                continue
             try:
-                result = self._fix_file(worktree, merge_base, path, file.get("old_path") or path)
+                result = self._fix_file(
+                    worktree,
+                    merge_base,
+                    path,
+                    file.get("old_path") or path,
+                    fix_space_only=fix_space_only,
+                )
                 fixed_files.append(result)
             except GitEolError as exc:
                 failed_files.append(GitEolFailedFile(path=path, error=str(exc)))
 
-        session["fixed_files"] = [file.model_dump() for file in fixed_files]
+        if reset_existing:
+            existing_fixed_files: dict[str, dict[str, Any]] = {}
+        else:
+            existing_fixed_files = {
+                file["path"]: file
+                for file in session.get("fixed_files", [])
+                if file.get("path")
+            }
+        existing_fixed_files.update({file.path: file.model_dump() for file in fixed_files})
+        session["fixed_files"] = list(existing_fixed_files.values())
         self._save_session(session_id, session)
         return GitEolFixResponse(
             session_id=session_id,
@@ -142,6 +172,7 @@ class GitEolService:
             skipped_files=skipped_files,
             failed_files=failed_files,
             total_restored_eol_lines=sum(file.restored_eol_lines for file in fixed_files),
+            total_restored_space_only_lines=sum(file.restored_space_only_lines for file in fixed_files),
         )
 
     def commit(self, *, user: User, session_id: str, message: str | None) -> dict[str, Any]:
@@ -198,37 +229,30 @@ class GitEolService:
             "message": f"Pushed {source_branch}",
         }
 
-    def _preview_files(self, worktree: Path, merge_base: str) -> list[GitEolFilePreview]:
+    def _preview_files(
+        self,
+        worktree: Path,
+        merge_base: str,
+        *,
+        log: Logger | None = None,
+    ) -> list[GitEolFilePreview]:
+        emit = log or (lambda *_: None)
         previews: list[GitEolFilePreview] = []
-        for changed in self._changed_files(worktree, merge_base):
+        changed_files = self._changed_files(worktree, merge_base)
+        total = len(changed_files)
+        emit("info", "scan", f"Scanning {total} changed file(s)")
+        for index, changed in enumerate(changed_files, start=1):
+            emit("info", "scan", f"Scanning file {index}/{total}: {changed.path}")
             if changed.status not in {"modified", "renamed"}:
-                previews.append(
-                    GitEolFilePreview(
-                        path=changed.path,
-                        old_path=changed.old_path,
-                        status=changed.status,
-                        selected=False,
-                        processable=False,
-                        reason=f"{changed.status}",
-                    )
-                )
                 continue
             try:
                 base_bytes = self._git_object(worktree, merge_base, changed.old_path or changed.path)
                 source_bytes = self._git_object(worktree, "HEAD", changed.path)
                 if self._is_binary(base_bytes) or self._is_binary(source_bytes):
-                    previews.append(
-                        GitEolFilePreview(
-                            path=changed.path,
-                            old_path=changed.old_path,
-                            status=changed.status,
-                            selected=False,
-                            processable=False,
-                            reason="Binary file",
-                        )
-                    )
                     continue
                 stats = self._diff_stats(base_bytes, source_bytes)
+                if not (stats.eol_only_lines or stats.space_only_lines):
+                    continue
                 previews.append(
                     GitEolFilePreview(
                         path=changed.path,
@@ -240,22 +264,28 @@ class GitEolService:
                         source_eol=stats.source_eol,
                         changed_lines=stats.changed_lines,
                         eol_only_lines=stats.eol_only_lines,
+                        space_only_lines=stats.space_only_lines,
                     )
                 )
-            except GitEolError as exc:
-                previews.append(
-                    GitEolFilePreview(
-                        path=changed.path,
-                        old_path=changed.old_path,
-                        status=changed.status,
-                        selected=False,
-                        processable=False,
-                        reason=str(exc),
-                    )
+                emit(
+                    "info",
+                    "scan",
+                    f"Relevant change found: EOL-only={stats.eol_only_lines}, space-only={stats.space_only_lines}",
                 )
+            except GitEolError:
+                continue
+        emit("info", "scan", f"File scan complete: {len(previews)} relevant file(s)")
         return previews
 
-    def _fix_file(self, worktree: Path, merge_base: str, path: str, old_path: str) -> GitEolFixedFile:
+    def _fix_file(
+        self,
+        worktree: Path,
+        merge_base: str,
+        path: str,
+        old_path: str,
+        *,
+        fix_space_only: bool,
+    ) -> GitEolFixedFile:
         base_bytes = self._git_object(worktree, merge_base, old_path)
         source_path = self._safe_worktree_file(worktree, path)
         source_bytes = self._git_object(worktree, "HEAD", path)
@@ -265,23 +295,32 @@ class GitEolService:
         base_lines = self._split_lines(base_bytes)
         source_lines = self._split_lines(source_bytes)
         fixed_eol_lines = self._restore_equal_line_eols(base_lines, source_lines)
+        fixed_space_only_lines = (
+            self._restore_space_only_lines(base_lines, source_lines)
+            if fix_space_only
+            else []
+        )
         restored = len(fixed_eol_lines)
+        restored_space_only = len(fixed_space_only_lines)
         next_bytes = self._join_lines(source_lines)
         worktree_changed = next_bytes != source_bytes
         if worktree_changed:
             source_path.write_bytes(next_bytes)
         remaining = self._diff_stats(base_bytes, next_bytes)
         message = None
-        if restored > 0 and not worktree_changed:
-            message = "EOL was already aligned with the source blob"
-        elif restored == 0:
+        if (restored or restored_space_only) and not worktree_changed:
+            message = "Selected changes were already aligned with the source blob"
+        elif restored == 0 and restored_space_only == 0:
             message = "No EOL changes were needed"
         return GitEolFixedFile(
             path=path,
             restored_eol_lines=restored,
             fixed_eol_lines=fixed_eol_lines,
+            restored_space_only_lines=restored_space_only,
+            fixed_space_only_lines=fixed_space_only_lines,
             remaining_changed_lines=remaining.changed_lines,
             remaining_eol_only_lines=remaining.eol_only_lines,
+            remaining_space_only_lines=remaining.space_only_lines,
             worktree_changed=worktree_changed,
             message=message,
         )
@@ -305,6 +344,28 @@ class GitEolService:
                     fixed_lines.append(source_start + offset + 1)
         return fixed_lines
 
+    def _restore_space_only_lines(self, base_lines: list[RawLine], source_lines: list[RawLine]) -> list[int]:
+        """Restore lines whose content differs only by leading/trailing spaces or tabs."""
+        matcher = difflib.SequenceMatcher(
+            None,
+            [line.content for line in base_lines],
+            [line.content for line in source_lines],
+            autojunk=False,
+        )
+        fixed_lines: list[int] = []
+        for tag, base_start, base_end, source_start, source_end in matcher.get_opcodes():
+            if tag != "replace":
+                continue
+            for offset in range(min(base_end - base_start, source_end - source_start)):
+                base_line = base_lines[base_start + offset]
+                source_line = source_lines[source_start + offset]
+                if not self._is_space_only_content_change(base_line.content, source_line.content):
+                    continue
+                source_line.content = base_line.content
+                source_line.eol = base_line.eol
+                fixed_lines.append(source_start + offset + 1)
+        return fixed_lines
+
     def _diff_stats(self, base_bytes: bytes, source_bytes: bytes) -> DiffStats:
         base_lines = self._split_lines(base_bytes)
         source_lines = self._split_lines(source_bytes)
@@ -316,6 +377,7 @@ class GitEolService:
         )
         changed_lines = 0
         eol_only_lines = 0
+        space_only_lines = 0
         for tag, base_start, base_end, source_start, source_end in matcher.get_opcodes():
             if tag == "equal":
                 for offset in range(base_end - base_start):
@@ -323,11 +385,25 @@ class GitEolService:
                         eol_only_lines += 1
             else:
                 changed_lines += max(base_end - base_start, source_end - source_start)
+                if tag == "replace":
+                    for offset in range(min(base_end - base_start, source_end - source_start)):
+                        if self._is_space_only_content_change(
+                            base_lines[base_start + offset].content,
+                            source_lines[source_start + offset].content,
+                        ):
+                            space_only_lines += 1
         return DiffStats(
             base_eol=self._eol_summary(base_lines),
             source_eol=self._eol_summary(source_lines),
             changed_lines=changed_lines,
             eol_only_lines=eol_only_lines,
+            space_only_lines=space_only_lines,
+        )
+
+    def _is_space_only_content_change(self, base_content: bytes, source_content: bytes) -> bool:
+        return (
+            base_content != source_content
+            and base_content.strip(b" \t") == source_content.strip(b" \t")
         )
 
     def _split_lines(self, data: bytes) -> list[RawLine]:
@@ -743,6 +819,13 @@ class GitEolService:
             for line in (file.get("fixed_eol_lines") or [])
             if isinstance(line, int)
         } if include_fixed else set()
+        fixed_space_only_lines = {
+            int(line)
+            for file in fixed_files
+            if file.get("path") == path
+            for line in (file.get("fixed_space_only_lines") or [])
+            if isinstance(line, int)
+        } if include_fixed else set()
         if include_fixed and path in fixed_paths:
             source_path = self._safe_worktree_file(worktree, path)
             source_bytes = source_path.read_bytes() if source_path.is_file() else b""
@@ -768,6 +851,7 @@ class GitEolService:
                 base_lines,
                 source_lines,
                 fixed_eol_lines=fixed_eol_lines,
+                fixed_space_only_lines=fixed_space_only_lines,
                 left_start=left_start,
                 left_end=left_end,
                 right_start=right_start,
@@ -779,6 +863,7 @@ class GitEolService:
                 base_lines,
                 source_lines,
                 fixed_eol_lines=fixed_eol_lines,
+                fixed_space_only_lines=fixed_space_only_lines,
                 fold_unchanged=fold_unchanged,
                 context=context,
             )
@@ -795,6 +880,7 @@ class GitEolService:
         source_lines: list[RawLine],
         *,
         fixed_eol_lines: set[int] | None = None,
+        fixed_space_only_lines: set[int] | None = None,
         fold_unchanged: bool = False,
         context: int = 3,
     ) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -829,7 +915,14 @@ class GitEolService:
             return {"lineno": lineno, "text": render_text(line), "eol": eol_name(line)}
 
         fixed_eol_lines = fixed_eol_lines or set()
-        opcodes = self._display_opcodes(base_lines, source_lines, matcher.get_opcodes(), fixed_eol_lines=fixed_eol_lines)
+        fixed_space_only_lines = fixed_space_only_lines or set()
+        opcodes = self._display_opcodes(
+            base_lines,
+            source_lines,
+            matcher.get_opcodes(),
+            fixed_eol_lines=fixed_eol_lines,
+            fixed_space_only_lines=fixed_space_only_lines,
+        )
         for op_index, (tag, i1, i2, j1, j2) in enumerate(opcodes):
             if tag == "equal":
                 count = i2 - i1
@@ -869,7 +962,7 @@ class GitEolService:
                         }
                     )
                     append_equal_rows(head + hidden, count)
-            elif tag in {"eol", "fixed_eol"}:
+            elif tag in {"eol", "fixed_eol", "fixed_space"}:
                 for offset in range(i2 - i1):
                     if tag == "eol":
                         eol_only += 1
@@ -936,8 +1029,10 @@ class GitEolService:
         opcodes: list[tuple[str, int, int, int, int]],
         *,
         fixed_eol_lines: set[int] | None = None,
+        fixed_space_only_lines: set[int] | None = None,
     ) -> list[tuple[str, int, int, int, int]]:
         fixed_eol_lines = fixed_eol_lines or set()
+        fixed_space_only_lines = fixed_space_only_lines or set()
         result: list[tuple[str, int, int, int, int]] = []
         for tag, i1, i2, j1, j2 in opcodes:
             if tag != "equal":
@@ -945,19 +1040,40 @@ class GitEolService:
                 continue
             offset = 0
             while offset < i2 - i1:
-                current_tag = self._eol_display_tag(base_lines[i1 + offset], source_lines[j1 + offset], j1 + offset + 1, fixed_eol_lines)
+                current_tag = self._display_tag(
+                    base_lines[i1 + offset],
+                    source_lines[j1 + offset],
+                    j1 + offset + 1,
+                    fixed_eol_lines,
+                    fixed_space_only_lines,
+                )
                 start = offset
                 offset += 1
                 while (
                     offset < i2 - i1
-                    and self._eol_display_tag(base_lines[i1 + offset], source_lines[j1 + offset], j1 + offset + 1, fixed_eol_lines)
+                    and self._display_tag(
+                        base_lines[i1 + offset],
+                        source_lines[j1 + offset],
+                        j1 + offset + 1,
+                        fixed_eol_lines,
+                        fixed_space_only_lines,
+                    )
                     == current_tag
                 ):
                     offset += 1
                 result.append((current_tag, i1 + start, i1 + offset, j1 + start, j1 + offset))
         return result
 
-    def _eol_display_tag(self, base_line: RawLine, source_line: RawLine, source_lineno: int, fixed_eol_lines: set[int]) -> str:
+    def _display_tag(
+        self,
+        base_line: RawLine,
+        source_line: RawLine,
+        source_lineno: int,
+        fixed_eol_lines: set[int],
+        fixed_space_only_lines: set[int],
+    ) -> str:
+        if source_lineno in fixed_space_only_lines:
+            return "fixed_space"
         if source_lineno in fixed_eol_lines:
             return "fixed_eol"
         if base_line.eol != source_line.eol:
@@ -970,6 +1086,7 @@ class GitEolService:
         source_lines: list[RawLine],
         *,
         fixed_eol_lines: set[int] | None = None,
+        fixed_space_only_lines: set[int] | None = None,
         left_start: int | None,
         left_end: int | None,
         right_start: int | None,
@@ -984,6 +1101,7 @@ class GitEolService:
             raise GitEolError("Hidden diff range is outside file bounds")
 
         fixed_eol_lines = fixed_eol_lines or set()
+        fixed_space_only_lines = fixed_space_only_lines or set()
         rows: list[dict[str, Any]] = []
         for offset in range(left_end - left_start + 1):
             left_index = left_start - 1 + offset
@@ -992,7 +1110,13 @@ class GitEolService:
             right_line = source_lines[right_index]
             rows.append(
                 {
-                    "type": self._eol_display_tag(left_line, right_line, right_index + 1, fixed_eol_lines),
+                    "type": self._display_tag(
+                        left_line,
+                        right_line,
+                        right_index + 1,
+                        fixed_eol_lines,
+                        fixed_space_only_lines,
+                    ),
                     "left": {
                         "lineno": left_index + 1,
                         "text": left_line.content.decode("utf-8", errors="replace"),

@@ -5,6 +5,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const sessions = new Map();
+const previewJobs = new Map();
 const exactDiffCellLimit = 50_000_000;
 
 function git(repoPath, args, options = {}) {
@@ -449,6 +450,7 @@ function diffStats(baseBytes, sourceBytes) {
   const sourceLines = splitLines(sourceBytes);
   let changedLines = 0;
   let eolOnlyLines = 0;
+  let spaceOnlyLines = 0;
   for (const op of opcodes(baseLines, sourceLines)) {
     if (op.tag === "equal") {
       for (let offset = 0; offset < op.i2 - op.i1; offset += 1) {
@@ -458,6 +460,13 @@ function diffStats(baseBytes, sourceBytes) {
       }
     } else {
       changedLines += Math.max(op.i2 - op.i1, op.j2 - op.j1);
+      if (op.tag === "replace") {
+        for (let offset = 0; offset < Math.min(op.i2 - op.i1, op.j2 - op.j1); offset += 1) {
+          if (isSpaceOnlyContentChange(baseLines[op.i1 + offset].content, sourceLines[op.j1 + offset].content)) {
+            spaceOnlyLines += 1;
+          }
+        }
+      }
     }
   }
   return {
@@ -465,15 +474,25 @@ function diffStats(baseBytes, sourceBytes) {
     source_eol: eolSummary(sourceLines),
     changed_lines: changedLines,
     eol_only_lines: eolOnlyLines,
+    space_only_lines: spaceOnlyLines,
   };
 }
 
-function previewWorkingTree({ sourceFolder }) {
+function isSpaceOnlyContentChange(baseContent, sourceContent) {
+  return !baseContent.equals(sourceContent)
+    && baseContent.toString("latin1").replace(/^[ \t]+|[ \t]+$/g, "")
+      === sourceContent.toString("latin1").replace(/^[ \t]+|[ \t]+$/g, "");
+}
+
+function prepareWorkingTreePreview({ sourceFolder }) {
   const repoPath = ensureRepo(sourceFolder);
   const head = gitText(repoPath, ["rev-parse", "HEAD"]).trim();
   const branch = gitText(repoPath, ["branch", "--show-current"]).trim() || "HEAD";
   const changed = parseChangedFiles(git(repoPath, ["diff", "--name-status", "-z", "-M", "HEAD", "--"]));
-  const files = changed.map((entry) => previewFile(repoPath, entry));
+  return { repoPath, head, branch, changed };
+}
+
+function finishWorkingTreePreview({ repoPath, head, branch }, files) {
   const sourceSnapshots = new Map();
   for (const file of files) {
     if (!file.processable) {
@@ -507,6 +526,66 @@ function previewWorkingTree({ sourceFolder }) {
   return preview;
 }
 
+function previewWorkingTree(input) {
+  const context = prepareWorkingTreePreview(input);
+  const files = context.changed
+    .map((entry) => previewFile(context.repoPath, entry))
+    .filter((file) => file.processable && (file.eol_only_lines > 0 || file.space_only_lines > 0));
+  return finishWorkingTreePreview(context, files);
+}
+
+function startWorkingTreePreview(input) {
+  const jobId = crypto.randomBytes(16).toString("hex");
+  const job = {
+    job_id: jobId,
+    status: "running",
+    current: 0,
+    total: 0,
+    path: "",
+    result: null,
+    error: null,
+  };
+  previewJobs.set(jobId, job);
+
+  setImmediate(() => {
+    try {
+      const context = prepareWorkingTreePreview(input);
+      job.total = context.changed.length;
+      const files = [];
+      let index = 0;
+      const scanNext = () => {
+        if (index >= context.changed.length) {
+          job.result = finishWorkingTreePreview(context, files);
+          job.status = "succeeded";
+          return;
+        }
+        const entry = context.changed[index];
+        job.current = index + 1;
+        job.path = entry.path;
+        const file = previewFile(context.repoPath, entry);
+        if (file.processable && (file.eol_only_lines > 0 || file.space_only_lines > 0)) {
+          files.push(file);
+        }
+        index += 1;
+        setImmediate(scanNext);
+      };
+      scanNext();
+    } catch (error) {
+      job.status = "failed";
+      job.error = error && error.message ? error.message : String(error);
+    }
+  });
+  return { job_id: jobId, status: job.status };
+}
+
+function getWorkingTreePreviewJob(jobId) {
+  const job = previewJobs.get(jobId);
+  if (!job) {
+    throw new Error("Git EOL local preview job has expired");
+  }
+  return job;
+}
+
 function previewFile(repoPath, entry) {
   if (!["modified", "renamed"].includes(entry.status)) {
     return {
@@ -518,6 +597,7 @@ function previewFile(repoPath, entry) {
       reason: entry.status,
       changed_lines: 0,
       eol_only_lines: 0,
+      space_only_lines: 0,
     };
   }
   try {
@@ -525,7 +605,15 @@ function previewFile(repoPath, entry) {
     const baseBytes = gitObjectForWorktree(repoPath, "HEAD", oldPath);
     const sourceBytes = worktreeBytes(repoPath, entry.path);
     if (isBinary(baseBytes) || isBinary(sourceBytes)) {
-      return { ...entry, selected: false, processable: false, reason: "Binary file", changed_lines: 0, eol_only_lines: 0 };
+      return {
+        ...entry,
+        selected: false,
+        processable: false,
+        reason: "Binary file",
+        changed_lines: 0,
+        eol_only_lines: 0,
+        space_only_lines: 0,
+      };
     }
     const stats = diffStats(baseBytes, sourceBytes);
     return {
@@ -546,6 +634,7 @@ function previewFile(repoPath, entry) {
       reason: error.message,
       changed_lines: 0,
       eol_only_lines: 0,
+      space_only_lines: 0,
     };
   }
 }
@@ -595,9 +684,17 @@ function structuredDiff(input = {}) {
           .filter((line) => Number.isInteger(line))
       )
     : new Set();
+  const fixedSpaceOnlyLines = includeFixed
+    ? new Set(
+        (value.fixed_files || [])
+          .filter((item) => item.path === filePath)
+          .flatMap((item) => item.fixed_space_only_lines || [])
+          .filter((line) => Number.isInteger(line))
+      )
+    : new Set();
   const range = hiddenRange(input);
   if (range) {
-    const rows = equalRangeRows(baseLines, sourceLines, range, fixedEolLines);
+    const rows = equalRangeRows(baseLines, sourceLines, range, fixedEolLines, fixedSpaceOnlyLines);
     return { session_id: sessionId, path: filePath, binary: false, rows, stats: { added: 0, removed: 0, changed: 0, eol_only: 0 } };
   }
   return {
@@ -606,16 +703,22 @@ function structuredDiff(input = {}) {
     binary: false,
     ...buildSideBySideRows(baseLines, sourceLines, {
       fixedEolLines,
+      fixedSpaceOnlyLines,
       foldUnchanged: parseBoolean(input.foldUnchanged ?? input.fold_unchanged, false),
       context: positiveInt(input.context, 3, 0, 50),
     }),
   };
 }
 
-function buildSideBySideRows(baseLines, sourceLines, { fixedEolLines = new Set(), foldUnchanged = false, context = 3 } = {}) {
+function buildSideBySideRows(baseLines, sourceLines, {
+  fixedEolLines = new Set(),
+  fixedSpaceOnlyLines = new Set(),
+  foldUnchanged = false,
+  context = 3,
+} = {}) {
   const rows = [];
   const stats = { added: 0, removed: 0, changed: 0, eol_only: 0 };
-  const ops = displayOpcodes(baseLines, sourceLines, fixedEolLines);
+  const ops = displayOpcodes(baseLines, sourceLines, fixedEolLines, fixedSpaceOnlyLines);
   for (let opIndex = 0; opIndex < ops.length; opIndex += 1) {
     const op = ops[opIndex];
     if (op.tag === "equal") {
@@ -653,7 +756,7 @@ function buildSideBySideRows(baseLines, sourceLines, { fixedEolLines = new Set()
         });
         appendEqualRows(head + hidden, count);
       }
-    } else if (op.tag === "eol" || op.tag === "fixed_eol") {
+    } else if (op.tag === "eol" || op.tag === "fixed_eol" || op.tag === "fixed_space") {
       for (let offset = 0; offset < op.i2 - op.i1; offset += 1) {
         if (op.tag === "eol") stats.eol_only += 1;
         rows.push({
@@ -689,7 +792,7 @@ function buildSideBySideRows(baseLines, sourceLines, { fixedEolLines = new Set()
   return { rows, stats };
 }
 
-function displayOpcodes(baseLines, sourceLines, fixedEolLines = new Set()) {
+function displayOpcodes(baseLines, sourceLines, fixedEolLines = new Set(), fixedSpaceOnlyLines = new Set()) {
   const result = [];
   for (const op of opcodes(baseLines, sourceLines)) {
     if (op.tag !== "equal") {
@@ -698,12 +801,24 @@ function displayOpcodes(baseLines, sourceLines, fixedEolLines = new Set()) {
     }
     let offset = 0;
     while (offset < op.i2 - op.i1) {
-      const currentTag = eolDisplayTag(baseLines[op.i1 + offset], sourceLines[op.j1 + offset], op.j1 + offset + 1, fixedEolLines);
+      const currentTag = eolDisplayTag(
+        baseLines[op.i1 + offset],
+        sourceLines[op.j1 + offset],
+        op.j1 + offset + 1,
+        fixedEolLines,
+        fixedSpaceOnlyLines
+      );
       const start = offset;
       offset += 1;
       while (
         offset < op.i2 - op.i1 &&
-        eolDisplayTag(baseLines[op.i1 + offset], sourceLines[op.j1 + offset], op.j1 + offset + 1, fixedEolLines) === currentTag
+        eolDisplayTag(
+          baseLines[op.i1 + offset],
+          sourceLines[op.j1 + offset],
+          op.j1 + offset + 1,
+          fixedEolLines,
+          fixedSpaceOnlyLines
+        ) === currentTag
       ) {
         offset += 1;
       }
@@ -719,7 +834,8 @@ function displayOpcodes(baseLines, sourceLines, fixedEolLines = new Set()) {
   return result;
 }
 
-function eolDisplayTag(left, right, rightLineNo, fixedEolLines) {
+function eolDisplayTag(left, right, rightLineNo, fixedEolLines, fixedSpaceOnlyLines = new Set()) {
+  if (fixedSpaceOnlyLines.has(rightLineNo)) return "fixed_space";
   if (fixedEolLines.has(rightLineNo)) return "fixed_eol";
   if (left.eol !== right.eol) return "eol";
   return "equal";
@@ -743,7 +859,7 @@ function hiddenRange(input = {}) {
   return { leftStart, leftEnd, rightStart, rightEnd };
 }
 
-function equalRangeRows(baseLines, sourceLines, range, fixedEolLines = new Set()) {
+function equalRangeRows(baseLines, sourceLines, range, fixedEolLines = new Set(), fixedSpaceOnlyLines = new Set()) {
   const rows = [];
   const count = range.leftEnd - range.leftStart + 1;
   for (let offset = 0; offset < count; offset += 1) {
@@ -755,7 +871,7 @@ function equalRangeRows(baseLines, sourceLines, range, fixedEolLines = new Set()
       throw new Error("Hidden diff range is outside file bounds");
     }
     rows.push({
-      type: eolDisplayTag(left, right, rightIndex + 1, fixedEolLines),
+      type: eolDisplayTag(left, right, rightIndex + 1, fixedEolLines, fixedSpaceOnlyLines),
       left: side(left, leftIndex + 1),
       right: side(right, rightIndex + 1),
     });
@@ -791,13 +907,24 @@ function parseBoolean(value, fallback = false) {
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
-function fixWorkingTree({ sessionId, files }) {
+function fixWorkingTree(input = {}) {
+  const {
+    sessionId,
+    files,
+    fixSpaceOnly = Boolean(input.fix_space_only),
+    resetExisting = Boolean(input.resetExisting ?? input.reset_existing),
+  } = input;
   const value = session(sessionId);
   const fileMap = new Map(value.files.map((item) => [item.path, item]));
   const fixedFiles = [];
   const skippedFiles = [];
   const failedFiles = [];
-  const fixedBlobs = new Map();
+  const fixedBlobs = resetExisting
+    ? new Map()
+    : new Map(value.fixed_blobs instanceof Map ? value.fixed_blobs : []);
+  const existingFixedFiles = resetExisting
+    ? new Map()
+    : new Map((value.fixed_files || []).map((item) => [item.path, item]));
   for (const filePath of files || []) {
     const entry = fileMap.get(filePath);
     if (!entry) {
@@ -809,8 +936,18 @@ function fixWorkingTree({ sessionId, files }) {
       continue;
     }
     try {
-      const fixed = fixFile(value.repoPath, entry);
+      if (!entry.eol_only_lines && !entry.space_only_lines) {
+        skippedFiles.push({ path: filePath, reason: "File has no EOL-only or space-only changes" });
+        continue;
+      }
+      if (!entry.eol_only_lines && !fixSpaceOnly) {
+        skippedFiles.push({ path: filePath, reason: "Enable the space-only option to fix this file" });
+        continue;
+      }
+      const fixed = fixFile(value.repoPath, entry, { fixSpaceOnly });
       fixedFiles.push(fixed.result);
+      existingFixedFiles.set(entry.path, fixed.result);
+      fixedBlobs.delete(entry.path);
       if (fixed.blobBytes) {
         fixedBlobs.set(entry.path, fixed.blobBytes);
       }
@@ -818,7 +955,7 @@ function fixWorkingTree({ sessionId, files }) {
       failedFiles.push({ path: filePath, error: error.message });
     }
   }
-  value.fixed_files = fixedFiles;
+  value.fixed_files = Array.from(existingFixedFiles.values());
   value.fixed_blobs = fixedBlobs;
   return {
     session_id: sessionId,
@@ -826,10 +963,14 @@ function fixWorkingTree({ sessionId, files }) {
     skipped_files: skippedFiles,
     failed_files: failedFiles,
     total_restored_eol_lines: fixedFiles.reduce((sum, item) => sum + item.restored_eol_lines, 0),
+    total_restored_space_only_lines: fixedFiles.reduce(
+      (sum, item) => sum + (item.restored_space_only_lines || 0),
+      0
+    ),
   };
 }
 
-function fixFile(repoPath, entry) {
+function fixFile(repoPath, entry, { fixSpaceOnly = false } = {}) {
   const oldPath = entry.old_path || entry.path;
   const baseBytes = gitObjectForWorktree(repoPath, "HEAD", oldPath);
   const baseBlobBytes = gitObject(repoPath, "HEAD", oldPath);
@@ -839,8 +980,11 @@ function fixFile(repoPath, entry) {
   }
   const baseLines = splitLines(baseBytes);
   const sourceLines = splitLines(sourceBytes);
-  const fixedEolLines = restoreComparableLineEols(baseLines, sourceLines);
+  const restoredLines = restoreComparableLineEols(baseLines, sourceLines, { fixSpaceOnly });
+  const fixedEolLines = restoredLines.fixedEolLines;
+  const fixedSpaceOnlyLines = restoredLines.fixedSpaceOnlyLines;
   const restored = fixedEolLines.length;
+  const restoredSpaceOnly = fixedSpaceOnlyLines.length;
   const nextWorktreeBytes = joinLines(sourceLines);
   const worktreeChanged = !sourceBytes.equals(nextWorktreeBytes);
   if (worktreeChanged) {
@@ -849,15 +993,15 @@ function fixFile(repoPath, entry) {
 
   const baseBlobLines = splitLines(baseBlobBytes);
   const blobLines = splitLines(nextWorktreeBytes);
-  restoreComparableLineEols(baseBlobLines, blobLines);
+  restoreComparableLineEols(baseBlobLines, blobLines, { fixSpaceOnly });
   const nextBlobBytes = joinLines(blobLines);
   const remaining = diffStats(baseBytes, nextWorktreeBytes);
   const blobRemaining = diffStats(baseBlobBytes, nextBlobBytes);
   const committable = blobRemaining.changed_lines > 0;
   let message = null;
-  if (!committable && restored > 0) {
-    message = "Only EOL changes were applied to the working tree file";
-  } else if (restored === 0) {
+  if (!committable && (restored > 0 || restoredSpaceOnly > 0)) {
+    message = "Only selected EOL or whitespace changes were applied to the working tree file";
+  } else if (restored === 0 && restoredSpaceOnly === 0) {
     message = committable ? "Content changes are ready without EOL rewrite" : "No EOL changes were needed";
   } else {
     message = "Applied EOL fix to the working tree file";
@@ -867,8 +1011,11 @@ function fixFile(repoPath, entry) {
       path: entry.path,
       restored_eol_lines: restored,
       fixed_eol_lines: fixedEolLines,
+      restored_space_only_lines: restoredSpaceOnly,
+      fixed_space_only_lines: fixedSpaceOnlyLines,
       remaining_changed_lines: remaining.changed_lines,
       remaining_eol_only_lines: remaining.eol_only_lines,
+      remaining_space_only_lines: remaining.space_only_lines,
       worktree_changed: worktreeChanged,
       committable,
       message,
@@ -877,41 +1024,36 @@ function fixFile(repoPath, entry) {
   };
 }
 
-function restoreComparableLineEols(baseLines, sourceLines) {
-  const fallbackEol = dominantEol(baseLines);
+function restoreComparableLineEols(baseLines, sourceLines, { fixSpaceOnly = false } = {}) {
   const fixedLines = [];
+  const fixedSpaceOnlyLines = [];
   for (const op of opcodes(baseLines, sourceLines)) {
-    if (op.tag === "delete") {
-      continue;
-    }
     if (op.tag === "equal") {
       for (let offset = 0; offset < op.i2 - op.i1; offset += 1) {
         const baseLine = baseLines[op.i1 + offset];
         const sourceLine = sourceLines[op.j1 + offset];
-        if (!sourceLine || sourceLine.eol === "") {
+        if (!sourceLine || !baseLine) {
           continue;
         }
-        const targetEol = baseLine && baseLine.eol ? baseLine.eol : fallbackEol;
-        if (targetEol && sourceLine.eol !== targetEol) {
-          sourceLine.eol = targetEol;
+        if (sourceLine.eol !== baseLine.eol) {
+          sourceLine.eol = baseLine.eol;
           fixedLines.push(op.j1 + offset + 1);
         }
       }
-    } else if (op.tag === "insert") {
-      const targetEol = nearbyBaseEol(baseLines, op.i1) || fallbackEol;
-      for (let offset = 0; offset < op.j2 - op.j1; offset += 1) {
+    } else if (fixSpaceOnly && op.tag === "replace") {
+      for (let offset = 0; offset < Math.min(op.i2 - op.i1, op.j2 - op.j1); offset += 1) {
+        const baseLine = baseLines[op.i1 + offset];
         const sourceLine = sourceLines[op.j1 + offset];
-        if (!sourceLine || sourceLine.eol === "") {
+        if (!baseLine || !sourceLine || !isSpaceOnlyContentChange(baseLine.content, sourceLine.content)) {
           continue;
         }
-        if (targetEol && sourceLine.eol !== targetEol) {
-          sourceLine.eol = targetEol;
-          fixedLines.push(op.j1 + offset + 1);
-        }
+        sourceLine.content = baseLine.content;
+        sourceLine.eol = baseLine.eol;
+        fixedSpaceOnlyLines.push(op.j1 + offset + 1);
       }
     }
   }
-  return fixedLines;
+  return { fixedEolLines: fixedLines, fixedSpaceOnlyLines };
 }
 
 function nearbyBaseEol(lines, index) {
@@ -1023,7 +1165,9 @@ function pushWorkingTree({ sessionId, githubToken }) {
 module.exports = {
   commitWorkingTree,
   fixWorkingTree,
+  getWorkingTreePreviewJob,
   previewWorkingTree,
   pushWorkingTree,
+  startWorkingTreePreview,
   structuredDiff,
 };
