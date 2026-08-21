@@ -19,32 +19,36 @@ namespace API.Helpers
             }
         }
 
-        public static List<string> GetWords(Stream filePath, List<string> sheets)
+        public static List<string> GetWords(Stream filePath, List<string>? sheets)
         {
             List<string> words = new List<string>();
-            List<Spreadsheet.SharedStringItem> includeSharedStrings = new List<Spreadsheet.SharedStringItem>();
+            HashSet<int> includedSharedStringIndexes = new HashSet<int>();
 
             using (SpreadsheetDocument spreadsheet = SpreadsheetDocument.Open(filePath, false))
             {
+                IReadOnlyList<Spreadsheet.SharedStringItem>? sharedStrings = spreadsheet.WorkbookPart!.SharedStringTablePart?.SharedStringTable?
+                    .Elements<Spreadsheet.SharedStringItem>()
+                    .ToList();
                 foreach (Spreadsheet.Sheet sheet in spreadsheet.WorkbookPart!.Workbook.Sheets!)
                 {
                     if (sheet.Name == null || string.IsNullOrEmpty(sheet.Name.Value) || (sheet.State != null && sheet.State != Spreadsheet.SheetStateValues.Visible)) continue;
-                    if (sheets.Count > 0 && !sheets.Contains(sheet.Name.Value)) continue;
+                    if (sheets?.Count > 0 && !sheets.Contains(sheet.Name.Value)) continue;
                     WorksheetPart wsPart = (WorksheetPart)spreadsheet.WorkbookPart!.GetPartById(sheet.Id!);
                     foreach (Spreadsheet.Cell cell in wsPart.Worksheet.Descendants<Spreadsheet.Cell>())
                     {
-                        if (cell == null || cell.InnerText.Length <= 0 || cell.DataType == null || cell.DataType.Value != Spreadsheet.CellValues.SharedString) continue;
-                        foreach (SharedStringTablePart stringTablePart in spreadsheet.WorkbookPart.GetPartsOfType<SharedStringTablePart>())
+                        if (cell.DataType?.Value == Spreadsheet.CellValues.SharedString)
                         {
-                            if (stringTablePart == null) continue;
-                            Spreadsheet.SharedStringItem stringItem = stringTablePart.SharedStringTable.Elements<Spreadsheet.SharedStringItem>().ElementAt(int.Parse(cell.InnerText));
-                            if (includeSharedStrings.Contains(stringItem)) continue;
-                            includeSharedStrings.Add(stringItem);
-                            stringItem.RemoveAllChildren<Spreadsheet.PhoneticRun>();
-                            stringItem.RemoveAllChildren<Spreadsheet.PhoneticProperties>();
-                            foreach (string text in stringItem.InnerText.Split("\n"))
+                            if (TryGetSharedStringItem(cell, sharedStrings, includedSharedStringIndexes, out Spreadsheet.SharedStringItem stringItem))
                             {
-                                words.Add(text);
+                                AddTextSegments(GetTranslatableText(stringItem), words);
+                            }
+                        }
+                        else if (cell.DataType?.Value == Spreadsheet.CellValues.InlineString)
+                        {
+                            Spreadsheet.InlineString? inlineString = cell.InlineString;
+                            if (inlineString != null)
+                            {
+                                AddTextSegments(GetTranslatableText(inlineString), words);
                             }
                         }
                     }
@@ -97,35 +101,39 @@ namespace API.Helpers
             }
         }
 
-        public static void Translate(string filePath, Queue<string> trans, List<string> sheets)
+        public static void Translate(string filePath, Queue<string> trans, List<string>? sheets)
         {
-            List<Spreadsheet.SharedStringItem> includeSharedStrings = new List<Spreadsheet.SharedStringItem>();
+            HashSet<int> includedSharedStringIndexes = new HashSet<int>();
 
             using (SpreadsheetDocument spreadsheet = SpreadsheetDocument.Open(filePath, true))
             {
+                IReadOnlyList<Spreadsheet.SharedStringItem>? sharedStrings = spreadsheet.WorkbookPart!.SharedStringTablePart?.SharedStringTable?
+                    .Elements<Spreadsheet.SharedStringItem>()
+                    .ToList();
                 foreach (Spreadsheet.Sheet sheet in spreadsheet.WorkbookPart!.Workbook.Sheets!)
                 {
                     if (sheet.Name == null || string.IsNullOrEmpty(sheet.Name.Value) || (sheet.State != null && sheet.State != Spreadsheet.SheetStateValues.Visible)) continue;
-                    if (sheets.Count > 0 && !sheets.Contains(sheet.Name.Value)) continue;
+                    if (sheets?.Count > 0 && !sheets.Contains(sheet.Name.Value)) continue;
                     WorksheetPart wsPart = (WorksheetPart)spreadsheet.WorkbookPart!.GetPartById(sheet.Id!);
                     foreach (Spreadsheet.Cell cell in wsPart.Worksheet.Descendants<Spreadsheet.Cell>())
                     {
-                        if (cell == null || cell.InnerText.Length <= 0 || cell.DataType == null || cell.DataType.Value != Spreadsheet.CellValues.SharedString) continue;
-                        foreach (SharedStringTablePart stringTablePart in spreadsheet.WorkbookPart.GetPartsOfType<SharedStringTablePart>())
+                        if (cell.DataType?.Value == Spreadsheet.CellValues.SharedString)
                         {
-                            if (stringTablePart == null) continue;
-                            Spreadsheet.SharedStringItem stringItem = stringTablePart.SharedStringTable.Elements<Spreadsheet.SharedStringItem>().ElementAt(int.Parse(cell.InnerText));
-                            if (includeSharedStrings.Contains(stringItem)) continue;
-                            includeSharedStrings.Add(stringItem);
-                            stringItem.RemoveAllChildren<Spreadsheet.PhoneticRun>();
-                            stringItem.RemoveAllChildren<Spreadsheet.PhoneticProperties>();
-                            string text = string.Empty;
-                            foreach (string item in stringItem.InnerText.Split("\n"))
+                            if (TryGetSharedStringItem(cell, sharedStrings, includedSharedStringIndexes, out Spreadsheet.SharedStringItem stringItem) &&
+                                TryGetReplacement(GetTranslatableText(stringItem), trans, out string replacement))
                             {
-                                if (trans.Count > 0) text += "\n" + trans.Dequeue();
+                                stringItem.RemoveAllChildren();
+                                stringItem.Text = new Spreadsheet.Text(replacement);
                             }
-                            stringItem.RemoveAllChildren();
-                            stringItem.Text = new Spreadsheet.Text(text);
+                        }
+                        else if (cell.DataType?.Value == Spreadsheet.CellValues.InlineString)
+                        {
+                            Spreadsheet.InlineString? inlineString = cell.InlineString;
+                            if (inlineString != null && TryGetReplacement(GetTranslatableText(inlineString), trans, out string replacement))
+                            {
+                                inlineString.RemoveAllChildren();
+                                inlineString.Text = new Spreadsheet.Text(replacement);
+                            }
                         }
                     }
                     if (wsPart.DrawingsPart != null)
@@ -180,6 +188,59 @@ namespace API.Helpers
                 }
                 spreadsheet.Save();
             }
+        }
+
+        private static bool TryGetSharedStringItem(
+            Spreadsheet.Cell cell,
+            IReadOnlyList<Spreadsheet.SharedStringItem>? sharedStrings,
+            HashSet<int> includedSharedStringIndexes,
+            out Spreadsheet.SharedStringItem stringItem)
+        {
+            stringItem = null!;
+            if (sharedStrings == null ||
+                !int.TryParse(cell.CellValue?.Text, out int index) ||
+                !includedSharedStringIndexes.Add(index))
+            {
+                return false;
+            }
+
+            if (index < 0 || index >= sharedStrings.Count)
+            {
+                return false;
+            }
+
+            stringItem = sharedStrings[index];
+            return true;
+        }
+
+        private static void AddTextSegments(string text, List<string> words)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+
+            foreach (string segment in text.Split("\n"))
+            {
+                words.Add(segment);
+            }
+        }
+
+        private static string GetTranslatableText(OpenXmlElement stringContainer)
+        {
+            return string.Concat(stringContainer
+                .Descendants<Spreadsheet.Text>()
+                .Where(text => !text.Ancestors<Spreadsheet.PhoneticRun>().Any())
+                .Select(text => text.Text));
+        }
+
+        private static bool TryGetReplacement(string sourceText, Queue<string> translations, out string replacement)
+        {
+            replacement = string.Empty;
+            if (string.IsNullOrEmpty(sourceText)) return false;
+
+            string[] sourceSegments = sourceText.Split("\n");
+            if (translations.Count < sourceSegments.Length) return false;
+
+            replacement = string.Join("\n", sourceSegments.Select(_ => translations.Dequeue() ?? string.Empty));
+            return true;
         }
 
         public static List<string> SheetNames(Stream filePath)
