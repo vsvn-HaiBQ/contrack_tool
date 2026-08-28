@@ -410,7 +410,7 @@ export type GitEolDiffSide = {
 };
 
 export type GitEolDiffRow = {
-  type: "equal" | "eol" | "fixed_eol" | "replace" | "delete" | "insert" | "fold" | string;
+  type: "equal" | "eol" | "space_only" | "fixed_eol" | "fixed_space" | "replace" | "delete" | "insert" | "fold" | string;
   left: GitEolDiffSide | null;
   right: GitEolDiffSide | null;
   count?: number | null;
@@ -425,5 +425,5 @@ export type GitEolStructuredDiff = {
   path: string;
   binary: boolean;
   rows: GitEolDiffRow[];
-  stats: { added?: number; removed?: number; changed?: number; eol_only?: number };
+  stats: { added?: number; removed?: number; changed?: number; eol_only?: number; space_only?: number };
 };

@@ -125,7 +125,7 @@ class GitEolDiffSide(BaseModel):
 
 
 class GitEolDiffRow(BaseModel):
-    type: str  # equal | eol | fixed_eol | fixed_space | replace | delete | insert | fold
+    type: str  # equal | eol | space_only | fixed_eol | fixed_space | replace | delete | insert | fold
     left: GitEolDiffSide | None = None
     right: GitEolDiffSide | None = None
     count: int | None = None

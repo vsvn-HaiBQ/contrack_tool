@@ -841,7 +841,7 @@ class GitEolService:
                 "path": path,
                 "binary": True,
                 "rows": [],
-                "stats": {"added": 0, "removed": 0, "changed": 0, "eol_only": 0},
+                "stats": {"added": 0, "removed": 0, "changed": 0, "eol_only": 0, "space_only": 0},
             }
 
         base_lines = self._split_lines(base_bytes)
@@ -857,7 +857,7 @@ class GitEolService:
                 right_start=right_start,
                 right_end=right_end,
             )
-            stats = {"added": 0, "removed": 0, "changed": 0, "eol_only": 0}
+            stats = {"added": 0, "removed": 0, "changed": 0, "eol_only": 0, "space_only": 0}
         else:
             rows, stats = self._build_side_by_side_rows(
                 base_lines,
@@ -891,7 +891,7 @@ class GitEolService:
             autojunk=False,
         )
         rows: list[dict[str, Any]] = []
-        added = removed = changed = eol_only = 0
+        added = removed = changed = eol_only = space_only = 0
 
         def render_text(line: RawLine | None) -> str | None:
             if line is None:
@@ -979,7 +979,46 @@ class GitEolService:
                 removed += left_count
                 added += right_count
                 changed += max(left_count, right_count)
-                for offset in range(left_count):
+
+                def append_changed_pairs(start: int, end: int) -> None:
+                    for pair_offset in range(start, end):
+                        base_line = base_lines[i1 + pair_offset]
+                        rows.append(
+                            {
+                                "type": "delete",
+                                "left": make_side(base_line, i1 + pair_offset + 1),
+                                "right": None,
+                            }
+                        )
+                    for pair_offset in range(start, end):
+                        source_line = source_lines[j1 + pair_offset]
+                        rows.append(
+                            {
+                                "type": "insert",
+                                "left": None,
+                                "right": make_side(source_line, j1 + pair_offset + 1),
+                            }
+                        )
+
+                paired_count = min(left_count, right_count)
+                changed_start = 0
+                for offset in range(paired_count):
+                    base_line = base_lines[i1 + offset]
+                    source_line = source_lines[j1 + offset]
+                    if not self._is_space_only_content_change(base_line.content, source_line.content):
+                        continue
+                    append_changed_pairs(changed_start, offset)
+                    rows.append(
+                        {
+                            "type": "space_only",
+                            "left": make_side(base_line, i1 + offset + 1),
+                            "right": make_side(source_line, j1 + offset + 1),
+                        }
+                    )
+                    space_only += 1
+                    changed_start = offset + 1
+                append_changed_pairs(changed_start, paired_count)
+                for offset in range(paired_count, left_count):
                     base_line = base_lines[i1 + offset]
                     rows.append(
                         {
@@ -988,7 +1027,7 @@ class GitEolService:
                             "right": None,
                         }
                     )
-                for offset in range(right_count):
+                for offset in range(paired_count, right_count):
                     source_line = source_lines[j1 + offset]
                     rows.append(
                         {
@@ -1019,7 +1058,7 @@ class GitEolService:
                             "right": make_side(source_line, j1 + offset + 1),
                         }
                     )
-        stats = {"added": added, "removed": removed, "changed": changed, "eol_only": eol_only}
+        stats = {"added": added, "removed": removed, "changed": changed, "eol_only": eol_only, "space_only": space_only}
         return rows, stats
 
     def _display_opcodes(

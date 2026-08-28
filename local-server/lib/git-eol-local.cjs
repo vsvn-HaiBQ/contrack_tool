@@ -959,7 +959,7 @@ function structuredDiff(input = {}) {
     sourceBytes = Buffer.alloc(0);
   }
   if (isBinary(baseBytes) || isBinary(sourceBytes)) {
-    return { session_id: sessionId, path: filePath, binary: true, rows: [], stats: { added: 0, removed: 0, changed: 0, eol_only: 0 } };
+    return { session_id: sessionId, path: filePath, binary: true, rows: [], stats: { added: 0, removed: 0, changed: 0, eol_only: 0, space_only: 0 } };
   }
   const baseLines = splitLines(baseBytes);
   const sourceLines = splitLines(sourceBytes);
@@ -982,7 +982,7 @@ function structuredDiff(input = {}) {
   const range = hiddenRange(input);
   if (range) {
     const rows = equalRangeRows(baseLines, sourceLines, range, fixedEolLines, fixedSpaceOnlyLines);
-    return { session_id: sessionId, path: filePath, binary: false, rows, stats: { added: 0, removed: 0, changed: 0, eol_only: 0 } };
+    return { session_id: sessionId, path: filePath, binary: false, rows, stats: { added: 0, removed: 0, changed: 0, eol_only: 0, space_only: 0 } };
   }
   return {
     session_id: sessionId,
@@ -1004,7 +1004,7 @@ function buildSideBySideRows(baseLines, sourceLines, {
   context = 3,
 } = {}) {
   const rows = [];
-  const stats = { added: 0, removed: 0, changed: 0, eol_only: 0 };
+  const stats = { added: 0, removed: 0, changed: 0, eol_only: 0, space_only: 0 };
   const ops = displayOpcodes(baseLines, sourceLines, fixedEolLines, fixedSpaceOnlyLines);
   for (let opIndex = 0; opIndex < ops.length; opIndex += 1) {
     const op = ops[opIndex];
@@ -1058,10 +1058,34 @@ function buildSideBySideRows(baseLines, sourceLines, {
       stats.removed += leftCount;
       stats.added += rightCount;
       stats.changed += Math.max(leftCount, rightCount);
-      for (let offset = 0; offset < leftCount; offset += 1) {
+
+      const pairedCount = Math.min(leftCount, rightCount);
+      const appendChangedPairs = (start, end) => {
+        for (let offset = start; offset < end; offset += 1) {
+          rows.push({ type: "delete", left: side(baseLines[op.i1 + offset], op.i1 + offset + 1), right: null });
+        }
+        for (let offset = start; offset < end; offset += 1) {
+          rows.push({ type: "insert", left: null, right: side(sourceLines[op.j1 + offset], op.j1 + offset + 1) });
+        }
+      };
+
+      let changedStart = 0;
+      for (let offset = 0; offset < pairedCount; offset += 1) {
+        const left = baseLines[op.i1 + offset];
+        const right = sourceLines[op.j1 + offset];
+        if (!isSpaceOnlyContentChange(left.content, right.content)) {
+          continue;
+        }
+        appendChangedPairs(changedStart, offset);
+        rows.push({ type: "space_only", left: side(left, op.i1 + offset + 1), right: side(right, op.j1 + offset + 1) });
+        stats.space_only += 1;
+        changedStart = offset + 1;
+      }
+      appendChangedPairs(changedStart, pairedCount);
+      for (let offset = pairedCount; offset < leftCount; offset += 1) {
         rows.push({ type: "delete", left: side(baseLines[op.i1 + offset], op.i1 + offset + 1), right: null });
       }
-      for (let offset = 0; offset < rightCount; offset += 1) {
+      for (let offset = pairedCount; offset < rightCount; offset += 1) {
         rows.push({ type: "insert", left: null, right: side(sourceLines[op.j1 + offset], op.j1 + offset + 1) });
       }
     } else if (op.tag === "delete") {
