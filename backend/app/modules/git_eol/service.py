@@ -1010,7 +1010,8 @@ class GitEolService:
                     append_changed_pairs(changed_start, offset)
                     rows.append(
                         {
-                            "type": "space_only",
+                            # Use the established type for compatibility with already-deployed UI bundles.
+                            "type": "replace",
                             "left": make_side(base_line, i1 + offset + 1),
                             "right": make_side(source_line, j1 + offset + 1),
                         }

@@ -1077,7 +1077,8 @@ function buildSideBySideRows(baseLines, sourceLines, {
           continue;
         }
         appendChangedPairs(changedStart, offset);
-        rows.push({ type: "space_only", left: side(left, op.i1 + offset + 1), right: side(right, op.j1 + offset + 1) });
+        // Keep the established row type so older UI bundles render this as a yellow changed row.
+        rows.push({ type: "replace", left: side(left, op.i1 + offset + 1), right: side(right, op.j1 + offset + 1) });
         stats.space_only += 1;
         changedStart = offset + 1;
       }
