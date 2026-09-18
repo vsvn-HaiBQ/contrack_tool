@@ -6,6 +6,8 @@ REST API ASP.NET Core 10 xử lý Markdown (`.md`), văn bản thuần (`.txt`) 
 
 Solution dùng .NET 10 và C# 14 theo SDK hiện tại.
 
+`global.json` yêu cầu SDK từ `10.0.100` và dùng `latestFeature` để chọn SDK ổn định mới nhất đã cài trong dòng .NET 10.0. Docker dùng image `mcr.microsoft.com/dotnet/sdk:10.0-alpine` để build và `mcr.microsoft.com/dotnet/aspnet:10.0-alpine` để chạy.
+
 ```powershell
 dotnet restore FileHandler.sln
 dotnet test FileHandler.sln
