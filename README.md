@@ -15,7 +15,7 @@ Operational web app for JP/VN ticket flow, logtime, and pull request management.
 - First-run admin setup flow
 - User settings and system settings
 - JP to VN sync workflow
-- Managed ticket detail and ticket links, with server pagination and JP ID filtering in All/Following (25 rows by default)
+- Managed ticket detail and ticket links, with server pagination and JP ID filtering in All/Following (10 rows by default). A search with no Following results switches to All when matching tickets exist there.
 - Logtime grid
 - Pull request creation flow; Verify PR shows an existing PR for the same source/base branches in PR Result, preferring open PRs over the latest closed/merged PR
 

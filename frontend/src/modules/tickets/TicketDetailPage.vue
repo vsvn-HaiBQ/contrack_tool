@@ -16,7 +16,7 @@ const managedScope = ref<"following" | "all">("following");
 const ticketDetail = ref<TicketDetail | null>(null);
 const managedTickets = ref<ManagedTicketListItem[]>([]);
 const managedTotal = ref(0);
-const managedLimit = ref(25);
+const managedLimit = ref(10);
 const managedOffset = ref(0);
 const managedQuery = computed(() => {
   const raw = ticketSearch.value.trim();
@@ -56,10 +56,21 @@ async function loadManaged() {
     managedSearchTimer = null;
   }
   const sequence = ++managedSequence;
+  const scope = managedScope.value;
+  const limit = managedLimit.value;
+  const query = managedQuery.value;
   loadingManaged.value = true;
   try {
-    const response = await ticketsApi.managed(managedScope.value, managedLimit.value, managedOffset.value, managedQuery.value);
+    let response = await ticketsApi.managed(scope, limit, managedOffset.value, query);
     if (sequence !== managedSequence) return;
+    if (scope === "following" && query && response.total === 0) {
+      const allResponse = await ticketsApi.managed("all", limit, 0, query);
+      if (sequence !== managedSequence) return;
+      if (allResponse.total > 0) {
+        managedScope.value = "all";
+        response = allResponse;
+      }
+    }
     managedTickets.value = response.items;
     managedTotal.value = response.total;
     managedOffset.value = response.offset;
@@ -71,6 +82,13 @@ async function loadManaged() {
   } finally {
     if (sequence === managedSequence) loadingManaged.value = false;
   }
+}
+
+function changeManagedScope(scope: "following" | "all") {
+  if (managedScope.value === scope) return;
+  managedScope.value = scope;
+  managedOffset.value = 0;
+  void loadManaged();
 }
 
 function changeManagedPage(offset: number) {
@@ -510,7 +528,7 @@ async function toggleFollow(jpIssueId: number, currentlyFollowing: boolean) {
 }
 
 watch(
-  [managedScope, managedLimit],
+  managedLimit,
   async () => {
     managedOffset.value = 0;
     await loadManaged();
@@ -610,7 +628,7 @@ onBeforeUnmount(() => {
     :can-post-to-teams="Boolean(sessionState.userSettings.team_automate_url?.trim())"
     :posting-teams="postingTeams"
     @update:ticket-search="ticketSearch = $event"
-    @update:managed-scope="managedScope = $event"
+    @update:managed-scope="changeManagedScope"
     @update:managed-limit="managedLimit = $event"
     @change-managed-page="changeManagedPage"
     @search-ticket="load"

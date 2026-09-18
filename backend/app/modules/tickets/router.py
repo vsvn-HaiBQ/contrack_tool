@@ -106,7 +106,7 @@ def search_ticket(jp_issue_id: int, user: User = Depends(get_current_user), db: 
 @router.get("/managed", response_model=ManagedTicketListResponse)
 def list_managed_tickets(
     scope: str = Query("following", pattern="^(following|all)$"),
-    limit: int = Query(25, ge=1, le=100),
+    limit: int = Query(10, ge=1, le=100),
     offset: int = Query(0, ge=0),
     q: str = Query("", max_length=200),
     user: User = Depends(get_current_user),

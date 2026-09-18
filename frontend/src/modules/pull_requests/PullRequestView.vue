@@ -104,10 +104,8 @@ const canVerify = computed(() => Boolean(props.prForm.jp_tickets.trim() && props
       <div class="grid content-start gap-4 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
         <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">PR Result</h3>
         <div v-if="result" class="grid gap-2">
-          <p class="text-sm text-[#5C5E62]">{{ result.existing ? 'Existing pull request' : 'Pull request created' }} · {{ result.state }}</p>
-          <p><strong>{{ result.title }}</strong></p>
+          <p class="font-normal">{{ result.title }}</p>
           <a :href="result.url" target="_blank" rel="noreferrer" class="break-all">{{ result.url }}</a>
-          <p v-if="result.linked_ticket_ids.length" class="text-sm text-[#5C5E62]">Linked tickets: {{ result.linked_ticket_ids.join(", ") }}</p>
         </div>
         <p v-else class="text-sm text-[#5C5E62]">Verify or create a PR to see the result.</p>
       </div>

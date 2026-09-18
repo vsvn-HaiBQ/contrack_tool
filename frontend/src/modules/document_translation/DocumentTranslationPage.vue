@@ -672,12 +672,6 @@ onBeforeUnmount(() => {
 
       <div class="grid gap-4 lg:grid-cols-2">
         <div class="grid gap-2 lg:col-span-2">
-          <span class="text-sm font-medium text-[#393C41]">Document extraction method: {{ processorLabel }}</span>
-          <p class="m-0 text-xs text-[#7A7C80]">
-            Configured by an administrator in Admin Settings.
-          </p>
-        </div>
-        <div class="grid gap-2 lg:col-span-2">
           <div class="flex items-center justify-between">
             <label class="text-sm font-medium text-[#393C41]">Document Files</label>
             <div class="flex items-center gap-2">
