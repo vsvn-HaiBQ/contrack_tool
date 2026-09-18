@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import TicketDetailView from "./TicketDetailView.vue";
 import { ticketsApi } from "./api";
@@ -15,6 +15,19 @@ const ticketSearch = ref("");
 const managedScope = ref<"following" | "all">("following");
 const ticketDetail = ref<TicketDetail | null>(null);
 const managedTickets = ref<ManagedTicketListItem[]>([]);
+const managedTotal = ref(0);
+const managedLimit = ref(25);
+const managedOffset = ref(0);
+const managedQuery = computed(() => {
+  const raw = ticketSearch.value.trim();
+  if (!raw || /^\d+$/.test(raw)) return raw;
+  const issueMatch = raw.match(/\/issues\/(\d+)/i);
+  if (issueMatch) return issueMatch[1];
+  const numbers = raw.match(/\d+/g);
+  return numbers?.length ? numbers[numbers.length - 1] : raw;
+});
+let managedSequence = 0;
+let managedSearchTimer: ReturnType<typeof setTimeout> | null = null;
 const loadingManaged = ref(false);
 const statusOptions = ref<StatusOption[]>([]);
 const assigneeOptions = ref<Assignee[]>([]);
@@ -38,14 +51,32 @@ let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let skipNextAutoSearch = false;
 
 async function loadManaged() {
+  if (managedSearchTimer) {
+    clearTimeout(managedSearchTimer);
+    managedSearchTimer = null;
+  }
+  const sequence = ++managedSequence;
   loadingManaged.value = true;
   try {
-    managedTickets.value = await ticketsApi.managed(managedScope.value);
+    const response = await ticketsApi.managed(managedScope.value, managedLimit.value, managedOffset.value, managedQuery.value);
+    if (sequence !== managedSequence) return;
+    managedTickets.value = response.items;
+    managedTotal.value = response.total;
+    managedOffset.value = response.offset;
   } catch (error) {
+    if (sequence !== managedSequence) return;
+    managedTickets.value = [];
+    managedTotal.value = 0;
     showToast((error as Error).message, "error");
   } finally {
-    loadingManaged.value = false;
+    if (sequence === managedSequence) loadingManaged.value = false;
   }
+}
+
+function changeManagedPage(offset: number) {
+  if (loadingManaged.value) return;
+  managedOffset.value = Math.max(0, offset);
+  void loadManaged();
 }
 
 async function loadOptions() {
@@ -479,12 +510,21 @@ async function toggleFollow(jpIssueId: number, currentlyFollowing: boolean) {
 }
 
 watch(
-  managedScope,
+  [managedScope, managedLimit],
   async () => {
+    managedOffset.value = 0;
     await loadManaged();
   },
   { immediate: true }
 );
+
+watch(managedQuery, () => {
+  managedSequence++;
+  managedOffset.value = 0;
+  loadingManaged.value = true;
+  if (managedSearchTimer) clearTimeout(managedSearchTimer);
+  managedSearchTimer = setTimeout(() => void loadManaged(), 250);
+});
 
 watch(
   () => route.params.jpIssueId,
@@ -534,6 +574,8 @@ watch(ticketSearch, (value) => {
 });
 
 onBeforeUnmount(() => {
+  managedSequence++;
+  if (managedSearchTimer) clearTimeout(managedSearchTimer);
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
   }
@@ -545,6 +587,9 @@ onBeforeUnmount(() => {
     :ticket-search="ticketSearch"
     :managed-scope="managedScope"
     :managed-tickets="managedTickets"
+    :managed-total="managedTotal"
+    :managed-limit="managedLimit"
+    :managed-offset="managedOffset"
     :loading-managed="loadingManaged"
     :status-options="statusOptions"
     :assignee-options="assigneeOptions"
@@ -566,6 +611,8 @@ onBeforeUnmount(() => {
     :posting-teams="postingTeams"
     @update:ticket-search="ticketSearch = $event"
     @update:managed-scope="managedScope = $event"
+    @update:managed-limit="managedLimit = $event"
+    @change-managed-page="changeManagedPage"
     @search-ticket="load"
     @select-managed="selectManaged"
     @toggle-follow="toggleFollow"

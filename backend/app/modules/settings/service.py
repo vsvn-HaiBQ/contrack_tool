@@ -12,6 +12,7 @@ SYSTEM_SETTING_KEYS = [
     "redmine_vn_host",
     "redmine_vn_project_id",
     "description_template",
+    "document_translation_file_processor",
 ]
 
 
@@ -46,7 +47,9 @@ def get_system_settings_map(db: Session) -> dict[str, str | None]:
     ensure_system_settings(db)
     rows = db.query(SystemSetting).all()
     row_map = {row.key: row.value for row in rows}
-    return {key: row_map.get(key) for key in SYSTEM_SETTING_KEYS}
+    values = {key: row_map.get(key) for key in SYSTEM_SETTING_KEYS}
+    values["document_translation_file_processor"] = values["document_translation_file_processor"] or "openxml"
+    return values
 
 
 def _validate_url(value: str, key: str) -> None:
@@ -78,5 +81,7 @@ def validate_system_settings(values: dict[str, str | None]) -> dict[str, str | N
                 raise ValueError("git_repo must use owner/repo format")
         elif key == "redmine_vn_project_id":
             _validate_positive_int(value, key)
+        elif key == "document_translation_file_processor" and value not in {"openxml", "filehandler"}:
+            raise ValueError("document_translation_file_processor must be openxml or filehandler")
         validated[key] = value
     return validated

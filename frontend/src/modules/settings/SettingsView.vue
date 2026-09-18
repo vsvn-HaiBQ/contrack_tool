@@ -193,13 +193,21 @@ const emit = defineEmits<{
       </div>
       <div class="grid items-start gap-4 md:grid-cols-2">
         <div v-for="(value, key) in systemSettings" :key="key" :class="key === 'description_template' ? 'md:col-span-2' : ''">
-          <label class="mb-2 block text-sm font-medium text-[#393C41]">{{ key }}</label>
+          <label class="mb-2 block text-sm font-medium text-[#393C41]">{{ key === 'document_translation_file_processor' ? 'Document extraction method' : key }}</label>
           <textarea
             v-if="key === 'description_template'"
             v-model="systemSettings[key]"
             rows="7"
             class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-sm text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
           />
+          <select
+            v-else-if="key === 'document_translation_file_processor'"
+            v-model="systemSettings[key]"
+            class="w-full max-w-md rounded border border-[#D0D1D2] bg-white px-2 py-2 text-sm text-[#171A20] outline-none focus:border-[#3E6AE1]"
+          >
+            <option value="openxml">OpenXML / Local (default)</option>
+            <option value="filehandler">FileHandler</option>
+          </select>
           <input
             v-else
             v-model="systemSettings[key]"

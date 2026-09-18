@@ -15,7 +15,7 @@ dotnet run --project src/FileHandler.Api
 ```
 
 Swagger UI ở `/swagger`; OpenAPI JSON ở `/swagger/v1/swagger.json`.
-Endpoint kiểm tra kết nối: `GET /health` trả `{"status":"ok"}`. Khi chạy bằng Docker Compose từ thư mục gốc CT Tool, FileHandler dùng cổng `5001`, độc lập với OpenXML ở cổng `5000`; Translate Docs mặc định dùng FileHandler.
+Endpoint kiểm tra kết nối: `GET /health` trả `{"status":"ok"}`. Khi chạy bằng Docker Compose từ thư mục gốc CT Tool, FileHandler dùng cổng `5001`, độc lập với OpenXML ở cổng `5000`; Translate Docs mặc định dùng OpenXML / Local. Admin chọn phương thức dùng chung tại Settings → Admin Settings → Document extraction method.
 Trang quản lý và xem debug trace trực quan ở `/debug` (hoặc `/debug.html`).
 
 ## Debug trace

@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
+const { ensureDirectory, resolveWorkDirectory } = require("./directories.cjs");
 
 const sessions = new Map();
 const previewJobs = new Map();
@@ -116,17 +117,14 @@ function normalizeSourceBranch(repoPath, branch) {
 async function ensureBranchRepository({ sourceFolder, repo, githubToken, gitUserName, gitUserEmail, onStatus }) {
   const report = onStatus || (() => {});
   const reportProgress = (step) => (line) => report(`${step}: ${line}`);
-  const target = path.resolve(String(sourceFolder || "").trim());
-  if (!sourceFolder || !String(sourceFolder).trim()) {
-    throw new Error("Local clone folder is required");
-  }
+  const target = resolveWorkDirectory(sourceFolder, "Local clone folder");
   if (fs.existsSync(target) && !fs.statSync(target).isDirectory()) {
     throw new Error("Local clone folder must be a directory");
   }
   const normalizedRepo = normalizeRepo(repo);
   const repoUrl = `https://github.com/${normalizedRepo}.git`;
   if (!fs.existsSync(target) || isEmptyDirectory(target)) {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
+    ensureDirectory(path.dirname(target));
     report(`Cloning ${normalizedRepo} locally`);
     await gitAsync(path.dirname(target), ["-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "clone", "--progress", "--", repoUrl, target], {
       token: githubToken,

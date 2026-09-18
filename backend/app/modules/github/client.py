@@ -37,7 +37,7 @@ class GitHubClient:
     def __init__(self, token: str) -> None:
         self.token = token
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self.token}"
         try:
@@ -86,3 +86,19 @@ class GitHubClient:
     def create_pull_request(self, repo: str, *, title: str, body: str, base: str, head: str) -> dict[str, Any]:
         payload = self._request("POST", f"/repos/{repo}/pulls", json={"title": title, "body": body, "base": base, "head": head})
         return {"url": payload["html_url"], "title": payload["title"]}
+
+    def find_pull_request(self, repo: str, *, base: str, head: str) -> dict[str, Any] | None:
+        owner = repo.split("/", 1)[0]
+        # Prefer an open PR; otherwise show the latest closed/merged PR for this pair.
+        for state in ("open", "all"):
+            pulls = self._request("GET", f"/repos/{repo}/pulls", params={
+                "state": state, "base": base.strip(), "head": f"{owner}:{head.strip()}",
+                "sort": "created", "direction": "desc", "per_page": 1,
+            })
+            if pulls:
+                pull = pulls[0]
+                return {
+                    "url": pull["html_url"], "title": pull["title"],
+                    "state": "merged" if pull.get("merged_at") else pull["state"],
+                }
+        return None

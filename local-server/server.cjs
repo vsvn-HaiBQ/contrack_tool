@@ -15,6 +15,7 @@ function requireLocalModule(fileName) {
 }
 
 const { cancelBuildJob, getBuildJob, startBuildJob } = requireLocalModule("build-source.cjs");
+const { ensureDirectory } = requireLocalModule("directories.cjs");
 const { uploadArtifactsToBox } = requireLocalModule("box-upload.cjs");
 const {
   bootstrapCodexCli,
@@ -587,7 +588,7 @@ async function route(req, res) {
     }
     try {
       const resolved = path.resolve(targetPath);
-      fs.mkdirSync(resolved, { recursive: true });
+      ensureDirectory(resolved);
       sendJson(req, res, 200, { ok: true, path: resolved, message: "Directory created successfully" });
     } catch (error) {
       sendJson(req, res, 500, { ok: false, message: error && error.message ? error.message : "Failed to create directory" });

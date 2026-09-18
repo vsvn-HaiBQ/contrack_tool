@@ -28,6 +28,10 @@ def create_pull_request_resolved(repo: str, *, title: str, body: str, base: str,
     return get_client(encrypted_token).create_pull_request(repo, title=title, body=body, base=base, head=head)
 
 
+def find_pull_request_resolved(repo: str, *, base: str, head: str, encrypted_token: str | None) -> dict | None:
+    return get_client(encrypted_token).find_pull_request(repo, base=base, head=head)
+
+
 def test_connection(repo: str | None, encrypted_token: str | None, *, raw_token: str | None = None) -> str:
     if raw_token and raw_token.strip():
         client = GitHubClient(raw_token.strip())

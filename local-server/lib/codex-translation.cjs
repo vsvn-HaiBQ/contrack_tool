@@ -67,7 +67,7 @@ function nowSeconds() {
 function defaultTranslationConfig() {
   const configuredCodexCommand = process.env.CONTRACK_CODEX_COMMAND || "codex";
   return {
-    file_processor: "filehandler",
+    file_processor: "openxml",
     filehandler_base_url: defaultFileHandlerBaseUrl(),
     openxml_base_url: defaultOpenXmlBaseUrl(),
     codex_command: resolveCodexCommand(configuredCodexCommand),
@@ -275,7 +275,7 @@ function ensureTranslationFile(filePath) {
 }
 
 function normalizeFileProcessor(value) {
-  if (value === undefined || value === null) return "filehandler";
+  if (value === undefined || value === null) return "openxml";
   if (value === "filehandler" || value === "openxml") return value;
   throw Object.assign(new Error("file_processor must be filehandler or openxml"), { statusCode: 400 });
 }

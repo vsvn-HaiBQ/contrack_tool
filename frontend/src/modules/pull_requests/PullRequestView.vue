@@ -87,7 +87,7 @@ const canVerify = computed(() => Boolean(props.prForm.jp_tickets.trim() && props
               </a>
             </div>
           </div>
-          <div v-if="preview.branch_exists" class="flex items-center gap-3 pt-2">
+          <div v-if="preview.branch_exists && preview.existing_pull_request?.state !== 'open'" class="flex items-center gap-3 pt-2">
             <button
               class="inline-flex min-h-10 min-w-[200px] items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
               :disabled="creatingPr || loadingPreview"
@@ -104,11 +104,12 @@ const canVerify = computed(() => Boolean(props.prForm.jp_tickets.trim() && props
       <div class="grid content-start gap-4 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
         <h3 class="m-0 text-2xl leading-tight font-medium text-[#171A20]">PR Result</h3>
         <div v-if="result" class="grid gap-2">
+          <p class="text-sm text-[#5C5E62]">{{ result.existing ? 'Existing pull request' : 'Pull request created' }} · {{ result.state }}</p>
           <p><strong>{{ result.title }}</strong></p>
           <a :href="result.url" target="_blank" rel="noreferrer" class="break-all">{{ result.url }}</a>
-          <p class="text-sm text-[#5C5E62]">Linked tickets: {{ result.linked_ticket_ids.join(", ") }}</p>
+          <p v-if="result.linked_ticket_ids.length" class="text-sm text-[#5C5E62]">Linked tickets: {{ result.linked_ticket_ids.join(", ") }}</p>
         </div>
-        <p v-else class="text-sm text-[#5C5E62]">No PR created yet.</p>
+        <p v-else class="text-sm text-[#5C5E62]">Verify or create a PR to see the result.</p>
       </div>
     </div>
   </section>

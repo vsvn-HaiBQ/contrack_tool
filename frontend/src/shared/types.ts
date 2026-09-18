@@ -147,7 +147,6 @@ export type BuildJobLog = {
 export type DocumentFileProcessor = "filehandler" | "openxml";
 
 export type DocumentTranslationSettings = {
-  file_processor?: DocumentFileProcessor | null;
   output_directory?: string | null;
   direction?: "ja_to_vi" | "vi_to_ja" | string | null;
   model?: string | null;
@@ -319,12 +318,13 @@ export type QuickCreateDraft = {
   assignee_id: number | null;
 };
 
-export type PrResult = { title: string; url: string; linked_ticket_ids: number[] };
+export type PrResult = { title: string; url: string; linked_ticket_ids: number[]; state: "open" | "closed" | "merged"; existing: boolean };
 export type PrPreview = {
   title: string;
   source_branch: string;
   branch_exists: boolean;
   tickets: Array<{ issue_id: number; subject: string; url: string }>;
+  existing_pull_request: PrResult | null;
 };
 
 export type GitEolFilePreview = {

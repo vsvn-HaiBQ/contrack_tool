@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import String, cast
 from sqlalchemy.orm import Session
 
 from concurrent.futures import ThreadPoolExecutor
@@ -17,6 +18,7 @@ from app.modules.users.dependencies import get_current_user_settings
 from app.schemas import (
     ChildIssueCreateRequest,
     ManagedTicketListItem,
+    ManagedTicketListResponse,
     MessageResponse,
     SyncActionResponse,
     SyncIssueSummary,
@@ -101,12 +103,15 @@ def search_ticket(jp_issue_id: int, user: User = Depends(get_current_user), db: 
     }
 
 
-@router.get("/managed", response_model=list[ManagedTicketListItem])
+@router.get("/managed", response_model=ManagedTicketListResponse)
 def list_managed_tickets(
-    scope: str = "following",
+    scope: str = Query("following", pattern="^(following|all)$"),
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    q: str = Query("", max_length=200),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[ManagedTicketListItem]:
+) -> ManagedTicketListResponse:
     ensure_ticket_follow_schema(db)
     settings = get_system_settings_map(db)
     user_settings = db.get(UserSettings, user.id)
@@ -116,18 +121,22 @@ def list_managed_tickets(
             query.join(UserManagedTicketFollow, UserManagedTicketFollow.managed_ticket_id == ManagedTicket.id)
             .filter(UserManagedTicketFollow.user_id == user.id)
         )
-    rows = query.order_by(ManagedTicket.updated_at.desc(), ManagedTicket.id.desc()).all()
+    if q.strip():
+        query = query.filter(cast(ManagedTicket.jp_issue_id, String).startswith(q.strip(), autoescape=True))
+    total = query.count()
+    offset = min(offset, ((total - 1) // limit) * limit) if total else 0
+    rows = query.order_by(ManagedTicket.updated_at.desc(), ManagedTicket.id.desc()).offset(offset).limit(limit).all()
     if not rows:
-        return []
+        return ManagedTicketListResponse(items=[], total=total, limit=limit, offset=offset)
     followed_ids = {
         managed_ticket_id
         for (managed_ticket_id,) in db.query(UserManagedTicketFollow.managed_ticket_id)
-        .filter(UserManagedTicketFollow.user_id == user.id)
+        .filter(UserManagedTicketFollow.user_id == user.id, UserManagedTicketFollow.managed_ticket_id.in_([row.id for row in rows]))
         .all()
     }
 
     vn_host = settings.get("redmine_vn_host")
-    jp_host_prefix = settings.get("redmine_jp_host", "").rstrip("/")
+    jp_host_prefix = (settings.get("redmine_jp_host") or "").rstrip("/")
     vn_host_prefix = (vn_host or "").rstrip("/")
 
     def _fetch(row: ManagedTicket) -> ManagedTicketListItem:
@@ -159,7 +168,8 @@ def list_managed_tickets(
         )
 
     with ThreadPoolExecutor(max_workers=min(8, len(rows))) as executor:
-        return list(executor.map(_fetch, rows))
+        items = list(executor.map(_fetch, rows))
+    return ManagedTicketListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("/sync/verify", response_model=VerifySyncResponse)

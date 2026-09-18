@@ -15,9 +15,9 @@ Operational web app for JP/VN ticket flow, logtime, and pull request management.
 - First-run admin setup flow
 - User settings and system settings
 - JP to VN sync workflow
-- Managed ticket detail and ticket links
+- Managed ticket detail and ticket links, with server pagination and JP ID filtering in All/Following (25 rows by default)
 - Logtime grid
-- Pull request creation flow
+- Pull request creation flow; Verify PR shows an existing PR for the same source/base branches in PR Result, preferring open PRs over the latest closed/merged PR
 
 ## Module architecture
 
@@ -100,10 +100,10 @@ Deploy the backend and frontend together and update the local Node package to **
 
 ## Document Translation
 
-Translate Docs supports `.txt`, `.md`, `.docx`, `.xlsx`, and `.pptx`. The **File Processor** selection is saved per account:
+Translate Docs supports `.txt`, `.md`, `.docx`, `.xlsx`, and `.pptx`. Administrators select the shared **Document extraction method** in **Settings → Admin Settings** (`document_translation_file_processor`). The default is **OpenXML / Local**. Translate Docs displays this setting and applies it to health checks, extraction, and translation; per-user processor selections are no longer used. Other translation preferences remain per user.
 
-- **FileHandler** (default): `filehandler/` imports and exports all five formats, preserving document structure through its translation tokens.
-- **OpenXML / Local**: `openxml/` handles Office documents; Node reads and writes TXT/Markdown locally.
+- **FileHandler**: `filehandler/` imports and exports all five formats, preserving document structure through its translation tokens.
+- **OpenXML / Local** (default): `openxml/` handles Office documents; Node reads and writes TXT/Markdown locally.
 - `local-server/` calls the selected processor, prompts Codex CLI, and writes the translated file on the user's machine using the existing translated filename and collision handling. FileHandler receives the same source snapshot for import and export. Processor errors do not trigger a fallback to another processor.
 
 Node endpoints:
@@ -119,13 +119,17 @@ Frontend route: `/document-translation` (`Translate Docs` tab). The UI translate
 
 Codex CLI must be installed and logged in on the machine running Node. FileHandler defaults to `http://<current-web-host>:5001` in the web UI; override this with `window.CONTRACK_CONFIG.fileHandlerBase` in `config.js`, then `VITE_FILEHANDLER_BASE` at build time. For direct Node requests without a URL, `CONTRACK_FILEHANDLER_BASE_URL` takes precedence over `http://127.0.0.1:5001`. OpenXML keeps port 5000 and its existing `openXmlBase`, `VITE_OPENXML_BASE`, and `CONTRACK_OPENXML_BASE_URL` settings.
 
-Health, extraction, and translation requests accept `file_processor` (`filehandler` or `openxml`, default `filehandler`) and `filehandler_base_url`. Camel-case aliases `fileProcessor` and `fileHandlerBaseUrl` are also accepted. Health returns `file_processor`, `processor: { ok, base_url, message }`, `codex`, and `defaults`; overall readiness checks only the selected processor and Codex. Translation results include the processor and its URL. FileHandler does not support the sheets endpoint or explicit sheet selection.
+Health, extraction, and translation requests accept `file_processor` (`filehandler` or `openxml`, default `openxml`) and `filehandler_base_url`. The web UI sends the shared admin setting. Camel-case aliases `fileProcessor` and `fileHandlerBaseUrl` are also accepted. Health returns `file_processor`, `processor: { ok, base_url, message }`, `codex`, and `defaults`; overall readiness checks only the selected processor and Codex. Translation results include the processor and its URL. FileHandler does not support the sheets endpoint or explicit sheet selection.
 
 FileHandler multipart export sends `file` and one `translatedTexts` JSON-array field. Node preserves segment order and skipped segments; structured Markdown/Office prompts require preservation of all `ox:r`/`ox:k` tokens and escapes. TXT remains literal text. API error codes, indices, and source lines appear in job logs. Empty imports stop with a no-text message. FileHandler requests use the selected timeout (health checks use 3 seconds), and canceling a job aborts active requests before output is written. Existing explicit output paths are not overwritten in FileHandler mode.
 
 `docker compose up --build -d` includes FileHandler at port **5001**, with `GET /health` for readiness; OpenXML stays at **5000**. FileHandler uses the published `sdk:10.0-alpine` and `aspnet:10.0-alpine` images. Its `global.json` selects the latest installed stable .NET 10.0 SDK feature band (`latestFeature`), starting from 10.0.100. Debug tracing is disabled by default in Compose; it can be enabled through `DebugTrace__Enabled`. For a standalone development API on the same port, run `dotnet run --project filehandler/src/FileHandler.Api --no-launch-profile --urls http://127.0.0.1:5001` with a compatible .NET 10 SDK.
 
-Deploy FileHandler and the backend first (startup applies `017_document_translation_file_processor`), then update the local Node package to **1.4.4** or later, then publish the frontend. Existing accounts default to FileHandler until they save another selection. The new UI requires a Node version that reports the selected processor.
+Deploy the backend and frontend together, then update and restart local Node **1.5.1**. The shared processor setting is initialized automatically and defaults to OpenXML / Local; the legacy per-user database column is retained but no longer read or written. The managed-ticket API now returns `{ items, total, limit, offset }` and accepts `scope`, `limit` (1–100), `offset`, and a JP ID prefix `q`.
+
+Local Node **1.5.1** also fixes cloning directly beneath a Windows drive root (for example `C:\repo`): earlier versions called `mkdirSync('C:\\', { recursive: true })` on the existing parent, which Windows can reject with `EPERM`. Fix EOL and Build Source now reuse existing directories before attempting creation, reject empty/root clone and build paths, and preserve real permission errors.
+
+Build Source waits for saved folders to load and locks Start Build throughout path validation, saving, and job creation. Each click uses a snapshot of its branch, folders, and targets so later form changes cannot alter a validated request. Preparation failures show the failing step and selected folders. These safeguards address reproduced duplicate requests and changing paths; the reported intermittent `EPERM` that disappears after F5 still needs a failing request or build log to confirm its cause.
 
 Verification commands (use `npm.cmd` on Windows if PowerShell blocks `npm.ps1`):
 

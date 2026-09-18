@@ -183,7 +183,10 @@ async function loadRedmineTrackerCache() {
 
 async function saveSystemSettings() {
   try {
-    await settingsApi.updateSystem({ values: sessionState.systemSettings });
+    const response = await settingsApi.updateSystem({ values: sessionState.systemSettings });
+    Object.entries(response.values).forEach(([key, value]) => {
+      sessionState.systemSettings[key] = value ?? "";
+    });
     await loadIntegrationStatuses();
     showToast("System settings saved", "success");
   } catch (error) {

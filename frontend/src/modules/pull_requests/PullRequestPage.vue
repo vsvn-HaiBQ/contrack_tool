@@ -17,6 +17,7 @@ const preview = ref<PrPreview | null>(null);
 const loadingPreview = ref(false);
 const creatingPr = ref(false);
 const lastGeneratedTitle = ref("");
+let previewSequence = 0;
 
 function parseTickets() {
   return Array.from(
@@ -39,7 +40,9 @@ function buildSourceBranch() {
 }
 
 function clearPreviewState() {
+  previewSequence++;
   preview.value = null;
+  result.value = null;
   if (prForm.title === lastGeneratedTitle.value) {
     prForm.title = "";
   }
@@ -47,6 +50,7 @@ function clearPreviewState() {
 }
 
 async function verifyPreview() {
+  if (loadingPreview.value || creatingPr.value) return;
   const parsedTickets = parseTickets();
   if (!parsedTickets.length) {
     showToast("Enter at least one JP ticket", "warning");
@@ -58,20 +62,25 @@ async function verifyPreview() {
   }
 
   loadingPreview.value = true;
+  const sequence = ++previewSequence;
+  result.value = null;
   try {
     const nextPreview = await pullRequestsApi.preview({
       jp_tickets: parsedTickets,
       base_branch: prForm.base_branch,
       source_branch: prForm.source_branch
     });
+    if (sequence !== previewSequence) return;
     const shouldSyncTitle = !prForm.title.trim() || prForm.title === lastGeneratedTitle.value;
     preview.value = nextPreview;
+    result.value = nextPreview.existing_pull_request;
     lastGeneratedTitle.value = nextPreview.title;
     if (shouldSyncTitle) {
       prForm.title = nextPreview.title;
     }
-    showToast(nextPreview.branch_exists ? "PR verified" : "Branch does not exist on remote", nextPreview.branch_exists ? "success" : "warning");
+    showToast(nextPreview.existing_pull_request ? "Existing pull request found" : nextPreview.branch_exists ? "PR verified" : "Branch does not exist on remote", nextPreview.existing_pull_request || nextPreview.branch_exists ? "success" : "warning");
   } catch (error) {
+    if (sequence !== previewSequence) return;
     clearPreviewState();
     showToast((error as Error).message, "error");
   } finally {
@@ -134,15 +143,23 @@ async function submit() {
     showToast("Source branch does not exist on remote", "warning");
     return;
   }
+  if (preview.value.existing_pull_request?.state === "open") {
+    result.value = preview.value.existing_pull_request;
+    return;
+  }
   creatingPr.value = true;
+  const sequence = previewSequence;
   try {
-    result.value = await pullRequestsApi.create({
+    const created = await pullRequestsApi.create({
       jp_tickets: parsedTickets,
       base_branch: prForm.base_branch,
       source_branch: prForm.source_branch,
       title: prForm.title.trim() || undefined
     });
-    showToast("Pull request created", "success");
+    if (sequence !== previewSequence) return;
+    result.value = created;
+    if (preview.value) preview.value.existing_pull_request = result.value;
+    showToast(result.value.existing ? "Existing pull request found" : "Pull request created", "success");
   } catch (error) {
     showToast((error as Error).message, "error");
   } finally {

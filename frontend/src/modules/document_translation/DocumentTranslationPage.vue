@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
 import { localServerApi, localServerBase, type CodexModelOption } from "../../shared/localServer";
 import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
 import { auditApi } from "../audit/api";
 import { usersApi } from "../users/api";
+import { settingsApi } from "../settings/api";
 import type { BuildJobLog, DocumentFileProcessor, DocumentTranslationJob, DocumentTranslationSettings } from "../../shared/types";
 
 const LANGUAGE_OPTIONS = ["Japanese", "Vietnamese", "English"] as const;
@@ -32,7 +33,6 @@ function keyToLang(code: string): string {
 }
 
 const form = reactive({
-  fileProcessor: "filehandler" as DocumentFileProcessor,
   filePath: "",
   outputDirectory: "",
   fromLang: "Japanese" as string,
@@ -61,7 +61,8 @@ const checkingHealth = ref(false);
 const healthMessage = ref("");
 const fileProcessorOk = ref(false);
 const processorSupported = ref(false);
-const processorLabel = computed(() => form.fileProcessor === "filehandler" ? "FileHandler" : "OpenXML / Local");
+const fileProcessor = ref<DocumentFileProcessor>("openxml");
+const processorLabel = computed(() => fileProcessor.value === "filehandler" ? "FileHandler" : "OpenXML / Local");
 const codexOk = ref(false);
 const codexModels = ref<CodexModelOption[]>([]);
 const settingsReady = ref(false);
@@ -201,7 +202,6 @@ function normalizeNumber(value: number, fallback: number, min: number, max: numb
 
 function translationSettingsPayload(): DocumentTranslationSettings {
   return {
-    file_processor: form.fileProcessor,
     output_directory: form.outputDirectory.trim() || null,
     direction: direction.value,
     model: form.model.trim() || null,
@@ -217,7 +217,6 @@ function translationSettingsPayload(): DocumentTranslationSettings {
 
 function applySavedTranslationSettings() {
   const saved = sessionState.userSettings.document_translation ?? {};
-  form.fileProcessor = saved.file_processor === "openxml" ? "openxml" : "filehandler";
   form.outputDirectory = saved.output_directory ?? "";
   const savedDir = saved.direction ?? "ja_to_vi";
   const [fromCode, toCode] = savedDir.split("_to_");
@@ -238,14 +237,6 @@ async function saveTranslationSettings() {
   savingSettings.value = true;
   const payload = translationSettingsPayload();
   try {
-    // Save the processor independently so validation of an unrelated legacy
-    // setting (for example a custom language direction) cannot discard it.
-    if ((sessionState.userSettings.document_translation?.file_processor ?? "filehandler") !== payload.file_processor) {
-      const processorSettings = await usersApi.updateMySettings({ document_translation: { file_processor: payload.file_processor } });
-      sessionState.userSettings.document_translation = processorSettings.document_translation ?? {
-        ...sessionState.userSettings.document_translation, file_processor: payload.file_processor
-      };
-    }
     const saved = await usersApi.updateMySettings({ document_translation: payload });
     sessionState.userSettings.document_translation = saved.document_translation ?? translationSettingsPayload();
   } catch {
@@ -295,9 +286,15 @@ async function refreshHealth(showMessage = false) {
   checkingHealth.value = true;
   processorSupported.value = false;
   try {
-    const health = await localServerApi.documentTranslation.health(form.fileProcessor);
+    if (!running.value && !queueRunning.value) {
+      const response = await settingsApi.system();
+      if (sequence !== healthSequence) return;
+      fileProcessor.value = response.values.document_translation_file_processor === "filehandler" ? "filehandler" : "openxml";
+      sessionState.systemSettings.document_translation_file_processor = fileProcessor.value;
+    }
+    const health = await localServerApi.documentTranslation.health(fileProcessor.value);
     if (sequence !== healthSequence) return;
-    if (!health.processor || health.file_processor !== form.fileProcessor) {
+    if (!health.processor || health.file_processor !== fileProcessor.value) {
       throw new Error("Update the local Node processing server to use selectable file processors.");
     }
     processorSupported.value = true;
@@ -440,7 +437,7 @@ async function runOneFile(filePath: string, position: number, total: number): Pr
   let nextJob: DocumentTranslationJob;
   try {
     nextJob = await localServerApi.documentTranslation.start({
-      file_processor: form.fileProcessor,
+      file_processor: fileProcessor.value,
       filePath: validated,
       outputDirectory: form.outputDirectory || undefined,
       direction: direction.value,
@@ -463,7 +460,7 @@ async function runOneFile(filePath: string, position: number, total: number): Pr
     target_type: "document_translation_job",
     target_id: job.value.job_id,
     payload_after: {
-      file_processor: form.fileProcessor,
+      file_processor: fileProcessor.value,
       filePath: validated,
       outputDirectory: form.outputDirectory || null,
       direction: direction.value,
@@ -616,11 +613,6 @@ watch(
 );
 
 watch(
-  () => form.fileProcessor,
-  () => { if (settingsReady.value) void refreshHealth(); }
-);
-
-watch(
   () => form.model,
   applyModelDefaultReasoning
 );
@@ -634,7 +626,11 @@ watch(
 onMounted(async () => {
   applySavedTranslationSettings();
   settingsReady.value = true;
-  await Promise.all([refreshHealth(false), loadCodexModels()]);
+  await loadCodexModels();
+});
+onActivated(async () => {
+  if (running.value || queueRunning.value) return;
+  await refreshHealth(false);
 });
 onBeforeUnmount(() => {
   stopPolling();
@@ -676,18 +672,9 @@ onBeforeUnmount(() => {
 
       <div class="grid gap-4 lg:grid-cols-2">
         <div class="grid gap-2 lg:col-span-2">
-          <label for="file-processor" class="text-sm font-medium text-[#393C41]">File Processor</label>
-          <select
-            id="file-processor"
-            v-model="form.fileProcessor"
-            :disabled="running || queueRunning"
-            class="rounded border border-[#D0D1D2] bg-white px-2 py-2 text-[#171A20] outline-none focus:border-[#3E6AE1] disabled:opacity-60"
-          >
-            <option value="filehandler">FileHandler</option>
-            <option value="openxml">OpenXML / Local</option>
-          </select>
+          <span class="text-sm font-medium text-[#393C41]">Document extraction method: {{ processorLabel }}</span>
           <p class="m-0 text-xs text-[#7A7C80]">
-            {{ form.fileProcessor === "filehandler" ? "Process all supported document types with FileHandler." : "Process Office files with OpenXML and TXT/Markdown locally." }}
+            Configured by an administrator in Admin Settings.
           </p>
         </div>
         <div class="grid gap-2 lg:col-span-2">

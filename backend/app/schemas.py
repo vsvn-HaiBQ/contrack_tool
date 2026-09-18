@@ -152,7 +152,6 @@ class PasswordResetRequest(BaseModel):
 
 
 class DocumentTranslationSettingsIn(BaseModel):
-    file_processor: Literal["filehandler", "openxml"] | None = None
     output_directory: str | None = None
     direction: str | None = None
     model: str | None = None
@@ -166,7 +165,6 @@ class DocumentTranslationSettingsIn(BaseModel):
 
 
 class DocumentTranslationSettingsOut(BaseModel):
-    file_processor: Literal["filehandler", "openxml"] = "filehandler"
     output_directory: str | None = None
     direction: str | None = None
     model: str | None = None
@@ -405,6 +403,13 @@ class ManagedTicketListItem(BaseModel):
     is_following: bool = False
 
 
+class ManagedTicketListResponse(BaseModel):
+    items: list[ManagedTicketListItem]
+    total: int
+    limit: int
+    offset: int
+
+
 class NoteOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -528,14 +533,17 @@ class PullRequestPreviewTicket(BaseModel):
     url: str
 
 
+class PullRequestCreateResponse(BaseModel):
+    title: str
+    url: str
+    linked_ticket_ids: list[int]
+    state: Literal["open", "closed", "merged"] = "open"
+    existing: bool = False
+
+
 class PullRequestPreviewResponse(BaseModel):
     title: str
     source_branch: str
     branch_exists: bool
     tickets: list[PullRequestPreviewTicket]
-
-
-class PullRequestCreateResponse(BaseModel):
-    title: str
-    url: str
-    linked_ticket_ids: list[int]
+    existing_pull_request: PullRequestCreateResponse | None = None

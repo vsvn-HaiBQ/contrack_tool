@@ -13,7 +13,10 @@ export const ticketsApi = {
   detail: (jpIssueId: number, forceRefresh = false) =>
     http<TicketDetail>(`/tickets/${jpIssueId}${forceRefresh ? "?force_refresh=true" : ""}`),
   deleteManaged: (jpIssueId: number) => http(`/tickets/${jpIssueId}`, { method: "DELETE" }),
-  managed: (scope: "following" | "all" = "following") => http<ManagedTicketListItem[]>(`/tickets/managed?scope=${scope}`),
+  managed: (scope: "following" | "all" = "following", limit = 25, offset = 0, q = "") =>
+    http<{ items: ManagedTicketListItem[]; total: number; limit: number; offset: number }>(
+      `/tickets/managed?${new URLSearchParams({ scope, limit: String(limit), offset: String(offset), q })}`
+    ),
   follow: (jpIssueId: number) => http(`/tickets/${jpIssueId}/follow`, { method: "POST" }),
   unfollow: (jpIssueId: number) => http(`/tickets/${jpIssueId}/follow`, { method: "DELETE" }),
   createChild: (jpIssueId: number, payload: unknown) =>

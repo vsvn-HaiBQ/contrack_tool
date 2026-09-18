@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const { getBuildToolDir } = require("./settings.cjs");
+const { ensureDirectory, resolveWorkDirectory } = require("./directories.cjs");
 
 const LOG_STORAGE_LIMIT = 1000;
 const LOG_RESPONSE_LIMIT = 300;
@@ -264,8 +265,8 @@ function syncParentStatus(job) {
 async function runBuild(job, input) {
   markRunning(job);
   const targetBranch = cleanBranch(input.targetBranch);
-  const sourceFolder = path.resolve(String(input.sourceFolder || ""));
-  const buildFolder = path.resolve(String(input.buildFolder || ""));
+  const sourceFolder = resolveWorkDirectory(input.sourceFolder, "Source folder");
+  const buildFolder = resolveWorkDirectory(input.buildFolder, "Build folder");
   const repo = normalizeRepo(input.repo);
   const buildClient = Boolean(input.buildClient);
   const buildServer = Boolean(input.buildServer);
@@ -276,7 +277,7 @@ async function runBuild(job, input) {
   log(job, "info", "system", `Build started for branch ${targetBranch}`);
   log(job, "info", "system", `Source folder: ${sourceFolder}`);
   log(job, "info", "system", `Build folder: ${buildFolder}`);
-  fs.mkdirSync(buildFolder, { recursive: true });
+  ensureDirectory(buildFolder);
 
   throwIfCanceled(job);
   await ensureSource(job, sourceFolder, repo, input.githubToken);
@@ -360,7 +361,7 @@ function isEmptyDirectory(folder) {
 async function ensureSource(job, sourceFolder, repo, githubToken) {
   const repoUrl = `https://github.com/${repo}.git`;
   if (!fs.existsSync(sourceFolder) || isEmptyDirectory(sourceFolder)) {
-    fs.mkdirSync(path.dirname(sourceFolder), { recursive: true });
+    ensureDirectory(path.dirname(sourceFolder));
     log(job, "info", "git", `Cloning ${repoUrl}`);
     await run(job, "git", ["clone", "--progress", "--", repoUrl, sourceFolder], {
       cwd: path.dirname(sourceFolder),
@@ -576,7 +577,7 @@ function copyRequiredBuildFiles(job, sourceFolder, toolDir) {
     if (!fs.existsSync(from)) {
       throw new Error(`Required build file not found: ${from}`);
     }
-    fs.mkdirSync(path.dirname(to), { recursive: true });
+    ensureDirectory(path.dirname(to));
     fs.copyFileSync(from, to);
     log(job, "info", "build", `Copied ${path.basename(from)}`);
   }
@@ -668,7 +669,7 @@ async function compressArchive(job, sourcePattern, destination) {
     throw new Error(`Invalid zip paths. Source: ${sourcePattern || "(empty)"}, destination: ${destination || "(empty)"}`);
   }
   const archiveRoot = archiveRootForPattern(sourcePattern);
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  ensureDirectory(path.dirname(destination));
   await runZipExclusive(job, () => streamZipArchive(job, sourcePattern, archiveRoot, destination));
 }
 

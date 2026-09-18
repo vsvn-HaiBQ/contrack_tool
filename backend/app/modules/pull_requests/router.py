@@ -53,14 +53,26 @@ def preview_pull_request(
         if not base_branch_exists:
             raise HTTPException(status_code=400, detail="Base branch does not exist on remote")
         branch_exists = github.branch_exists_resolved(repo, payload.source_branch, user_settings.github_token_enc)
+        existing = github.find_pull_request_resolved(
+            repo, base=payload.base_branch, head=payload.source_branch,
+            encrypted_token=user_settings.github_token_enc,
+        )
     except (github.IntegrationConfigError, github.GitHubClientError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     title = github.build_pr_title(payload.base_branch.strip(), payload.jp_tickets, [ticket.subject for ticket in tickets])
+    existing_result = None
+    if existing:
+        linked_ids = [
+            managed_id for (managed_id,) in db.query(TicketLink.managed_ticket_id)
+            .filter(TicketLink.type == "pr", TicketLink.url == existing["url"]).all()
+        ]
+        existing_result = PullRequestCreateResponse(**existing, linked_ticket_ids=linked_ids, existing=True)
     return PullRequestPreviewResponse(
         title=title,
         source_branch=payload.source_branch.strip(),
         branch_exists=branch_exists,
         tickets=[PullRequestPreviewTicket(issue_id=ticket.issue_id, subject=ticket.subject, url=ticket.url) for ticket in tickets],
+        existing_pull_request=existing_result,
     )
 
 
@@ -74,6 +86,8 @@ def create_pull_request(
 ) -> PullRequestCreateResponse:
     settings, repo = _resolve_pr_preview(payload, db)
     preview = preview_pull_request(payload, user, user_settings, db)
+    if preview.existing_pull_request and preview.existing_pull_request.state == "open":
+        return preview.existing_pull_request
     if not preview.branch_exists:
         raise HTTPException(status_code=400, detail="Source branch does not exist on remote")
     pr_title = payload.title.strip() if payload.title and payload.title.strip() else preview.title

@@ -87,7 +87,7 @@ function withDocumentProcessor(payload: unknown): Record<string, unknown> {
   const configuredFileHandler = body.filehandler_base_url ?? body.fileHandlerBaseUrl;
   return {
     ...body,
-    file_processor: body.file_processor ?? body.fileProcessor ?? "filehandler",
+    file_processor: body.file_processor ?? body.fileProcessor ?? "openxml",
     filehandler_base_url: typeof configuredFileHandler === "string" && configuredFileHandler.trim() ? configuredFileHandler : fileHandlerBase,
     openxml_base_url: typeof configured === "string" && configured.trim() ? configured : openXmlBase
   };
@@ -148,7 +148,7 @@ export const localServerApi = {
     uploadArtifacts: (payload: unknown) => localHttp<import("./types").BoxUploadResult>("/box/upload-artifacts", jsonBody(payload))
   },
   documentTranslation: {
-    health: (fileProcessor: DocumentFileProcessor = "filehandler") =>
+    health: (fileProcessor: DocumentFileProcessor = "openxml") =>
       localHttp<{
         ok: boolean;
         file_processor: DocumentFileProcessor;

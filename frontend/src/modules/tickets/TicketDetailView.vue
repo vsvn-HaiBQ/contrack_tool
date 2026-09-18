@@ -8,6 +8,9 @@ const props = defineProps<{
   ticketSearch: string;
   managedScope: "following" | "all";
   managedTickets: ManagedTicketListItem[];
+  managedTotal: number;
+  managedLimit: number;
+  managedOffset: number;
   loadingManaged: boolean;
   statusOptions: StatusOption[];
   assigneeOptions: Assignee[];
@@ -32,6 +35,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:ticketSearch": [value: string];
   "update:managedScope": [value: "following" | "all"];
+  "update:managedLimit": [value: number];
+  changeManagedPage: [offset: number];
   searchTicket: [];
   selectManaged: [jpIssueId: number];
   toggleFollow: [jpIssueId: number, currentlyFollowing: boolean];
@@ -132,25 +137,6 @@ function isSubtaskTracker(tracker: string | null | undefined) {
 function quickCreateFormsForParent(issueId: number) {
   return props.quickCreateForms.filter((draft) => draft.parent_issue_id === issueId);
 }
-
-const filteredManagedTickets = computed(() => {
-  const rawQuery = props.ticketSearch.trim();
-  if (!rawQuery) return props.managedTickets;
-
-  const normalizedQuery = (() => {
-    if (/^\d+$/.test(rawQuery)) return rawQuery;
-
-    const issueMatch = rawQuery.match(/\/issues\/(\d+)/i);
-    if (issueMatch) return issueMatch[1];
-
-    const allNumbers = rawQuery.match(/\d+/g);
-    return allNumbers?.length ? allNumbers[allNumbers.length - 1] : rawQuery;
-  })();
-
-  const query = normalizedQuery.trim();
-  if (!query) return props.managedTickets;
-  return props.managedTickets.filter((item) => String(item.jp_issue_id).startsWith(query));
-});
 
 const editableRows = computed(() => {
   if (!props.ticketDetail) return [];
@@ -283,7 +269,7 @@ function isClosedLike(status: string | null | undefined) {
           <span>Assignee</span>
         </div>
         <button
-          v-for="item in filteredManagedTickets"
+          v-for="item in managedTickets"
           :key="item.managed_ticket_id"
           type="button"
           class="grid w-full gap-3 border-b border-neutral-200 px-3 py-3 text-left transition hover:bg-neutral-50 last:border-b-0 md:grid-cols-[76px_76px_minmax(0,2.15fr)_104px_116px] md:items-center md:py-2"
@@ -327,9 +313,23 @@ function isClosedLike(status: string | null | undefined) {
             </div>
           </div>
         </button>
-        <div v-if="!filteredManagedTickets.length" class="px-3 py-6 text-center text-sm text-[#9CA0A6]">
-          {{ managedTickets.length ? "No matching tickets." : managedScope === 'following' ? "No followed tickets yet." : "No managed tickets yet." }}
+        <div v-if="!managedTickets.length" class="px-3 py-6 text-center text-sm text-[#9CA0A6]">
+          {{ ticketSearch.trim() ? "No matching tickets." : managedScope === 'following' ? "No followed tickets yet." : "No managed tickets yet." }}
         </div>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-[#5C5E62]">
+        <label class="flex items-center gap-2">
+          Rows per page
+          <select :value="managedLimit" :disabled="loadingManaged" class="rounded border border-neutral-200 bg-white px-2 py-1.5" @change="emit('update:managedLimit', Number(($event.target as HTMLSelectElement).value))">
+            <option v-for="size in [10, 25, 50, 100]" :key="size" :value="size">{{ size }}</option>
+          </select>
+        </label>
+        <span>{{ managedTotal ? managedOffset + 1 : 0 }}–{{ Math.min(managedOffset + managedTickets.length, managedTotal) }} of {{ managedTotal }}</span>
+        <nav aria-label="Ticket pages" class="flex items-center gap-2">
+          <button type="button" class="rounded border border-neutral-200 px-3 py-1.5 disabled:opacity-40" :disabled="loadingManaged || managedOffset === 0" @click="emit('changeManagedPage', managedOffset - managedLimit)">Previous</button>
+          <span>Page {{ Math.floor(managedOffset / managedLimit) + 1 }} / {{ Math.max(1, Math.ceil(managedTotal / managedLimit)) }}</span>
+          <button type="button" class="rounded border border-neutral-200 px-3 py-1.5 disabled:opacity-40" :disabled="loadingManaged || managedOffset + managedLimit >= managedTotal" @click="emit('changeManagedPage', managedOffset + managedLimit)">Next</button>
+        </nav>
       </div>
     </div>
 

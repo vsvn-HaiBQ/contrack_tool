@@ -39,6 +39,10 @@ const uploadedBoxJobIds = reactive<Record<string, boolean>>({});
 const failedBoxJobIds = reactive<Record<string, boolean>>({});
 const autoScroll = ref(true);
 const localServerOnline = ref(false);
+const loadingPaths = ref(true);
+const preparingBuild = ref(false);
+const choosingDirectory = ref(false);
+const preparationError = ref("");
 const checkingLocalServer = ref(false);
 const uploadingToBox = ref(false);
 const uploadCompletedJobId = ref<string | null>(null);
@@ -53,8 +57,9 @@ const running = computed(() =>
   job.value?.status === "running" ||
   buildPanels.value.some((panel) => panel.job.status === "queued" || panel.job.status === "running")
 );
+const buildFormLocked = computed(() => loadingPaths.value || preparingBuild.value || choosingDirectory.value || running.value);
 const canBuild = computed(() =>
-  Boolean(
+  !buildFormLocked.value && Boolean(
     form.targetBranch.trim() &&
       form.sourceFolder.trim() &&
       form.buildFolder.trim() &&
@@ -220,24 +225,31 @@ async function copyUploadedBoxLink(url: string) {
 }
 
 async function loadDefaults() {
-  await Promise.all([refreshLocalServerStatus(), loadBoxStatus(true)]);
-  let defaults: { sourceFolder: string; buildFolder: string };
+  loadingPaths.value = true;
   try {
-    defaults = await localServerApi.defaultPaths();
-  } catch (error) {
-    localServerOnline.value = false;
-    showToast((error as Error).message, "warning");
-    return;
-  }
+    await Promise.all([refreshLocalServerStatus(), loadBoxStatus(true)]);
+    let defaults: { sourceFolder: string; buildFolder: string };
+    try {
+      defaults = await localServerApi.defaultPaths();
+    } catch (error) {
+      localServerOnline.value = false;
+      showToast((error as Error).message, "warning");
+      return;
+    }
 
-  let savedPaths: Awaited<ReturnType<typeof usersApi.localPaths>> = {};
-  try {
-    savedPaths = await usersApi.localPaths();
-  } catch (error) {
-    showToast((error as Error).message, "warning");
+    let savedPaths: Awaited<ReturnType<typeof usersApi.localPaths>> = {};
+    try {
+      savedPaths = await usersApi.localPaths();
+    } catch (error) {
+      showToast((error as Error).message, "warning");
+    }
+    const sourceFolder = await validDirectoryOrFallback(savedPaths.build_source_folder, defaults.sourceFolder, "Saved source folder");
+    const buildFolder = await validDirectoryOrFallback(savedPaths.build_output_folder, defaults.buildFolder, "Saved build folder");
+    form.sourceFolder = sourceFolder;
+    form.buildFolder = buildFolder;
+  } finally {
+    loadingPaths.value = false;
   }
-  form.sourceFolder = await validDirectoryOrFallback(savedPaths.build_source_folder, defaults.sourceFolder, "Saved source folder");
-  form.buildFolder = await validDirectoryOrFallback(savedPaths.build_output_folder, defaults.buildFolder, "Saved build folder");
 }
 
 function applyBoxStatus(status: BoxStatus, autoSelect = false) {
@@ -429,6 +441,8 @@ async function refreshLocalServerStatus(showMessage = false) {
 }
 
 async function browseSource() {
+  if (buildFormLocked.value) return;
+  choosingDirectory.value = true;
   try {
     const selected = await localServerApi.selectDirectory(form.sourceFolder);
     if (selected) {
@@ -437,10 +451,14 @@ async function browseSource() {
     }
   } catch (error) {
     showToast((error as Error).message, "error");
+  } finally {
+    choosingDirectory.value = false;
   }
 }
 
 async function browseBuild() {
+  if (buildFormLocked.value) return;
+  choosingDirectory.value = true;
   try {
     const selected = await localServerApi.selectDirectory(form.buildFolder);
     if (selected) {
@@ -449,14 +467,30 @@ async function browseBuild() {
     }
   } catch (error) {
     showToast((error as Error).message, "error");
+  } finally {
+    choosingDirectory.value = false;
   }
 }
 
 async function startBuild() {
+  if (buildFormLocked.value || uploadingToBox.value) return;
   if (!canBuild.value) {
     showToast("Enter branch, source folder, build folder, and target", "warning");
     return;
   }
+  const buildInput = {
+    targetBranch: form.targetBranch.trim(),
+    sourceFolder: form.sourceFolder.trim(),
+    buildFolder: form.buildFolder.trim(),
+    buildClient: form.buildClient,
+    buildServer: form.buildServer,
+    repo: sessionState.systemSettings.git_repo,
+    githubToken: sessionState.userSettings.github_token,
+  };
+  const uploadToBox = form.uploadToBox;
+  preparingBuild.value = true;
+  preparationError.value = "";
+  let step = "checking source folder";
   try {
     uploadedBoxItems.value = [];
     boxUploadLogs.value = {};
@@ -465,38 +499,39 @@ async function startBuild() {
     for (const key of Object.keys(uploadedBoxJobIds)) delete uploadedBoxJobIds[key];
     for (const key of Object.keys(failedBoxJobIds)) delete failedBoxJobIds[key];
     setBoxUploadStatus("idle");
-    form.sourceFolder = await validateDirectory(form.sourceFolder, "Source folder");
-    form.buildFolder = await validateDirectory(form.buildFolder, "Build folder");
+    buildInput.sourceFolder = await validateDirectory(buildInput.sourceFolder, "Source folder");
+    step = "checking build folder";
+    buildInput.buildFolder = await validateDirectory(buildInput.buildFolder, "Build folder");
+    form.sourceFolder = buildInput.sourceFolder;
+    form.buildFolder = buildInput.buildFolder;
+    step = "saving local paths";
     await usersApi.updateLocalPaths({
-      build_source_folder: form.sourceFolder,
-      build_output_folder: form.buildFolder,
+      build_source_folder: buildInput.sourceFolder,
+      build_output_folder: buildInput.buildFolder,
     });
-    job.value = await localServerApi.build.start({
-      targetBranch: form.targetBranch.trim(),
-      sourceFolder: form.sourceFolder,
-      buildFolder: form.buildFolder,
-      buildClient: form.buildClient,
-      buildServer: form.buildServer,
-      repo: sessionState.systemSettings.git_repo,
-      githubToken: sessionState.userSettings.github_token,
-    });
+    step = "starting local build";
+    job.value = await localServerApi.build.start(buildInput);
     void auditApi.record({
       action: "build_start",
       target_type: "build_job",
       target_id: job.value.job_id,
       payload_after: {
-        targetBranch: form.targetBranch.trim(),
-        buildClient: form.buildClient,
-        buildServer: form.buildServer,
-        uploadToBox: form.uploadToBox,
-        sourceFolder: form.sourceFolder,
-        buildFolder: form.buildFolder
+        targetBranch: buildInput.targetBranch,
+        buildClient: buildInput.buildClient,
+        buildServer: buildInput.buildServer,
+        uploadToBox,
+        sourceFolder: buildInput.sourceFolder,
+        buildFolder: buildInput.buildFolder
       }
     }).catch(() => undefined);
     localServerOnline.value = true;
     startPolling();
   } catch (error) {
-    showToast((error as Error).message, "error");
+    const message = `Could not start build while ${step}: ${(error as Error).message}`;
+    preparationError.value = `${message}\nSource folder: ${buildInput.sourceFolder}\nBuild folder: ${buildInput.buildFolder}`;
+    showToast(message, "error");
+  } finally {
+    preparingBuild.value = false;
   }
 }
 
@@ -758,6 +793,7 @@ onBeforeUnmount(() => {
           <label class="text-sm font-medium text-[#393C41]">JP Ticket ID (optional)</label>
           <input
             v-model="form.jpIssueId"
+            :disabled="buildFormLocked"
             class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
             placeholder="12345, 12346 (comma separated)"
           />
@@ -766,6 +802,7 @@ onBeforeUnmount(() => {
           <label class="text-sm font-medium text-[#393C41]">Target Branch</label>
           <input
             v-model="form.targetBranch"
+            :disabled="buildFormLocked"
             class="w-full rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
             placeholder="feature/example"
           />
@@ -785,11 +822,11 @@ onBeforeUnmount(() => {
           <label class="text-sm font-medium text-[#393C41]">Build Target</label>
           <div class="flex min-h-10 flex-wrap items-center gap-4 rounded border border-[#D0D1D2] px-3 py-2">
             <label class="flex items-center gap-2 text-sm text-[#393C41]">
-              <input v-model="form.buildClient" type="checkbox" class="size-4 accent-[#3E6AE1]" />
+              <input v-model="form.buildClient" type="checkbox" :disabled="buildFormLocked" class="size-4 accent-[#3E6AE1]" />
               Client
             </label>
             <label class="flex items-center gap-2 text-sm text-[#393C41]">
-              <input v-model="form.buildServer" type="checkbox" class="size-4 accent-[#3E6AE1]" />
+              <input v-model="form.buildServer" type="checkbox" :disabled="buildFormLocked" class="size-4 accent-[#3E6AE1]" />
               Server
             </label>
           </div>
@@ -797,15 +834,15 @@ onBeforeUnmount(() => {
         <div class="grid gap-2">
           <label class="text-sm font-medium text-[#393C41]">Source Folder</label>
           <div class="flex gap-2">
-            <input v-model="form.sourceFolder" class="min-w-0 flex-1 rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
-            <button type="button" class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="browseSource">Browse</button>
+            <input v-model="form.sourceFolder" :disabled="buildFormLocked" class="min-w-0 flex-1 rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+            <button type="button" :disabled="buildFormLocked" class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:opacity-60" @click="browseSource">Browse</button>
           </div>
         </div>
         <div class="grid gap-2">
           <label class="text-sm font-medium text-[#393C41]">Build Folder</label>
           <div class="flex gap-2">
-            <input v-model="form.buildFolder" class="min-w-0 flex-1 rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
-            <button type="button" class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100" @click="browseBuild">Browse</button>
+            <input v-model="form.buildFolder" :disabled="buildFormLocked" class="min-w-0 flex-1 rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]" />
+            <button type="button" :disabled="buildFormLocked" class="rounded border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:opacity-60" @click="browseBuild">Browse</button>
           </div>
         </div>
       </div>
@@ -816,11 +853,12 @@ onBeforeUnmount(() => {
           class="inline-flex min-h-10 min-w-45 items-center justify-center gap-2 rounded-lg bg-[#3E6AE1] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
           :disabled="!canBuild || running || uploadingToBox"
         >
-          <LoadingCircle v-if="running || uploadingToBox" />
-          {{ uploadingToBox ? "Uploading..." : running ? "Building..." : "Start Build" }}
+          <LoadingCircle v-if="loadingPaths || preparingBuild || running || uploadingToBox" />
+          {{ loadingPaths ? "Loading folders..." : preparingBuild ? "Preparing..." : uploadingToBox ? "Uploading..." : running ? "Building..." : "Start Build" }}
         </button>
         <span v-if="job" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" :class="statusBadgeClass(job.status)">{{ statusLabel(job.status) }}</span>
       </div>
+      <p v-if="preparationError" role="alert" class="m-0 whitespace-pre-wrap break-all rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{{ preparationError }}</p>
     </form>
 
     <div v-if="buildPanels.length" class="grid gap-4" :class="buildPanelsGridClass">

@@ -27,7 +27,8 @@ export const sessionState = reactive({
     redmine_jp_host: "",
     redmine_vn_host: "",
     redmine_vn_project_id: "",
-    description_template: ""
+    description_template: "",
+    document_translation_file_processor: "openxml"
   } as Record<string, string>
 });
 
