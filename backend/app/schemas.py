@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -151,6 +152,7 @@ class PasswordResetRequest(BaseModel):
 
 
 class DocumentTranslationSettingsIn(BaseModel):
+    file_processor: Literal["filehandler", "openxml"] | None = None
     output_directory: str | None = None
     direction: str | None = None
     model: str | None = None
@@ -164,6 +166,7 @@ class DocumentTranslationSettingsIn(BaseModel):
 
 
 class DocumentTranslationSettingsOut(BaseModel):
+    file_processor: Literal["filehandler", "openxml"] = "filehandler"
     output_directory: str | None = None
     direction: str | None = None
     model: str | None = None

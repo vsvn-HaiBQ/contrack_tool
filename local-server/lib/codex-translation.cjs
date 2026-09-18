@@ -12,6 +12,9 @@ const {
   judgeOfficeSheets,
   normalizeStringArray,
 } = require("./openxml-client.cjs");
+const {
+  defaultFileHandlerBaseUrl, snapshotFile, importFileHandler, exportFileHandler, checkFileHandler,
+} = require("./filehandler-client.cjs");
 
 const jobs = new Map();
 const maxLogsPerJob = 500;
@@ -64,6 +67,8 @@ function nowSeconds() {
 function defaultTranslationConfig() {
   const configuredCodexCommand = process.env.CONTRACK_CODEX_COMMAND || "codex";
   return {
+    file_processor: "filehandler",
+    filehandler_base_url: defaultFileHandlerBaseUrl(),
     openxml_base_url: defaultOpenXmlBaseUrl(),
     codex_command: resolveCodexCommand(configuredCodexCommand),
     model: normalizeText(process.env.CODEX_DEFAULT_MODEL || process.env.CONTRACK_CODEX_MODEL),
@@ -154,7 +159,7 @@ function isCanceledError(error) {
 }
 
 function throwIfCanceled(callbacks = {}) {
-  if (callbacks.isCanceled?.()) {
+  if (callbacks.isCanceled?.() || callbacks.signal?.aborted) {
     throw createCanceledError();
   }
 }
@@ -269,9 +274,22 @@ function ensureTranslationFile(filePath) {
   throw new Error("Only .txt, .md, .docx, .pptx, and .xlsx files are supported");
 }
 
+function normalizeFileProcessor(value) {
+  if (value === undefined || value === null) return "filehandler";
+  if (value === "filehandler" || value === "openxml") return value;
+  throw Object.assign(new Error("file_processor must be filehandler or openxml"), { statusCode: 400 });
+}
+
 function translationOptions(input = {}) {
   const defaults = defaultTranslationConfig();
+  const fileProcessor = normalizeFileProcessor(input.fileProcessor ?? input.file_processor);
+  const sheets = normalizeStringArray(input.sheets);
+  if (fileProcessor === "filehandler" && sheets.length) {
+    throw Object.assign(new Error("FileHandler does not support sheet selection; all visible sheets are processed"), { statusCode: 400 });
+  }
   return {
+    fileProcessor,
+    fileHandlerBaseUrl: normalizeText(input.fileHandlerBaseUrl ?? input.filehandler_base_url, defaults.filehandler_base_url),
     direction: normalizeDirection(input),
     openXmlBaseUrl: normalizeText(input.openXmlBaseUrl ?? input.openxml_base_url, defaults.openxml_base_url),
     codexCommand: resolveCodexCommand(normalizeText(input.codexCommand ?? input.codex_command, defaults.codex_command)),
@@ -285,7 +303,7 @@ function translationOptions(input = {}) {
     glossary: normalizeGlossary(input.glossary),
     instructions: normalizeText(input.instructions, DEFAULT_INSTRUCTIONS),
     documentSummary: normalizeText(input.documentSummary ?? input.document_summary, "(no summary provided)"),
-    sheets: normalizeStringArray(input.sheets),
+    sheets,
     outputPath: normalizeText(input.outputPath ?? input.output_path),
     outputDirectory: normalizeText(input.outputDirectory ?? input.output_directory),
   };
@@ -363,7 +381,7 @@ function normalizeTargetFileName(translatedBaseName, direction) {
 }
 
 async function translateFileBaseName(file, options, callbacks = {}) {
-  const originalBaseName = path.basename(file.path, file.extension);
+  const originalBaseName = path.basename(file.path, path.extname(file.path));
   let translatedBaseName = originalBaseName;
   if (shouldTranslate(originalBaseName, options.direction)) {
     callbacks.log?.("info", "codex", `Translating file name: ${originalBaseName}`);
@@ -509,11 +527,16 @@ function buildPrompt({ batch, allSegments, firstIndex, options }) {
   const contextAfter = allSegments.slice(lastIndex + 1, end).join("\n") || "(none)";
   const segments = batch.map((item, index) => `[${index + 1}] ${item.text}`).join("\n");
 
+  const formatInstructions = options.fileHandlerTokens
+    ? "\nMANDATORY FILE FORMAT RULES (also apply with custom instructions):\nFor structured segments, translate only text inside <ox:rN>...</ox:rN>. Preserve every opening/closing r token and <ox:kN/> anchor exactly, including IDs, count, and order. Do not add, remove, nest, or reorder tokens. Keep each translated r-slot nonempty. Preserve backslash escaping (escaped backslashes and escaped <) inside runs. Preserve whitespace and newlines. Plain segments have no structural tokens and must remain plain."
+    : options.fileProcessor === "filehandler"
+      ? "\nFILE FORMAT: Plain text. Preserve whitespace and newlines; any token-like text is literal, not formatting markup."
+      : "";
   return PROMPT_TEMPLATE
     .replaceAll("{direction}", options.direction.label)
     .replaceAll("{glossary}", options.glossary)
     .replaceAll("{documentSummary}", options.documentSummary)
-    .replaceAll("{instructions}", options.instructions)
+    .replaceAll("{instructions}", options.instructions + formatInstructions)
     .replaceAll("{contextBefore}", contextBefore)
     .replaceAll("{contextAfter}", contextAfter)
     .replaceAll("{segmentCount}", String(batch.length))
@@ -780,7 +803,7 @@ async function runCodex(prompt, expectedCount, options, callbacks = {}) {
   }
 }
 
-function parseCodexOutput(output, expectedCount) {
+function parseCodexOutput(output, expectedCount, strictStrings = false) {
   let text = String(output || "").trim();
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fenced) {
@@ -817,6 +840,9 @@ function parseCodexOutput(output, expectedCount) {
   if (translations.length !== expectedCount) {
     throw new Error(`Codex returned ${translations.length} translations, expected ${expectedCount}`);
   }
+  if (strictStrings && translations.some((item) => typeof item !== "string" || !item.trim())) {
+    throw new Error("Codex translations must contain nonempty strings");
+  }
   return translations.map((item) => String(item ?? ""));
 }
 
@@ -830,15 +856,17 @@ async function translateBatch(batch, allSegments, options, callbacks = {}) {
   });
   const output = await runCodex(prompt, batch.length, options, callbacks);
   throwIfCanceled(callbacks);
-  return parseCodexOutput(output, batch.length);
+  return parseCodexOutput(output, batch.length, options.fileProcessor === "filehandler");
 }
 
 async function translateSegments(segments, options, callbacks = {}) {
-  const allSegments = segments.map((item) => String(item ?? "").trim());
+  const allSegments = segments.map((item) => options.fileProcessor === "filehandler" ? item : String(item ?? "").trim());
   const translatedSegments = segments.map((item) => String(item ?? ""));
   const candidates = translatedSegments
-    .map((text, index) => ({ index, text: text.trim() }))
-    .filter((item) => shouldTranslate(item.text, options.direction));
+    .map((text, index) => ({ index, text: options.fileProcessor === "filehandler" ? text : text.trim() }))
+    .filter((item) => shouldTranslate(options.fileHandlerTokens
+      ? item.text.replace(/<\/?ox:r\d+>|<ox:k\d+\/>/g, "")
+      : item.text, options.direction));
   const batches = chunks(candidates, options.batchSize);
 
   callbacks.progress?.({
@@ -1011,27 +1039,36 @@ async function checkCodexAvailability(input = {}) {
 async function documentTranslationHealth(input = {}) {
   const options = translationOptions(input);
   const defaults = defaultTranslationConfig();
-  const [openxml, codex] = await Promise.all([
-    checkOpenXml({ openXmlBaseUrl: options.openXmlBaseUrl }),
+  const [processor, codex] = await Promise.all([
+    options.fileProcessor === "filehandler"
+      ? checkFileHandler({ fileHandlerBaseUrl: options.fileHandlerBaseUrl })
+      : checkOpenXml({ openXmlBaseUrl: options.openXmlBaseUrl }),
     checkCodexAvailability({ codexCommand: options.codexCommand }),
   ]);
   return {
-    ok: Boolean(openxml.ok && codex.ok),
-    openxml,
+    ok: Boolean(processor.ok && codex.ok),
+    file_processor: options.fileProcessor,
+    processor,
+    [options.fileProcessor]: processor,
     codex,
     defaults: {
       ...defaults,
+      file_processor: options.fileProcessor,
+      filehandler_base_url: options.fileHandlerBaseUrl,
       openxml_base_url: options.openXmlBaseUrl,
     },
   };
 }
 
 async function judgeDocumentSheets(input = {}) {
+  const options = translationOptions(input);
+  if (options.fileProcessor === "filehandler") {
+    throw Object.assign(new Error("FileHandler does not support sheet selection; all visible sheets are processed"), { statusCode: 400 });
+  }
   const file = ensureTranslationFile(input.filePath ?? input.file_path);
   if (file.extension !== ".xlsx") {
     return [];
   }
-  const options = translationOptions(input);
   return judgeOfficeSheets({
     filePath: file.path,
     openXmlBaseUrl: options.openXmlBaseUrl,
@@ -1041,7 +1078,11 @@ async function judgeDocumentSheets(input = {}) {
 async function extractDocumentText(input = {}) {
   const options = translationOptions(input);
   const file = ensureTranslationFile(input.filePath ?? input.file_path);
-  const segments = file.kind === "office"
+  const segments = options.fileProcessor === "filehandler"
+    ? await importFileHandler(await snapshotFile(file.path), {
+        fileHandlerBaseUrl: options.fileHandlerBaseUrl, timeoutMs: options.timeoutSeconds * 1000,
+      })
+    : file.kind === "office"
     ? await importOfficeFile({
         filePath: file.path,
         sheets: options.sheets,
@@ -1052,6 +1093,8 @@ async function extractDocumentText(input = {}) {
       : readTextFileSegments(file.path);
   return {
     file_path: file.path,
+    file_processor: options.fileProcessor,
+    filehandler_base_url: options.fileHandlerBaseUrl,
     extension: file.extension,
     file_type: file.kind,
     sheets: options.sheets,
@@ -1062,7 +1105,7 @@ async function extractDocumentText(input = {}) {
 
 async function translateOfficeDocument(input = {}, callbacks = {}) {
   const file = ensureOfficeFile(input.filePath ?? input.file_path);
-  const options = translationOptions(input);
+  const options = translationOptions({ ...input, fileProcessor: "openxml" });
 
   throwIfCanceled(callbacks);
   callbacks.log?.("info", "openxml", `Extracting ${file.fileName}`);
@@ -1108,6 +1151,7 @@ async function translateOfficeDocument(input = {}, callbacks = {}) {
     output_path: outputPath,
     output_file_name: path.basename(outputPath),
     file_type: "office",
+    file_processor: "openxml",
     direction: options.direction.key,
     model: options.model,
     reasoning_effort: options.reasoningEffort,
@@ -1123,7 +1167,7 @@ async function translateTextDocument(input = {}, callbacks = {}) {
   if (file.kind === "office") {
     return translateOfficeDocument(input, callbacks);
   }
-  const options = translationOptions(input);
+  const options = translationOptions({ ...input, fileProcessor: "openxml" });
 
   throwIfCanceled(callbacks);
   callbacks.log?.("info", "file", `Reading ${file.fileName}`);
@@ -1167,6 +1211,7 @@ async function translateTextDocument(input = {}, callbacks = {}) {
     output_path: outputPath,
     output_file_name: path.basename(outputPath),
     file_type: file.kind,
+    file_processor: "openxml",
     direction: options.direction.key,
     model: options.model,
     reasoning_effort: options.reasoningEffort,
@@ -1177,7 +1222,68 @@ async function translateTextDocument(input = {}, callbacks = {}) {
   };
 }
 
+async function translateFileHandlerDocument(input, callbacks) {
+  const file = ensureTranslationFile(input.filePath ?? input.file_path);
+  const options = translationOptions(input);
+  const requestOptions = {
+    fileHandlerBaseUrl: options.fileHandlerBaseUrl,
+    timeoutMs: options.timeoutSeconds * 1000,
+    signal: callbacks.signal,
+  };
+  throwIfCanceled(callbacks);
+  const health = await checkFileHandler(requestOptions);
+  if (!health.ok) throw new Error(`FileHandler API is not ready: ${health.message}`);
+  throwIfCanceled(callbacks);
+  const snapshot = await snapshotFile(file.path, callbacks.signal);
+  callbacks.log?.("info", "filehandler", `Extracting ${file.fileName}`);
+  const segments = await importFileHandler(snapshot, requestOptions);
+  if (!segments.length) throw new Error("FileHandler extracted no text segments from the document");
+  throwIfCanceled(callbacks);
+  const codex = await checkCodexAvailability({ codexCommand: options.codexCommand });
+  if (!codex.ok) throw new Error(`Codex CLI is not ready: ${codex.message}`);
+  callbacks.log?.("info", "filehandler", `Extracted ${segments.length} segments`);
+  const translated = await translateSegments(segments, { ...options, fileHandlerTokens: file.kind !== "text" }, callbacks);
+  throwIfCanceled(callbacks);
+  const outputBaseName = options.outputPath ? "" : await translateFileBaseName(file, options, callbacks);
+  let outputPath = options.outputPath ? path.resolve(options.outputPath) : defaultDocumentOutputPath(file.path, options.outputDirectory, outputBaseName);
+  const comparablePath = (value) => process.platform === "win32" ? value.toLowerCase() : value;
+  if (comparablePath(outputPath) === comparablePath(file.path)) throw new Error("Output path must not overwrite the source file");
+  throwIfCanceled(callbacks);
+  callbacks.log?.("info", "filehandler", "Writing translated document");
+  const bytes = await exportFileHandler(snapshot, translated.translatedSegments, requestOptions);
+  throwIfCanceled(callbacks);
+  // Synchronous exclusive creation prevents a cancellation or filename collision
+  // between the final check and publication of the completed document.
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  for (;;) {
+    try {
+      fs.writeFileSync(outputPath, bytes, { flag: "wx" });
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST" || options.outputPath) throw error;
+      const extension = path.extname(outputPath);
+      outputPath = path.join(path.dirname(outputPath), `${path.basename(outputPath, extension)}.${crypto.randomUUID()}${extension}`);
+    }
+  }
+  return {
+    file_path: file.path,
+    output_path: outputPath,
+    output_file_name: path.basename(outputPath),
+    file_type: file.kind,
+    file_processor: "filehandler",
+    filehandler_base_url: options.fileHandlerBaseUrl,
+    direction: options.direction.key,
+    model: options.model,
+    reasoning_effort: options.reasoningEffort,
+    fast_mode: options.fastMode,
+    total_segments: translated.total_segments,
+    translatable_segments: translated.translatable_segments,
+  };
+}
+
 async function translateDocument(input = {}, callbacks = {}) {
+  const options = translationOptions(input);
+  if (options.fileProcessor === "filehandler") return translateFileHandlerDocument(input, callbacks);
   const file = ensureTranslationFile(input.filePath ?? input.file_path);
   return file.kind === "office" ? translateOfficeDocument(input, callbacks) : translateTextDocument(input, callbacks);
 }
@@ -1212,6 +1318,7 @@ function publicJob(job) {
 }
 
 function startDocumentTranslationJob(input = {}) {
+  translationOptions(input);
   const now = nowSeconds();
   const job = {
     job_id: crypto.randomUUID(),
@@ -1221,6 +1328,7 @@ function startDocumentTranslationJob(input = {}) {
     logs: [],
     cancel_requested: false,
     children: new Set(),
+    abortController: new AbortController(),
     progress: {
       total_segments: 0,
       translatable_segments: 0,
@@ -1240,6 +1348,7 @@ function startDocumentTranslationJob(input = {}) {
       job.status = "running";
       appendLog(job, "info", "job", "Document translation started");
       job.result = await translateDocument(input, {
+        signal: job.abortController.signal,
         log: (level, source, message) => appendLog(job, level, source, message),
         isCanceled: () => job.cancel_requested,
         trackChild: (child) => job.children.add(child),
@@ -1286,6 +1395,7 @@ function cancelDocumentTranslationJob(jobId) {
     job.status = "canceled";
     job.error = "Stopped by user";
     appendLog(job, "warn", "job", "Stop requested by user");
+    job.abortController.abort();
     for (const child of Array.from(job.children || [])) {
       terminateChild(child);
     }

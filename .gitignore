@@ -26,3 +26,5 @@ src_build/
 openxml/**/bin/
 openxml/**/obj/
 openxml/wwwroot/
+bin/
+obj/

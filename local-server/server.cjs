@@ -596,6 +596,8 @@ async function route(req, res) {
   }
   if (req.method === "GET" && pathname === "/document-translation/health") {
     sendJson(req, res, 200, await documentTranslationHealth({
+      fileProcessor: url.searchParams.get("fileProcessor") ?? url.searchParams.get("file_processor") ?? undefined,
+      fileHandlerBaseUrl: url.searchParams.get("fileHandlerBaseUrl") || url.searchParams.get("filehandler_base_url") || undefined,
       openXmlBaseUrl: url.searchParams.get("openXmlBaseUrl") || url.searchParams.get("openxml_base_url") || undefined,
     }));
     return;
@@ -608,6 +610,7 @@ async function route(req, res) {
     const body = await readJson(req);
     sendJson(req, res, 200, {
       sheets: await judgeDocumentSheets({
+        fileProcessor: body.fileProcessor ?? body.file_processor,
         filePath: body.filePath ?? body.file_path,
         openXmlBaseUrl: body.openXmlBaseUrl ?? body.openxml_base_url,
       }),
@@ -713,7 +716,7 @@ async function route(req, res) {
 }
 
 server = http.createServer((req, res) => {
-  route(req, res).catch((error) => sendError(req, res, error.message === "Request body is too large" ? 413 : 500, error));
+  route(req, res).catch((error) => sendError(req, res, error.message === "Request body is too large" ? 413 : error.statusCode || 500, error));
 });
 
 server.listen(port, host, () => {

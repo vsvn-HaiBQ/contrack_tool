@@ -6,7 +6,7 @@ import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
 import { auditApi } from "../audit/api";
 import { usersApi } from "../users/api";
-import type { BuildJobLog, DocumentTranslationJob, DocumentTranslationSettings } from "../../shared/types";
+import type { BuildJobLog, DocumentFileProcessor, DocumentTranslationJob, DocumentTranslationSettings } from "../../shared/types";
 
 const LANGUAGE_OPTIONS = ["Japanese", "Vietnamese", "English"] as const;
 
@@ -32,6 +32,7 @@ function keyToLang(code: string): string {
 }
 
 const form = reactive({
+  fileProcessor: "filehandler" as DocumentFileProcessor,
   filePath: "",
   outputDirectory: "",
   fromLang: "Japanese" as string,
@@ -58,7 +59,9 @@ const autoScroll = ref(true);
 const localServerOnline = ref(false);
 const checkingHealth = ref(false);
 const healthMessage = ref("");
-const openXmlOk = ref(false);
+const fileProcessorOk = ref(false);
+const processorSupported = ref(false);
+const processorLabel = computed(() => form.fileProcessor === "filehandler" ? "FileHandler" : "OpenXML / Local");
 const codexOk = ref(false);
 const codexModels = ref<CodexModelOption[]>([]);
 const settingsReady = ref(false);
@@ -66,6 +69,7 @@ const savingSettings = ref(false);
 const activeDirectionField = ref<"from" | "to" | null>(null);
 let saveSettingsTimer: number | null = null;
 let directionMenuTimer: number | null = null;
+let healthSequence = 0;
 
 const direction = computed(() => {
   const from = langToKey(form.fromLang || "Japanese");
@@ -80,7 +84,7 @@ const progressPercent = computed(() => {
   if (!current || current.translatable_segments <= 0) return 0;
   return Math.min(100, Math.round((current.translated_segments / current.translatable_segments) * 100));
 });
-const canStart = computed(() => filesQueue.value.length > 0 && Boolean(form.model.trim()) && !running.value && !queueRunning.value);
+const canStart = computed(() => processorSupported.value && filesQueue.value.length > 0 && Boolean(form.model.trim()) && !running.value && !queueRunning.value);
 const result = computed(() => job.value?.result ?? null);
 const archivedLogs = ref<BuildJobLog[]>([]);
 const archivedJobIds = new Set<string>();
@@ -197,6 +201,7 @@ function normalizeNumber(value: number, fallback: number, min: number, max: numb
 
 function translationSettingsPayload(): DocumentTranslationSettings {
   return {
+    file_processor: form.fileProcessor,
     output_directory: form.outputDirectory.trim() || null,
     direction: direction.value,
     model: form.model.trim() || null,
@@ -212,6 +217,7 @@ function translationSettingsPayload(): DocumentTranslationSettings {
 
 function applySavedTranslationSettings() {
   const saved = sessionState.userSettings.document_translation ?? {};
+  form.fileProcessor = saved.file_processor === "openxml" ? "openxml" : "filehandler";
   form.outputDirectory = saved.output_directory ?? "";
   const savedDir = saved.direction ?? "ja_to_vi";
   const [fromCode, toCode] = savedDir.split("_to_");
@@ -230,13 +236,25 @@ function applySavedTranslationSettings() {
 async function saveTranslationSettings() {
   if (!settingsReady.value || savingSettings.value) return;
   savingSettings.value = true;
+  const payload = translationSettingsPayload();
   try {
-    const saved = await usersApi.updateMySettings({ document_translation: translationSettingsPayload() });
+    // Save the processor independently so validation of an unrelated legacy
+    // setting (for example a custom language direction) cannot discard it.
+    if ((sessionState.userSettings.document_translation?.file_processor ?? "filehandler") !== payload.file_processor) {
+      const processorSettings = await usersApi.updateMySettings({ document_translation: { file_processor: payload.file_processor } });
+      sessionState.userSettings.document_translation = processorSettings.document_translation ?? {
+        ...sessionState.userSettings.document_translation, file_processor: payload.file_processor
+      };
+    }
+    const saved = await usersApi.updateMySettings({ document_translation: payload });
     sessionState.userSettings.document_translation = saved.document_translation ?? translationSettingsPayload();
   } catch {
     // Keep autosave silent; starting a translation will surface validation or server errors.
   } finally {
     savingSettings.value = false;
+    if (settingsReady.value && JSON.stringify(payload) !== JSON.stringify(translationSettingsPayload())) {
+      scheduleSaveTranslationSettings();
+    }
   }
 }
 
@@ -273,22 +291,30 @@ function applyModelDefaultReasoning() {
 }
 
 async function refreshHealth(showMessage = false) {
+  const sequence = ++healthSequence;
   checkingHealth.value = true;
+  processorSupported.value = false;
   try {
-    const health = await localServerApi.documentTranslation.health();
+    const health = await localServerApi.documentTranslation.health(form.fileProcessor);
+    if (sequence !== healthSequence) return;
+    if (!health.processor || health.file_processor !== form.fileProcessor) {
+      throw new Error("Update the local Node processing server to use selectable file processors.");
+    }
+    processorSupported.value = true;
     localServerOnline.value = true;
-    openXmlOk.value = Boolean(health.openxml.ok);
+    fileProcessorOk.value = Boolean(health.processor.ok);
     codexOk.value = Boolean(health.codex.ok);
-    healthMessage.value = health.ok ? "Ready" : [health.openxml.message, health.codex.message].filter(Boolean).join(" | ");
+    healthMessage.value = health.ok ? "Ready" : [!health.processor.ok ? health.processor.message : "", !health.codex.ok ? health.codex.message : ""].filter(Boolean).join(" | ");
     if (showMessage) showToast(health.ok ? "Document translation server is ready" : healthMessage.value, health.ok ? "success" : "warning");
   } catch (error) {
+    if (sequence !== healthSequence) return;
     localServerOnline.value = false;
-    openXmlOk.value = false;
+    fileProcessorOk.value = false;
     codexOk.value = false;
     healthMessage.value = (error as Error).message;
     if (showMessage) showToast((error as Error).message, "error");
   } finally {
-    checkingHealth.value = false;
+    if (sequence === healthSequence) checkingHealth.value = false;
   }
 }
 
@@ -414,6 +440,7 @@ async function runOneFile(filePath: string, position: number, total: number): Pr
   let nextJob: DocumentTranslationJob;
   try {
     nextJob = await localServerApi.documentTranslation.start({
+      file_processor: form.fileProcessor,
       filePath: validated,
       outputDirectory: form.outputDirectory || undefined,
       direction: direction.value,
@@ -436,6 +463,7 @@ async function runOneFile(filePath: string, position: number, total: number): Pr
     target_type: "document_translation_job",
     target_id: job.value.job_id,
     payload_after: {
+      file_processor: form.fileProcessor,
       filePath: validated,
       outputDirectory: form.outputDirectory || null,
       direction: direction.value,
@@ -494,6 +522,7 @@ async function runOneFile(filePath: string, position: number, total: number): Pr
 }
 
 async function startTranslation() {
+  if (!processorSupported.value || queueRunning.value || running.value) return;
   const pending = [...filesQueue.value];
   if (!pending.length) {
     showToast("Document file is required", "warning");
@@ -568,7 +597,7 @@ async function stopTranslationWorker() {
   stoppingTranslation.value = true;
   try {
     job.value = await localServerApi.documentTranslation.cancelJob(job.value.job_id);
-    stopPolling();
+    // Let the poll settle runOneFile so the queue exits and controls unlock.
     showToast("Translation worker stop requested", "warning");
   } catch (error) {
     showToast((error as Error).message, "error");
@@ -584,6 +613,11 @@ watch(
     await nextTick();
     logContainer.value?.scrollTo({ top: logContainer.value.scrollHeight, behavior: "smooth" });
   }
+);
+
+watch(
+  () => form.fileProcessor,
+  () => { if (settingsReady.value) void refreshHealth(); }
 );
 
 watch(
@@ -611,6 +645,7 @@ onBeforeUnmount(() => {
     window.clearTimeout(saveSettingsTimer);
   }
   void saveTranslationSettings();
+  settingsReady.value = false;
 });
 </script>
 
@@ -623,7 +658,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <span class="rounded px-2 py-1 text-xs font-medium" :class="healthBadgeClass(localServerOnline)">Node</span>
-          <span class="rounded px-2 py-1 text-xs font-medium" :class="healthBadgeClass(openXmlOk)">OpenXML</span>
+          <span class="rounded px-2 py-1 text-xs font-medium" :class="healthBadgeClass(fileProcessorOk)">{{ processorLabel }}</span>
           <span class="rounded px-2 py-1 text-xs font-medium" :class="healthBadgeClass(codexOk)">Codex</span>
           <button
             class="rounded border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
@@ -635,11 +670,26 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <p v-if="healthMessage && (!openXmlOk || !codexOk)" class="m-0 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+      <p v-if="healthMessage && (!fileProcessorOk || !codexOk)" class="m-0 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
         {{ healthMessage }}
       </p>
 
       <div class="grid gap-4 lg:grid-cols-2">
+        <div class="grid gap-2 lg:col-span-2">
+          <label for="file-processor" class="text-sm font-medium text-[#393C41]">File Processor</label>
+          <select
+            id="file-processor"
+            v-model="form.fileProcessor"
+            :disabled="running || queueRunning"
+            class="rounded border border-[#D0D1D2] bg-white px-2 py-2 text-[#171A20] outline-none focus:border-[#3E6AE1] disabled:opacity-60"
+          >
+            <option value="filehandler">FileHandler</option>
+            <option value="openxml">OpenXML / Local</option>
+          </select>
+          <p class="m-0 text-xs text-[#7A7C80]">
+            {{ form.fileProcessor === "filehandler" ? "Process all supported document types with FileHandler." : "Process Office files with OpenXML and TXT/Markdown locally." }}
+          </p>
+        </div>
         <div class="grid gap-2 lg:col-span-2">
           <div class="flex items-center justify-between">
             <label class="text-sm font-medium text-[#393C41]">Document Files</label>

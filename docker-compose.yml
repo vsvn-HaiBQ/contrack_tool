@@ -43,6 +43,22 @@ services:
     volumes:
       - openxml_wwwroot:/app/wwwroot
 
+  filehandler:
+    build:
+      context: ./filehandler
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_HTTP_PORTS: "5001"
+      DebugTrace__Enabled: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:5001/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 3s
+    ports:
+      - "5001:5001"
+
   backend:
     build:
       context: .

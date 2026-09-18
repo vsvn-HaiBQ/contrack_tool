@@ -53,6 +53,7 @@ class UserSettings(Base):
     build_output_folder: Mapped[str | None] = mapped_column(Text)
     git_eol_source_folder: Mapped[str | None] = mapped_column(Text)
     document_translation_output_directory: Mapped[str | None] = mapped_column(Text)
+    document_translation_file_processor: Mapped[str | None] = mapped_column(String(20))
     document_translation_direction: Mapped[str | None] = mapped_column(String(20))
     document_translation_model: Mapped[str | None] = mapped_column(String(100))
     document_translation_reasoning_effort: Mapped[str | None] = mapped_column(String(20))

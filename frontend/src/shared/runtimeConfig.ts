@@ -2,6 +2,7 @@ type RuntimeConfig = {
   apiBase?: string;
   nodeServerBase?: string;
   openXmlBase?: string;
+  fileHandlerBase?: string;
   boxRedirectBase?: string;
 };
 
@@ -60,6 +61,12 @@ export const openXmlBase = normalizeBase(
   configured(window.CONTRACK_CONFIG?.openXmlBase) ??
     configured(import.meta.env.VITE_OPENXML_BASE) ??
     defaultOpenXmlBase()
+);
+
+export const fileHandlerBase = normalizeBase(
+  configured(window.CONTRACK_CONFIG?.fileHandlerBase) ??
+    configured(import.meta.env.VITE_FILEHANDLER_BASE) ??
+    `http://${window.location.hostname || "127.0.0.1"}:5001`
 );
 
 // If an explicit HTTPS public base is set (hosted deployment), use it for the

@@ -98,6 +98,7 @@ def serialize_user_settings(settings: UserSettings) -> UserSettingsOut:
 
 def serialize_document_translation_settings(settings: UserSettings) -> DocumentTranslationSettingsOut:
     return DocumentTranslationSettingsOut(
+        file_processor=settings.document_translation_file_processor or "filehandler",
         output_directory=settings.document_translation_output_directory,
         direction=settings.document_translation_direction,
         model=settings.document_translation_model,
@@ -182,6 +183,13 @@ def _normalize_optional_int(value: object, *, min_value: int, max_value: int) ->
 
 
 def apply_document_translation_settings(settings: UserSettings, **values: object) -> None:
+    if "file_processor" in values:
+        file_processor = values["file_processor"]
+        if file_processor is None:
+            file_processor = "filehandler"
+        if file_processor not in {"filehandler", "openxml"}:
+            raise ValueError("document translation file_processor must be filehandler or openxml")
+        settings.document_translation_file_processor = file_processor
     if "output_directory" in values:
         settings.document_translation_output_directory = normalize_local_path(
             values["output_directory"] if isinstance(values["output_directory"], str) else None

@@ -143,7 +143,10 @@ export type BuildJobLog = {
   message: string;
 };
 
+export type DocumentFileProcessor = "filehandler" | "openxml";
+
 export type DocumentTranslationSettings = {
+  file_processor?: DocumentFileProcessor | null;
   output_directory?: string | null;
   direction?: "ja_to_vi" | "vi_to_ja" | string | null;
   model?: string | null;
@@ -224,6 +227,8 @@ export type DocumentTranslationProgress = {
 };
 
 export type DocumentTranslationResult = {
+  file_processor: DocumentFileProcessor;
+  filehandler_base_url?: string;
   file_path: string;
   output_path: string;
   output_file_name?: string;
@@ -234,7 +239,7 @@ export type DocumentTranslationResult = {
   fast_mode?: boolean;
   total_segments: number;
   translatable_segments: number;
-  openxml_base_url: string;
+  openxml_base_url?: string;
 };
 
 export type DocumentTranslationJob = {

@@ -88,12 +88,13 @@ Default local ports:
 - OpenXML API: `5000`
 - Node processing server: `3219`
 
-## Document Translation Server Plan
+## Document Translation
 
-Office document translation is split into two server responsibilities:
+Translate Docs supports `.txt`, `.md`, `.docx`, `.xlsx`, and `.pptx`. The **File Processor** selection is saved per account:
 
-- `openxml/`: ASP.NET Core API that extracts and rewrites `.docx`, `.xlsx`, and `.pptx` text segments.
-- `local-server/`: Node.js processing server that calls OpenXML, prompts Codex CLI, and writes the translated file on the user's machine.
+- **FileHandler** (default): `filehandler/` imports and exports all five formats, preserving document structure through its translation tokens.
+- **OpenXML / Local**: `openxml/` handles Office documents; Node reads and writes TXT/Markdown locally.
+- `local-server/` calls the selected processor, prompts Codex CLI, and writes the translated file on the user's machine using the existing translated filename and collision handling. FileHandler receives the same source snapshot for import and export. Processor errors do not trigger a fallback to another processor.
 
 Node endpoints:
 
@@ -102,10 +103,31 @@ Node endpoints:
 - `POST /document-translation/extract`
 - `POST /document-translation/translate`
 - `GET /document-translation/jobs/{job_id}`
+- `POST /document-translation/jobs/{job_id}/cancel`
 
 Frontend route: `/document-translation` (`Translate Docs` tab). The UI translates all visible sheets in `.xlsx` files; there is no sheet selection flow.
 
-Codex CLI must be installed and logged in on the machine running the Node processing server. In the web UI, OpenXML defaults to `http://<current-web-host>:5000`, so a production page opened by IP will call OpenXML on that same IP. Override it with `window.CONTRACK_CONFIG.openXmlBase`, `VITE_OPENXML_BASE`, or `CONTRACK_OPENXML_BASE_URL` when needed. See `docs/document-translation-codex-plan.md` for the full flow and environment options.
+Codex CLI must be installed and logged in on the machine running Node. FileHandler defaults to `http://<current-web-host>:5001` in the web UI; override this with `window.CONTRACK_CONFIG.fileHandlerBase` in `config.js`, then `VITE_FILEHANDLER_BASE` at build time. For direct Node requests without a URL, `CONTRACK_FILEHANDLER_BASE_URL` takes precedence over `http://127.0.0.1:5001`. OpenXML keeps port 5000 and its existing `openXmlBase`, `VITE_OPENXML_BASE`, and `CONTRACK_OPENXML_BASE_URL` settings.
+
+Health, extraction, and translation requests accept `file_processor` (`filehandler` or `openxml`, default `filehandler`) and `filehandler_base_url`. Camel-case aliases `fileProcessor` and `fileHandlerBaseUrl` are also accepted. Health returns `file_processor`, `processor: { ok, base_url, message }`, `codex`, and `defaults`; overall readiness checks only the selected processor and Codex. Translation results include the processor and its URL. FileHandler does not support the sheets endpoint or explicit sheet selection.
+
+FileHandler multipart export sends `file` and one `translatedTexts` JSON-array field. Node preserves segment order and skipped segments; structured Markdown/Office prompts require preservation of all `ox:r`/`ox:k` tokens and escapes. TXT remains literal text. API error codes, indices, and source lines appear in job logs. Empty imports stop with a no-text message. FileHandler requests use the selected timeout (health checks use 3 seconds), and canceling a job aborts active requests before output is written. Existing explicit output paths are not overwritten in FileHandler mode.
+
+`docker compose up --build -d` includes FileHandler at port **5001**, with `GET /health` for readiness; OpenXML stays at **5000**. FileHandler's image uses the .NET SDK pinned by its `global.json`. Debug tracing is disabled by default in Compose; it can be enabled through `DebugTrace__Enabled`. For a standalone development API on the same port, run `dotnet run --project filehandler/src/FileHandler.Api --no-launch-profile --urls http://127.0.0.1:5001` with a compatible .NET 10 SDK.
+
+Deploy FileHandler and the backend first (startup applies `017_document_translation_file_processor`), then update the local Node package to **1.4.4** or later, then publish the frontend. Existing accounts default to FileHandler until they save another selection. The new UI requires a Node version that reports the selected processor.
+
+Verification commands (use `npm.cmd` on Windows if PowerShell blocks `npm.ps1`):
+
+```bash
+npm run test:translation
+npm run build
+dotnet test filehandler/FileHandler.sln
+docker compose config --quiet
+docker compose build filehandler
+```
+
+Run backend preference tests from `backend/` with the backend dependencies installed: `python -m unittest discover -s tests`. These use an isolated in-memory SQLite database.
 
 ## Build web + local server
 
@@ -131,6 +153,7 @@ window.CONTRACK_CONFIG = {
   apiBase: "/api",
   nodeServerBase: "http://127.0.0.1:3219",
   openXmlBase: `http://${window.location.hostname || "127.0.0.1"}:5000`,
+  fileHandlerBase: `http://${window.location.hostname || "127.0.0.1"}:5001`,
 };
 ```
 

@@ -1,6 +1,6 @@
 import { HttpError } from "./http";
-import { nodeServerBase, openXmlBase } from "./runtimeConfig";
-import type { LocalServerHealth, LocalServerUpdateCheck, LocalServerUpdateInstallResult } from "./types";
+import { nodeServerBase, openXmlBase, fileHandlerBase } from "./runtimeConfig";
+import type { DocumentFileProcessor, LocalServerHealth, LocalServerUpdateCheck, LocalServerUpdateInstallResult } from "./types";
 
 export const localServerBase = nodeServerBase;
 
@@ -79,20 +79,25 @@ function jsonBody(payload: unknown): RequestInit {
   };
 }
 
-function withOpenXmlBase(payload: unknown): Record<string, unknown> {
+function withDocumentProcessor(payload: unknown): Record<string, unknown> {
   const body = payload && typeof payload === "object" && !Array.isArray(payload)
     ? { ...(payload as Record<string, unknown>) }
     : {};
   const configured = body.openxml_base_url ?? body.openXmlBaseUrl;
+  const configuredFileHandler = body.filehandler_base_url ?? body.fileHandlerBaseUrl;
   return {
     ...body,
+    file_processor: body.file_processor ?? body.fileProcessor ?? "filehandler",
+    filehandler_base_url: typeof configuredFileHandler === "string" && configuredFileHandler.trim() ? configuredFileHandler : fileHandlerBase,
     openxml_base_url: typeof configured === "string" && configured.trim() ? configured : openXmlBase
   };
 }
 
-function withOpenXmlQuery(path: string): string {
-  const separator = path.includes("?") ? "&" : "?";
-  return `${path}${separator}openxml_base_url=${encodeURIComponent(openXmlBase)}`;
+function documentHealthQuery(fileProcessor: DocumentFileProcessor): string {
+  const query = new URLSearchParams({
+    file_processor: fileProcessor, openxml_base_url: openXmlBase, filehandler_base_url: fileHandlerBase
+  });
+  return `/document-translation/health?${query}`;
 }
 
 export const localServerApi = {
@@ -143,28 +148,29 @@ export const localServerApi = {
     uploadArtifacts: (payload: unknown) => localHttp<import("./types").BoxUploadResult>("/box/upload-artifacts", jsonBody(payload))
   },
   documentTranslation: {
-    health: () =>
+    health: (fileProcessor: DocumentFileProcessor = "filehandler") =>
       localHttp<{
         ok: boolean;
-        openxml: { ok: boolean; base_url: string; message: string };
+        file_processor: DocumentFileProcessor;
+        processor: { ok: boolean; base_url: string; message: string };
         codex: { ok: boolean; command: string; message: string; version?: string };
         defaults: Record<string, unknown>;
-      }>(withOpenXmlQuery("/document-translation/health")),
+      }>(documentHealthQuery(fileProcessor)),
     models: async () => {
       const response = await localHttp<{ models: CodexModelOption[] }>("/document-translation/models");
       return response.models;
     },
     sheets: async (payload: unknown) => {
-      const response = await localHttp<{ sheets: string[] }>("/document-translation/sheets", jsonBody(withOpenXmlBase(payload)));
+      const response = await localHttp<{ sheets: string[] }>("/document-translation/sheets", jsonBody(withDocumentProcessor(payload)));
       return response.sheets;
     },
     extract: (payload: unknown) =>
       localHttp<{ file_path: string; extension: string; file_type?: string; sheets: string[]; segment_count: number; segments: string[] }>(
         "/document-translation/extract",
-        jsonBody(withOpenXmlBase(payload))
+        jsonBody(withDocumentProcessor(payload))
       ),
     start: (payload: unknown) =>
-      localHttp<import("./types").DocumentTranslationJob>("/document-translation/translate", jsonBody(withOpenXmlBase(payload))),
+      localHttp<import("./types").DocumentTranslationJob>("/document-translation/translate", jsonBody(withDocumentProcessor(payload))),
     getJob: (jobId: string) =>
       localHttp<import("./types").DocumentTranslationJob>(`/document-translation/jobs/${encodeURIComponent(jobId)}`),
     cancelJob: (jobId: string) =>
