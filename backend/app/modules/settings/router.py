@@ -70,8 +70,7 @@ def get_integration_status(
     db: Session = Depends(get_db),
 ) -> IntegrationStatusResponse:
     settings = get_system_settings_map(db)
-    box_settings = box.get_box_settings_row(db)
-    box_status = box.status(box_settings, user_settings)
+    box_status = box.status(db, user_settings)
     items = [
         IntegrationStatusItem(
             service="redmine_jp",

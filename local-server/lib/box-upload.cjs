@@ -236,6 +236,7 @@ async function boxJson(accessToken, url, options = {}) {
   if (!response.ok) {
     const error = new Error(boxErrorMessage(payload, `Box request failed with status ${response.status}`));
     error.status = response.status;
+    error.statusCode = response.status === 401 ? 401 : 502;
     error.payload = payload;
     throw error;
   }

@@ -296,6 +296,7 @@ class BoxSettingsOut(BaseModel):
 class BoxStatusResponse(BaseModel):
     configured: bool
     connected: bool
+    authorization_required: bool = False
     message: str
     token_expires_at: datetime | None = None
 

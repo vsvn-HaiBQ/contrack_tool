@@ -88,6 +88,16 @@ Default local ports:
 - OpenXML API: `5000`
 - Node processing server: `3219`
 
+## Box authentication in Build Source
+
+Opening Build Source checks Box with `GET /api/box/status`. The backend obtains a valid access token, refreshes it when expired or within two minutes of expiry, and verifies it with Box `/users/me`. Auto upload is checked only after this verification succeeds. Status responses are not cached.
+
+Checking **Auto upload to Box** explicitly calls `POST /api/box/authenticate` to obtain and verify a fresh token. If Box authorization has expired or been revoked, the checkbox stays clear and OAuth opens to reconnect. Closing or failing OAuth leaves it unchecked. Unchecking auto upload does not revoke the Box account connection.
+
+An invalid/missing refresh token or a rejected refreshed access token clears unusable credentials and sets `authorization_required: true`. Temporary network/provider errors leave auto upload unchecked but retain refresh credentials for a later retry. Rotating refresh tokens are protected by a database row lock for concurrent uploads. Upload access also verifies the token before passing it to the local Node server. Box has Ready/Not ready and upload results, with no Pending state.
+
+Deploy the backend and frontend together and update the local Node package to **1.4.5** or later for Box HTTP 401 propagation.
+
 ## Document Translation
 
 Translate Docs supports `.txt`, `.md`, `.docx`, `.xlsx`, and `.pptx`. The **File Processor** selection is saved per account:
@@ -120,14 +130,11 @@ Deploy FileHandler and the backend first (startup applies `017_document_translat
 Verification commands (use `npm.cmd` on Windows if PowerShell blocks `npm.ps1`):
 
 ```bash
-npm run test:translation
 npm run build
 dotnet test filehandler/FileHandler.sln
 docker compose config --quiet
 docker compose build filehandler
 ```
-
-Run backend preference tests from `backend/` with the backend dependencies installed: `python -m unittest discover -s tests`. These use an isolated in-memory SQLite database.
 
 ## Build web + local server
 

@@ -4,7 +4,7 @@ import json
 import secrets
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -87,12 +87,22 @@ def update_box_settings(
 
 @router.get("/status", response_model=BoxStatusResponse)
 def get_box_status(
+    response: Response,
     _: User = Depends(get_current_user),
     user_settings: UserSettings = Depends(get_current_user_settings),
     db: Session = Depends(get_db),
 ) -> BoxStatusResponse:
-    row = service.get_box_settings_row(db)
-    return BoxStatusResponse(**service.status(row, user_settings))
+    response.headers["Cache-Control"] = "no-store"
+    return BoxStatusResponse(**service.status(db, user_settings))
+
+
+@router.post("/authenticate", response_model=BoxStatusResponse)
+def authenticate_box(
+    _: User = Depends(get_current_user),
+    user_settings: UserSettings = Depends(get_current_user_settings),
+    db: Session = Depends(get_db),
+) -> BoxStatusResponse:
+    return BoxStatusResponse(**service.status(db, user_settings, force_refresh=True))
 
 
 @router.post("/oauth/start", response_model=BoxOAuthStartResponse)
@@ -149,6 +159,9 @@ def box_oauth_callback(
         db.rollback()
         return _oauth_html("Box authorization failed", str(exc), status_code=400)
     db.commit()
+    connection = service.status(db, user_settings)
+    if not connection["connected"]:
+        return _oauth_html("Box connection could not be verified", connection["message"], status_code=400)
     return _oauth_html("Box connected", "You can close this tab and return to ConTrack.")
 
 
@@ -160,7 +173,9 @@ def get_upload_access(
     db: Session = Depends(get_db),
 ) -> BoxUploadAccessResponse:
     try:
-        access_token, row = service.get_valid_access_token(db, user_settings)
+        access_token, row, _ = service.get_verified_access_token(db, user_settings)
+    except service.BoxAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     except service.BoxConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except service.BoxClientError as exc:

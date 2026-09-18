@@ -122,6 +122,7 @@ export type BoxSettings = {
 export type BoxStatus = {
   configured: boolean;
   connected: boolean;
+  authorization_required?: boolean;
   message: string;
   token_expires_at?: string | null;
 };

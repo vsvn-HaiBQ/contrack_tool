@@ -1,8 +1,7 @@
 {
   "name": "ct_tool",
-  "version": "1.4.4",
+  "version": "1.5.0",
   "scripts": {
-    "test:translation": "node --test local-server/tests/*.test.cjs frontend/tests/*.test.cjs",
     "build": "npm run build:web && npm run build:local-server",
     "build:web": "npm --prefix frontend run build",
     "build:local-server": "node local-server/scripts/build.cjs",

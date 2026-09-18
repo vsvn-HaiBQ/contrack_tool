@@ -14,7 +14,7 @@ import { ticketsApi } from "../tickets/api";
 import { usersApi } from "../users/api";
 import type { BoxStatus, BoxUploadedItem, BuildJob, BuildJobLog } from "../../shared/types";
 
-type BoxUploadStatus = "idle" | "pending" | "uploading" | "succeeded" | "failed" | "skipped";
+type BoxUploadStatus = "idle" | "uploading" | "succeeded" | "failed" | "skipped";
 
 const form = reactive({
   targetBranch: "",
@@ -28,6 +28,7 @@ const form = reactive({
 
 const job = ref<BuildJob | null>(null);
 const boxStatus = ref<BoxStatus | null>(null);
+const checkingBox = ref(true);
 const uploadedBoxItems = ref<BoxUploadedItem[]>([]);
 const boxUploadLogs = ref<Record<string, BuildJobLog[]>>({});
 const polling = ref<number | null>(null);
@@ -35,6 +36,7 @@ const logContainers: Record<string, HTMLElement | null> = {};
 const stoppingBuildJobs = reactive<Record<string, boolean>>({});
 const uploadingBoxJobIds = reactive<Record<string, boolean>>({});
 const uploadedBoxJobIds = reactive<Record<string, boolean>>({});
+const failedBoxJobIds = reactive<Record<string, boolean>>({});
 const autoScroll = ref(true);
 const localServerOnline = ref(false);
 const checkingLocalServer = ref(false);
@@ -42,6 +44,9 @@ const uploadingToBox = ref(false);
 const uploadCompletedJobId = ref<string | null>(null);
 const boxUploadStatus = ref<BoxUploadStatus>("idle");
 const lastAutoTargetBranch = ref("");
+let boxRequestId = 0;
+let pageActive = true;
+let boxPopup: Window | null = null;
 
 const running = computed(() =>
   job.value?.status === "queued" ||
@@ -167,7 +172,6 @@ function setBoxUploadStatus(status: BoxUploadStatus) {
 }
 
 function boxUploadStatusLabel(): string {
-  if (boxUploadStatus.value === "pending") return "Pending";
   if (boxUploadStatus.value === "uploading") return "Uploading";
   if (boxUploadStatus.value === "succeeded") return "Success";
   if (boxUploadStatus.value === "failed") return "Failed";
@@ -179,7 +183,7 @@ function boxUploadStatusClass(): string {
   if (boxUploadStatus.value === "succeeded") return "bg-emerald-50 text-emerald-700 ring-emerald-200";
   if (boxUploadStatus.value === "failed") return "bg-red-50 text-red-700 ring-red-200";
   if (boxUploadStatus.value === "skipped") return "bg-amber-50 text-amber-800 ring-amber-200";
-  if (boxUploadStatus.value === "pending" || boxUploadStatus.value === "uploading") return "bg-sky-50 text-sky-700 ring-sky-200";
+  if (boxUploadStatus.value === "uploading") return "bg-sky-50 text-sky-700 ring-sky-200";
   return boxReady.value ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-neutral-100 text-[#5C5E62] ring-neutral-200";
 }
 
@@ -216,8 +220,7 @@ async function copyUploadedBoxLink(url: string) {
 }
 
 async function loadDefaults() {
-  await refreshLocalServerStatus();
-  await loadBoxStatus();
+  await Promise.all([refreshLocalServerStatus(), loadBoxStatus(true)]);
   let defaults: { sourceFolder: string; buildFolder: string };
   try {
     defaults = await localServerApi.defaultPaths();
@@ -237,17 +240,30 @@ async function loadDefaults() {
   form.buildFolder = await validDirectoryOrFallback(savedPaths.build_output_folder, defaults.buildFolder, "Saved build folder");
 }
 
-async function loadBoxStatus() {
+function applyBoxStatus(status: BoxStatus, autoSelect = false) {
+  boxStatus.value = status;
+  if (!status.configured || !status.connected) form.uploadToBox = false;
+  else if (autoSelect) form.uploadToBox = true;
+}
+
+function boxConnectionFailed(error: Error) {
+  applyBoxStatus({
+    configured: Boolean(boxStatus.value?.configured), connected: false,
+    authorization_required: false, message: error.message,
+  });
+}
+
+async function loadBoxStatus(autoSelect = false) {
+  const requestId = ++boxRequestId;
+  checkingBox.value = true;
   try {
     const status = await boxApi.status();
-    boxStatus.value = status;
-    form.uploadToBox = status.configured && status.connected;
-    if (!form.uploadToBox && boxUploadStatus.value !== "idle") {
-      setBoxUploadStatus("idle");
-    }
+    if (!pageActive || requestId !== boxRequestId) return;
+    applyBoxStatus(status, autoSelect);
   } catch (error) {
-    boxStatus.value = { configured: false, connected: false, message: (error as Error).message };
-    form.uploadToBox = false;
+    if (pageActive && requestId === boxRequestId) boxConnectionFailed(error as Error);
+  } finally {
+    if (pageActive && requestId === boxRequestId) checkingBox.value = false;
   }
 }
 
@@ -263,15 +279,18 @@ async function syncBoxOAuthProxySettings() {
   await localServerApi.setSetting("box.oauth.callback_path", apiBoxOAuthCallbackPath);
 }
 
-async function connectBoxFromBuildSource(): Promise<boolean> {
-  const popup = window.open("", "contrack_box_oauth", "width=720,height=760,popup=yes");
+async function connectBoxFromBuildSource(requestId: number, preparedPopup?: Window | null): Promise<boolean> {
+  const popup = preparedPopup === undefined
+    ? window.open("", "contrack_box_oauth", "width=720,height=760,popup=yes")
+    : preparedPopup;
+  boxPopup = popup;
   try {
     await syncBoxOAuthProxySettings();
     const response = await boxApi.startOAuth({ redirect_uri: boxOAuthRedirectUri });
+    if (!pageActive || requestId !== boxRequestId) return false;
     if (popup && !popup.closed) {
       popup.opener = null;
       popup.location.href = response.authorize_url;
-      setBoxUploadStatus("pending");
     } else if (!popup) {
       window.location.href = response.authorize_url;
       return false;
@@ -280,50 +299,75 @@ async function connectBoxFromBuildSource(): Promise<boolean> {
       return false;
     }
     const deadline = Date.now() + 180000;
-    while (Date.now() < deadline) {
+    while (pageActive && requestId === boxRequestId && Date.now() < deadline) {
       await wait(2000);
+      if (!pageActive || requestId !== boxRequestId) return false;
       const status = await boxApi.status();
-      boxStatus.value = status;
+      if (!pageActive || requestId !== boxRequestId) return false;
+      applyBoxStatus(status);
       if (status.configured && status.connected) {
         showToast("Box connected", "success");
         return true;
+      }
+      if (!status.configured || !status.authorization_required) {
+        showToast(status.message, "warning");
+        return false;
       }
       if (popup.closed) break;
     }
     showToast("Box authorization is not complete yet", "warning");
     return false;
   } catch (error) {
-    if (popup && !popup.closed) {
-      popup.close();
+    if (pageActive && requestId === boxRequestId) {
+      boxConnectionFailed(error as Error);
+      showToast((error as Error).message, "error");
     }
-    showToast((error as Error).message, "error");
     return false;
+  } finally {
+    if (popup && !popup.closed) popup.close();
+    if (boxPopup === popup) boxPopup = null;
   }
 }
 
 async function handleAutoUploadToggle() {
   if (!form.uploadToBox) {
+    ++boxRequestId;
+    checkingBox.value = false;
     setBoxUploadStatus("idle");
     return;
   }
-  await loadBoxStatus();
-  if (!boxStatus.value?.configured) {
-    form.uploadToBox = false;
-    setBoxUploadStatus("failed");
-    showToast(boxStatus.value?.message || "Box settings are incomplete", "warning");
-    return;
-  }
-  if (!boxStatus.value.connected) {
-    form.uploadToBox = false;
-    const connected = await connectBoxFromBuildSource();
-    await loadBoxStatus();
-    form.uploadToBox = connected && Boolean(boxStatus.value?.connected);
-    if (form.uploadToBox) {
-      setBoxUploadStatus("pending");
+  const requestId = ++boxRequestId;
+  checkingBox.value = true;
+  form.uploadToBox = false;
+  setBoxUploadStatus("idle");
+  // Reserve the OAuth window during the click so the browser does not block it
+  // after the asynchronous token request when reauthorization is already needed.
+  const preparedPopup = boxStatus.value?.authorization_required
+    ? window.open("", "contrack_box_oauth", "width=720,height=760,popup=yes")
+    : undefined;
+  if (preparedPopup) boxPopup = preparedPopup;
+  try {
+    const status = await boxApi.authenticate();
+    if (!pageActive || requestId !== boxRequestId) return;
+    applyBoxStatus(status);
+    if (status.configured && status.connected) {
+      form.uploadToBox = true;
+    } else if (status.configured && status.authorization_required) {
+      const connected = await connectBoxFromBuildSource(requestId, preparedPopup);
+      if (pageActive && requestId === boxRequestId) form.uploadToBox = connected && boxReady.value;
+    } else {
+      showToast(status.message, "warning");
     }
-    return;
+  } catch (error) {
+    if (pageActive && requestId === boxRequestId) {
+      boxConnectionFailed(error as Error);
+      showToast((error as Error).message, "error");
+    }
+  } finally {
+    if (preparedPopup && !preparedPopup.closed) preparedPopup.close();
+    if (boxPopup === preparedPopup) boxPopup = null;
+    if (pageActive && requestId === boxRequestId) checkingBox.value = false;
   }
-  setBoxUploadStatus("pending");
 }
 
 async function validateDirectory(path: string, label: string) {
@@ -419,7 +463,8 @@ async function startBuild() {
     uploadCompletedJobId.value = null;
     for (const key of Object.keys(uploadingBoxJobIds)) delete uploadingBoxJobIds[key];
     for (const key of Object.keys(uploadedBoxJobIds)) delete uploadedBoxJobIds[key];
-    setBoxUploadStatus(form.uploadToBox ? "pending" : "idle");
+    for (const key of Object.keys(failedBoxJobIds)) delete failedBoxJobIds[key];
+    setBoxUploadStatus("idle");
     form.sourceFolder = await validateDirectory(form.sourceFolder, "Source folder");
     form.buildFolder = await validateDirectory(form.buildFolder, "Build folder");
     await usersApi.updateLocalPaths({
@@ -582,6 +627,7 @@ async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
     }
     uploadedBoxItems.value = [...uploadedBoxItems.value, ...result.items];
     uploadedBoxJobIds[targetJob.job_id] = true;
+    delete failedBoxJobIds[targetJob.job_id];
     uploadCompletedJobId.value = targetJob.job_id;
     const linkMessage = linkedCount
       ? `linked ${linkedCount} ticket link(s)`
@@ -591,22 +637,16 @@ async function uploadBuildArtifacts(targetJob: BuildJob | null = job.value) {
     setBoxUploadStatus("succeeded");
     showToast(`Uploaded ${result.items.length} artifact(s) to Box; ${linkMessage}`, "success");
   } catch (error) {
-    uploadedBoxJobIds[targetJob.job_id] = true;
+    failedBoxJobIds[targetJob.job_id] = true;
     const errorMsg = (error as Error).message;
     appendBoxUploadLog(targetJob, "error", errorMsg);
     setBoxUploadStatus("failed");
     
-    // Check if error is related to token expiry
-    if (error instanceof HttpError && (error.status === 400 || error.status === 502)) {
-      if (errorMsg.includes("authorization") || errorMsg.includes("token") || errorMsg.includes("refresh")) {
-        appendBoxUploadLog(targetJob, "warn", "Box authorization may have expired. Please reconnect to Box.");
-        showToast("Box authorization expired. Please reconnect.", "warning");
-        // Reset Box connection status
-        boxStatus.value = { configured: true, connected: false, message: "Box authorization is required" };
-        form.uploadToBox = false;
-        return;
-      }
+    if (error instanceof HttpError && error.status === 401) {
+      form.uploadToBox = false;
     }
+    await loadBoxStatus();
+    if (boxStatus.value?.authorization_required) appendBoxUploadLog(targetJob, "warn", "Box authorization expired. Please reconnect to Box.");
     showToast(errorMsg, "error");
   } finally {
     delete uploadingBoxJobIds[targetJob.job_id];
@@ -629,7 +669,7 @@ function uploadCompletedTargets(parentJob: BuildJob) {
   if (!form.uploadToBox) return;
   const targets = Object.values(parentJob.target_jobs ?? {});
   for (const targetJob of targets) {
-    if (targetJob?.status === "succeeded" && targetJob.artifacts?.length) {
+    if (targetJob?.status === "succeeded" && targetJob.artifacts?.length && !failedBoxJobIds[targetJob.job_id]) {
       void uploadBuildArtifacts(targetJob);
     } else if (targetJob && ["failed", "canceled"].includes(targetJob.status) && !uploadedBoxJobIds[targetJob.job_id]) {
       uploadedBoxJobIds[targetJob.job_id] = true;
@@ -686,7 +726,12 @@ watch(
 );
 
 onMounted(loadDefaults);
-onBeforeUnmount(stopPolling);
+onBeforeUnmount(() => {
+  pageActive = false;
+  ++boxRequestId;
+  if (boxPopup && !boxPopup.closed) boxPopup.close();
+  stopPolling();
+});
 </script>
 
 <template>
@@ -729,11 +774,11 @@ onBeforeUnmount(stopPolling);
           <label class="text-sm font-medium text-[#393C41]">Box Upload</label>
           <div class="flex min-h-10 flex-wrap items-center gap-3 rounded border border-[#D0D1D2] px-3 py-2">
             <label class="flex items-center gap-2 text-sm text-[#393C41]" :class="!boxReady ? 'opacity-60' : ''">
-              <input v-model="form.uploadToBox" type="checkbox" class="size-4 accent-[#3E6AE1]" @change="handleAutoUploadToggle" />
+              <input v-model="form.uploadToBox" type="checkbox" :disabled="checkingBox || uploadingToBox" class="size-4 accent-[#3E6AE1] disabled:opacity-60" @change="handleAutoUploadToggle" />
               Auto upload to Box
             </label>
             <span v-if="showBoxUploadStatus" class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1" :class="boxUploadStatusClass()">{{ boxUploadStatusLabel() }}</span>
-            <span class="text-xs text-[#5C5E62]">{{ boxStatus?.message || "Checking Box" }}</span>
+            <span class="text-xs text-[#5C5E62]">{{ checkingBox ? "Checking Box connection..." : boxStatus?.message || "Box authorization is required" }}</span>
           </div>
         </div>
         <div class="grid gap-2">
