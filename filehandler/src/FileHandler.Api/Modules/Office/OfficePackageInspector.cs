@@ -1,8 +1,8 @@
+using System.Collections.Frozen;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Xml;
 using FileHandler.Api.Common;
-using FileHandler.Api.Diagnostics;
 
 namespace FileHandler.Api.Modules.Office;
 
@@ -35,117 +35,89 @@ public sealed class OfficePackageInspector
     /// <exception cref="InvalidOperationException">Package structure or relationship graph violates limits or integrity.</exception>
     public OfficeInventory Inspect(OfficeSource source, CancellationToken cancellationToken)
     {
-        using var trace = DebugTrace.Enter("OfficePackageInspector", "Inspect", () => new
+        using var zip = new ZipArchive(new MemoryStream(source.Bytes), ZipArchiveMode.Read, false);
+
+        var contentTypes = ParseContentTypes(zip);
+        var parts = new List<OfficePartInfo>();
+
+        foreach (var entry in zip.Entries)
         {
-            sourceHash = source.SourceHash,
-            format = source.Format.ToString()
-        });
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entry.FullName.EndsWith('/'))
+                continue;
 
-        try
+            var canonicalUri = "/" + entry.FullName.Replace('\\', '/').TrimStart('/');
+
+            using var payload = entry.Open();
+            var payloadHash = Convert.ToHexStringLower(SHA256.HashData(payload));
+            var contentType = ResolveContentType(canonicalUri, contentTypes);
+            var sdkKind = DetermineSdkKind(canonicalUri, contentType);
+
+            var partInfo = new OfficePartInfo(
+                canonicalUri,
+                contentType,
+                sdkKind,
+                entry.CompressedLength,
+                entry.Length,
+                payloadHash,
+                Selected: false);
+
+            parts.Add(partInfo);
+        }
+
+        var relationships = new List<OfficeRelationship>();
+        var relKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in zip.Entries)
         {
-            trace.State("stage", () => "indexParts");
-            using var zip = new ZipArchive(new MemoryStream(source.OriginalBytes), ZipArchiveMode.Read, false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var name = entry.FullName.Replace('\\', '/').TrimStart('/');
+            if (!name.EndsWith(".rels", StringComparison.OrdinalIgnoreCase))
+                continue;
 
-            var contentTypes = ParseContentTypes(zip);
-            var parts = new List<OfficePartInfo>();
-            var partIndex = 0;
+            var ownerPartUri = DetermineOwnerPartUri(name);
+            using var relStream = entry.Open();
+            var relDoc = new XmlDocument { XmlResolver = null };
+            using var relReader = XmlReader.Create(relStream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = _options.MaxXmlCharactersPerPart });
+            relDoc.Load(relReader);
 
-            foreach (var entry in zip.Entries)
+            foreach (XmlNode node in relDoc.GetElementsByTagName("Relationship", "http://schemas.openxmlformats.org/package/2006/relationships"))
             {
+                if (node.ParentNode != relDoc.DocumentElement) throw new InvalidDataException("Nested relationship is unsupported.");
                 cancellationToken.ThrowIfCancellationRequested();
-                if (entry.FullName.EndsWith('/'))
+                var id = node.Attributes?["Id"]?.Value;
+                var type = node.Attributes?["Type"]?.Value;
+                var target = node.Attributes?["Target"]?.Value;
+                var targetMode = node.Attributes?["TargetMode"]?.Value ?? "Internal";
+
+                if (id is null || type is null || target is null)
                     continue;
 
-                partIndex++;
-                var canonicalUri = "/" + entry.FullName.Replace('\\', '/').TrimStart('/');
-                using var partItem = DebugTrace.Item(partIndex);
+                var key = $"{ownerPartUri}|{id}";
+                if (!relKeys.Add(key))
+                    throw new InvalidDataException("Duplicate relationship identifier.");
 
-                using var payload = entry.Open();
-                var payloadHash = Convert.ToHexStringLower(SHA256.HashData(payload));
-                var contentType = ResolveContentType(canonicalUri, contentTypes);
-                var sdkKind = DetermineSdkKind(canonicalUri, contentType);
-
-                var partInfo = new OfficePartInfo(
-                    canonicalUri,
-                    contentType,
-                    sdkKind,
-                    entry.CompressedLength,
-                    entry.Length,
-                    payloadHash,
-                    Selected: false);
-
-                parts.Add(partInfo);
-            }
-
-            trace.State("stage", () => "resolveRelationships");
-            var relationships = new List<OfficeRelationship>();
-            var relKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var entry in zip.Entries)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var name = entry.FullName.Replace('\\', '/').TrimStart('/');
-                if (!name.EndsWith(".rels", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var ownerPartUri = DetermineOwnerPartUri(name);
-                using var relStream = entry.Open();
-                var relDoc = new XmlDocument { XmlResolver = null };
-                relDoc.Load(relStream);
-
-                foreach (XmlNode node in relDoc.GetElementsByTagName("Relationship"))
+                string resolvedTarget;
+                if (string.Equals(targetMode, "External", StringComparison.OrdinalIgnoreCase))
                 {
-                    var id = node.Attributes?["Id"]?.Value;
-                    var type = node.Attributes?["Type"]?.Value;
-                    var target = node.Attributes?["Target"]?.Value;
-                    var targetMode = node.Attributes?["TargetMode"]?.Value ?? "Internal";
-
-                    if (id is null || type is null || target is null)
-                        continue;
-
-                    var key = $"{ownerPartUri}|{id}";
-                    if (!relKeys.Add(key))
-                        throw new InvalidDataException("Duplicate relationship identifier.");
-
-                    string resolvedTarget;
-                    if (string.Equals(targetMode, "External", StringComparison.OrdinalIgnoreCase))
-                    {
-                        resolvedTarget = target;
-                    }
-                    else
-                    {
-                        resolvedTarget = ResolveRelativeUri(ownerPartUri, target);
-                    }
-
-                    relationships.Add(new OfficeRelationship(ownerPartUri, id, type, resolvedTarget, targetMode));
-                    if (relationships.Count > _options.MaxRelationships)
-                        throw new FileHandler.Api.Common.FileLimitException("office_package_limit_exceeded");
+                    resolvedTarget = target;
                 }
+                else
+                {
+                    resolvedTarget = ResolveRelativeUri(ownerPartUri, target);
+                }
+
+                relationships.Add(new OfficeRelationship(ownerPartUri, id, type, resolvedTarget, targetMode));
+                if (relationships.Count > _options.MaxRelationships)
+                    throw new FileHandler.Api.Common.FileLimitException("office_package_limit_exceeded");
             }
-
-            trace.State("stage", () => "inventoryObjects");
-            var objects = new List<OfficeObject>();
-            var diagnostics = new List<OfficeDiagnostic>();
-
-            trace.Return(new
-            {
-                outcome = "success",
-                partsCount = parts.Count,
-                relationshipsCount = relationships.Count,
-                objectsCount = objects.Count
-            });
-
-            return new OfficeInventory(parts, relationships, objects, diagnostics);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            trace.Error(ex);
-            throw;
-        }
+
+        var objects = new List<OfficeObject>();
+        var diagnostics = new List<OfficeDiagnostic>();
+
+        source.PayloadHashes = parts.ToFrozenDictionary(p => p.PartUri, p => p.PayloadHash, StringComparer.OrdinalIgnoreCase);
+        return new OfficeInventory(parts, relationships, objects, diagnostics);
     }
 
     /// <summary>
@@ -153,7 +125,7 @@ public sealed class OfficePackageInspector
     /// </summary>
     /// <param name="zip">ZIP archive.</param>
     /// <returns>Pair of default extension mappings and override part mappings.</returns>
-    private static (Dictionary<string, string> Defaults, Dictionary<string, string> Overrides) ParseContentTypes(ZipArchive zip)
+    private (Dictionary<string, string> Defaults, Dictionary<string, string> Overrides) ParseContentTypes(ZipArchive zip)
     {
         var defaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var overrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -164,9 +136,10 @@ public sealed class OfficePackageInspector
 
         using var s = entry.Open();
         var doc = new XmlDocument { XmlResolver = null };
-        doc.Load(s);
+        using var reader = XmlReader.Create(s, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = _options.MaxXmlCharactersPerPart });
+        doc.Load(reader);
 
-        foreach (XmlNode node in doc.GetElementsByTagName("Default"))
+        foreach (XmlNode node in doc.GetElementsByTagName("Default", "http://schemas.openxmlformats.org/package/2006/content-types"))
         {
             var ext = node.Attributes?["Extension"]?.Value;
             var ct = node.Attributes?["ContentType"]?.Value;
@@ -174,7 +147,7 @@ public sealed class OfficePackageInspector
                 defaults[ext] = ct;
         }
 
-        foreach (XmlNode node in doc.GetElementsByTagName("Override"))
+        foreach (XmlNode node in doc.GetElementsByTagName("Override", "http://schemas.openxmlformats.org/package/2006/content-types"))
         {
             var partName = node.Attributes?["PartName"]?.Value;
             var ct = node.Attributes?["ContentType"]?.Value;

@@ -1,3 +1,4 @@
+using FileHandler.Api.Common;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -148,6 +149,26 @@ internal static class OfficeTextBindings
     }
 
     /// <summary>
+    /// Groups exact scalar expectations in one pass over changed units.
+    /// </summary>
+    /// <param name="units">Original ordered units.</param>
+    /// <param name="decoded">Validated translations.</param>
+    /// <returns>Editable part maps; shared strings are handled by copy-on-write.</returns>
+    internal static Dictionary<string, Dictionary<string, OfficeScalarEdit>> EditsByPart(IReadOnlyList<OfficeTranslationUnit> units, IReadOnlyList<OfficeDecodedUnit> decoded)
+    {
+        var parts = new Dictionary<string, Dictionary<string, OfficeScalarEdit>>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < units.Count; i++)
+        {
+            var unit = units[i];
+            if (unit.Kind == OfficeUnitKinds.SheetName || !Changed(unit, decoded[i])) continue;
+            var uri = unit.Location.PartUri;
+            if (!parts.TryGetValue(uri, out var edits)) parts[uri] = edits = new(StringComparer.Ordinal);
+            foreach (var edit in BuildChanges(unit, decoded[i], uri)) edits.Add(edit.Key, edit.Value);
+        }
+        return parts;
+    }
+
+    /// <summary>
     /// Composes all changed spans per scalar while preserving unbound source characters.
     /// </summary>
     /// <param name="unit">Bound source unit.</param>
@@ -156,6 +177,7 @@ internal static class OfficeTextBindings
     /// <returns>Exact scalar expectations.</returns>
     private static Dictionary<string, OfficeScalarEdit> BuildChanges(OfficeTranslationUnit unit, OfficeDecodedUnit decoded, string? partUri)
     {
+        if (unit.Kind == OfficeUnitKinds.SheetName) return new(StringComparer.Ordinal);
         var replacements = new Dictionary<string, List<(OfficeTextBinding Binding, string Value)>>(StringComparer.Ordinal);
         var groups = unit.Bindings.ToLookup(b => b.EditGroupId, StringComparer.Ordinal);
         for (var slot = 0; slot < unit.Slots.Count; slot++)

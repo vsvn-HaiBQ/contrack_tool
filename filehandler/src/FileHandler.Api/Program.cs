@@ -1,5 +1,4 @@
 using FileHandler.Api.Common;
-using FileHandler.Api.Diagnostics;
 using FileHandler.Api.Modules.Markdown;
 using FileHandler.Api.Modules.PlainText;
 using FileHandler.Api.Modules.Office;
@@ -12,7 +11,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.Configure<DebugTraceOptions>(builder.Configuration.GetSection(DebugTraceOptions.SectionName));
 builder.Services.Configure<FileHandlingOptions>(builder.Configuration.GetSection(FileHandlingOptions.SectionName));
 builder.Services.Configure<OfficeProcessingOptions>(builder.Configuration.GetSection(OfficeProcessingOptions.SectionName));
 
@@ -74,49 +72,84 @@ builder.Services.AddControllers().ConfigureApiBehaviorOptions(options =>
 
         if (isLimitError)
         {
-            return new ObjectResult(new[]
+            return new ObjectResult(FileResponses.Failure(context.HttpContext, new[]
             {
-                new FileError("file_too_large", "Kích thước multipart request vượt quá giới hạn cho phép.")
-            })
+                new FileError("file_too_large", ProcessingMessages.RequestTooLarge)
+            }))
             {
                 StatusCode = StatusCodes.Status413PayloadTooLarge
             };
         }
 
-        return new BadRequestObjectResult(new[]
+        return new BadRequestObjectResult(FileResponses.Failure(context.HttpContext, new[]
         {
-            new FileError("invalid_request", "Multipart request không hợp lệ.")
-        });
+            new FileError("invalid_request", ProcessingMessages.InvalidRequest)
+        }));
     };
 });
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
     options.OperationFilter<ExportOperationFilter>();
+    options.SchemaFilter<VietnameseSchemaFilter>();
 });
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
-builder.Services.AddOptions<FormOptions>().Configure<IOptions<FileHandlingOptions>>((form, configured) =>
-    form.MultipartBodyLengthLimit = configured.Value.MaxMultipartBytes);
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(x =>
+{
+    x.ValueLengthLimit = int.MaxValue;
+    x.MultipartBodyLengthLimit = int.MaxValue;
+    x.MultipartBoundaryLengthLimit = int.MaxValue;
+    x.MultipartHeadersCountLimit = int.MaxValue;
+    x.MultipartHeadersLengthLimit = int.MaxValue;
+    x.ValueCountLimit = int.MaxValue;
+    x.BufferBodyLengthLimit = int.MaxValue;
+});
+
+builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(options =>
+{
+    options.Limits.MaxRequestBodySize = null;
+});
+
+builder.Services.Configure<IISServerOptions>(options =>
+{
+    options.MaxRequestBodySize = int.MaxValue;
+    options.MaxRequestBodyBufferSize = int.MaxValue;
+});
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("file-processing", context => System.Threading.RateLimiting.RateLimitPartition.GetConcurrencyLimiter(
+        "file-processing", _ => new System.Threading.RateLimiting.ConcurrencyLimiterOptions
+        {
+            PermitLimit = Math.Clamp(context.RequestServices.GetRequiredService<IOptions<FileHandlingOptions>>().Value.MaxConcurrentRequests, 1, 64),
+            QueueLimit = 0
+        }));
+    options.OnRejected = async (context, token) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsJsonAsync(FileResponses.Failure(context.HttpContext, [new("request_limit_exceeded", ProcessingMessages.RequestLimitExceeded)]), token);
+    };
+});
 
 var app = builder.Build();
-app.UseMiddleware<DebugTraceMiddleware>();
 app.UseExceptionHandler();
 app.Use(async (context, next) =>
 {
-    var path = context.Request.Path;
-    if ((path.Equals("/import", StringComparison.OrdinalIgnoreCase) || path.Equals("/export", StringComparison.OrdinalIgnoreCase)) &&
-        context.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+    var path = (context.Request.Path.Value ?? string.Empty).TrimEnd('/');
+    var isImportOrExport = (path.EndsWith("/import", StringComparison.OrdinalIgnoreCase) || path.EndsWith("/export", StringComparison.OrdinalIgnoreCase) || path.EndsWith("/sheets", StringComparison.OrdinalIgnoreCase) || path.EndsWith("/slides", StringComparison.OrdinalIgnoreCase)) &&
+        context.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase);
+    if (isImportOrExport)
     {
         var limits = context.RequestServices.GetRequiredService<IOptions<FileHandlingOptions>>().Value;
         if (context.Request.ContentLength > limits.MaxMultipartBytes)
         {
             context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsJsonAsync(new[]
+            await context.Response.WriteAsJsonAsync(FileResponses.Failure(context, new[]
             {
-                new FileError("file_too_large", $"Kích thước multipart request ({context.Request.ContentLength.Value} bytes) vượt quá giới hạn cho phép ({limits.MaxMultipartBytes} bytes).")
-            });
+                new FileError("file_too_large", ProcessingMessages.MultipartSizeLimit(context.Request.ContentLength.Value, limits.MaxMultipartBytes))
+            }), context.RequestAborted);
             return;
         }
 
@@ -124,21 +157,22 @@ app.Use(async (context, next) =>
         if (bodyLimit is { IsReadOnly: false }) bodyLimit.MaxRequestBodySize = limits.MaxMultipartBytes;
         context.Request.Body = new LimitedReadStream(context.Request.Body, limits.MaxMultipartBytes, "request_too_large");
 
-        if (!context.Request.HasFormContentType)
+        if (!context.Request.HasFormContentType || context.Request.ContentType?.StartsWith("multipart/form-data", StringComparison.OrdinalIgnoreCase) != true)
         {
             context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsJsonAsync(new[]
+            await context.Response.WriteAsJsonAsync(FileResponses.Failure(context, new[]
             {
-                new FileError("unsupported_media_type", "Content-Type phải là multipart/form-data.")
-            });
+                new FileError("unsupported_media_type", ProcessingMessages.UnsupportedMediaType)
+            }), context.RequestAborted);
             return;
         }
     }
 
     await next();
 });
-app.UseDefaultFiles();
+app.UseRouting();
+app.UseRateLimiter();
 app.UseStaticFiles();
 app.UseSwagger();
 app.UseSwaggerUI(options =>
@@ -146,6 +180,8 @@ app.UseSwaggerUI(options =>
     options.SwaggerEndpoint("/swagger/v1/swagger.json", "FileHandler API v1");
     options.DocumentTitle = "FileHandler API";
     options.InjectStylesheet("/swagger-custom.css");
+    options.InjectJavascript("/swagger-multipart.js");
+    options.InjectJavascript("/swagger-response.js");
     options.InjectJavascript("/swagger-custom.js");
 });
 app.MapControllers();
@@ -178,9 +214,9 @@ internal sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> log
         if (!requestTooLarge) logger.LogError("Unhandled file handling failure of type {ExceptionType}; request {RequestId}.", exception.GetType().Name, context.TraceIdentifier);
         context.Response.StatusCode = requestTooLarge ? StatusCodes.Status413PayloadTooLarge : StatusCodes.Status500InternalServerError;
         var error = requestTooLarge
-            ? new FileError("request_too_large", "Multipart request vượt giới hạn cho phép.")
-            : new FileError("internal_error", "Đã xảy ra lỗi hệ thống.");
-        await context.Response.WriteAsJsonAsync(new[] { error }, cancellationToken);
+            ? new FileError("request_too_large", ProcessingMessages.RequestTooLarge)
+            : new FileError("internal_error", ProcessingMessages.InternalError);
+        await context.Response.WriteAsJsonAsync(FileResponses.Failure(context, [error]), cancellationToken);
         return true;
     }
 }

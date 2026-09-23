@@ -88,7 +88,7 @@ internal sealed class OfficeTemplateBuilder
     }
 
     /// <summary>
-    /// Appends a translatable span without absorbing protected control characters.
+    /// Appends text and same-style spaces without absorbing protected control characters.
     /// </summary>
     /// <param name="node">Complete source scalar.</param>
     /// <param name="partUri">Containing part URI.</param>
@@ -102,13 +102,14 @@ internal sealed class OfficeTemplateBuilder
         var value = node.Text.Substring(offset, length);
         _characters += length;
         if (_characters > _limits.MaxPlanChars) throw new FileHandler.Api.Common.FileLimitException("office_plan_limit_exceeded");
-        if (string.IsNullOrWhiteSpace(value))
+        var canMerge = _merge && _slots[^1].FormatFingerprint == fingerprint;
+        if (string.IsNullOrWhiteSpace(value) && (!canMerge || value.IndexOfAny(['\r', '\n', '\t']) >= 0))
         {
             Anchor(node, AnchorKind.Whitespace);
             return;
         }
         string slotId;
-        if (_merge && _slots[^1].FormatFingerprint == fingerprint)
+        if (canMerge)
         {
             var previous = _slots[^1];
             slotId = previous.SlotId;
@@ -125,6 +126,7 @@ internal sealed class OfficeTemplateBuilder
         _merge = true;
         if (!_scalarHashes.TryGetValue(node, out var sourceHash))
             _scalarHashes[node] = sourceHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(node.Text)));
+        if (_bindings.Count >= _limits.MaxBindings) throw new FileHandler.Api.Common.FileLimitException("office_plan_limit_exceeded");
         _bindings.Add(new(partUri, new OfficeLocation(partUri, OfficeTextBindings.Path(node)), node.LocalName,
             sourceHash, offset, length, slotId, node.Text));
     }
@@ -162,5 +164,5 @@ internal sealed class OfficeTemplateBuilder
     /// <returns>Ordered template, or null for protected-only content.</returns>
     internal OfficeTextTemplate? Build() => _slots.Count == 0 ? null : new(
         _slots.Count == 1 && _anchors.Count == 0 ? UnitMode.Plain : UnitMode.Structured,
-        _slots.Select((slot, index) => slot with { OriginalText = _texts[index].ToString() }).ToArray(), _anchors, _bindings, _order);
+        _slots.Select((slot, index) => slot with { OriginalText = _texts[index].ToString() }).ToArray(), _anchors.ToArray(), _bindings.ToArray(), _order.ToArray());
 }

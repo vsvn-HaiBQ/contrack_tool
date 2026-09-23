@@ -13,7 +13,7 @@ const {
   normalizeStringArray,
 } = require("./openxml-client.cjs");
 const {
-  defaultFileHandlerBaseUrl, snapshotFile, importFileHandler, exportFileHandler, checkFileHandler,
+  defaultFileHandlerBaseUrl, snapshotFile, importFileHandler, exportFileHandler, discoverFileHandler, checkFileHandler,
 } = require("./filehandler-client.cjs");
 
 const jobs = new Map();
@@ -285,7 +285,16 @@ function translationOptions(input = {}) {
   const fileProcessor = normalizeFileProcessor(input.fileProcessor ?? input.file_processor);
   const sheets = normalizeStringArray(input.sheets);
   if (fileProcessor === "filehandler" && sheets.length) {
-    throw Object.assign(new Error("FileHandler does not support sheet selection; all visible sheets are processed"), { statusCode: 400 });
+    throw Object.assign(new Error("FileHandler selection uses sheetIds from the sheets endpoint, not sheet names"), { statusCode: 400 });
+  }
+  const selection = {};
+  for (const [key, alias] of [["sheetIds", "sheet_ids"], ["slideIds", "slide_ids"]]) {
+    const ids = input[key] ?? input[alias];
+    if (ids == null) continue;
+    if (fileProcessor !== "filehandler" || !Array.isArray(ids) || ids.some((id) => typeof id !== "string" || !id.trim())) {
+      throw Object.assign(new Error(`${key} requires FileHandler and an array of non-empty source ID strings`), { statusCode: 400 });
+    }
+    selection[key] = [...ids];
   }
   return {
     fileProcessor,
@@ -304,6 +313,7 @@ function translationOptions(input = {}) {
     instructions: normalizeText(input.instructions, DEFAULT_INSTRUCTIONS),
     documentSummary: normalizeText(input.documentSummary ?? input.document_summary, "(no summary provided)"),
     sheets,
+    ...selection,
     outputPath: normalizeText(input.outputPath ?? input.output_path),
     outputDirectory: normalizeText(input.outputDirectory ?? input.output_directory),
   };
@@ -1062,12 +1072,15 @@ async function documentTranslationHealth(input = {}) {
 
 async function judgeDocumentSheets(input = {}) {
   const options = translationOptions(input);
-  if (options.fileProcessor === "filehandler") {
-    throw Object.assign(new Error("FileHandler does not support sheet selection; all visible sheets are processed"), { statusCode: 400 });
-  }
   const file = ensureTranslationFile(input.filePath ?? input.file_path);
   if (file.extension !== ".xlsx") {
     return [];
+  }
+  if (options.fileProcessor === "filehandler") {
+    const result = await discoverFileHandler(await snapshotFile(file.path), {
+      fileHandlerBaseUrl: options.fileHandlerBaseUrl, timeoutMs: options.timeoutSeconds * 1000,
+    });
+    return result.sheets;
   }
   return judgeOfficeSheets({
     filePath: file.path,
@@ -1075,13 +1088,29 @@ async function judgeDocumentSheets(input = {}) {
   });
 }
 
+async function judgeDocumentSlides(input = {}) {
+  const options = translationOptions(input);
+  if (options.fileProcessor !== "filehandler") {
+    throw Object.assign(new Error("Slide discovery requires FileHandler"), { statusCode: 400 });
+  }
+  const file = ensureTranslationFile(input.filePath ?? input.file_path);
+  if (file.extension !== ".pptx") return [];
+  const result = await discoverFileHandler(await snapshotFile(file.path), {
+    fileHandlerBaseUrl: options.fileHandlerBaseUrl, timeoutMs: options.timeoutSeconds * 1000,
+  });
+  return result.slides;
+}
+
 async function extractDocumentText(input = {}) {
   const options = translationOptions(input);
   const file = ensureTranslationFile(input.filePath ?? input.file_path);
-  const segments = options.fileProcessor === "filehandler"
+  const imported = options.fileProcessor === "filehandler"
     ? await importFileHandler(await snapshotFile(file.path), {
         fileHandlerBaseUrl: options.fileHandlerBaseUrl, timeoutMs: options.timeoutSeconds * 1000,
+        sheetIds: options.sheetIds, slideIds: options.slideIds, debug: parseBoolean(input.debug, false),
       })
+    : null;
+  const segments = imported ? imported.texts
     : file.kind === "office"
     ? await importOfficeFile({
         filePath: file.path,
@@ -1100,6 +1129,7 @@ async function extractDocumentText(input = {}) {
     sheets: options.sheets,
     segment_count: segments.length,
     segments,
+    ...(imported ? { metadata: imported.metadata, ...(imported.units ? { units: imported.units } : {}) } : {}),
   };
 }
 
@@ -1229,6 +1259,8 @@ async function translateFileHandlerDocument(input, callbacks) {
     fileHandlerBaseUrl: options.fileHandlerBaseUrl,
     timeoutMs: options.timeoutSeconds * 1000,
     signal: callbacks.signal,
+    sheetIds: options.sheetIds,
+    slideIds: options.slideIds,
   };
   throwIfCanceled(callbacks);
   const health = await checkFileHandler(requestOptions);
@@ -1236,7 +1268,9 @@ async function translateFileHandlerDocument(input, callbacks) {
   throwIfCanceled(callbacks);
   const snapshot = await snapshotFile(file.path, callbacks.signal);
   callbacks.log?.("info", "filehandler", `Extracting ${file.fileName}`);
-  const segments = await importFileHandler(snapshot, requestOptions);
+  const imported = await importFileHandler(snapshot, requestOptions);
+  const segments = imported.texts;
+  logFileHandlerMetadata(imported.metadata, "import", callbacks);
   if (!segments.length) throw new Error("FileHandler extracted no text segments from the document");
   throwIfCanceled(callbacks);
   const codex = await checkCodexAvailability({ codexCommand: options.codexCommand });
@@ -1250,14 +1284,15 @@ async function translateFileHandlerDocument(input, callbacks) {
   if (comparablePath(outputPath) === comparablePath(file.path)) throw new Error("Output path must not overwrite the source file");
   throwIfCanceled(callbacks);
   callbacks.log?.("info", "filehandler", "Writing translated document");
-  const bytes = await exportFileHandler(snapshot, translated.translatedSegments, requestOptions);
+  const exported = await exportFileHandler(snapshot, translated.translatedSegments, requestOptions);
+  logFileHandlerMetadata(exported.metadata, "export", callbacks);
   throwIfCanceled(callbacks);
   // Synchronous exclusive creation prevents a cancellation or filename collision
   // between the final check and publication of the completed document.
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   for (;;) {
     try {
-      fs.writeFileSync(outputPath, bytes, { flag: "wx" });
+      fs.writeFileSync(outputPath, exported.bytes, { flag: "wx" });
       break;
     } catch (error) {
       if (error.code !== "EEXIST" || options.outputPath) throw error;
@@ -1272,6 +1307,7 @@ async function translateFileHandlerDocument(input, callbacks) {
     file_type: file.kind,
     file_processor: "filehandler",
     filehandler_base_url: options.fileHandlerBaseUrl,
+    metadata: exported.metadata,
     direction: options.direction.key,
     model: options.model,
     reasoning_effort: options.reasoningEffort,
@@ -1279,6 +1315,18 @@ async function translateFileHandlerDocument(input, callbacks) {
     total_segments: translated.total_segments,
     translatable_segments: translated.translatable_segments,
   };
+}
+
+function logFileHandlerMetadata(metadata, stage, callbacks) {
+  if (metadata.status === "partial") {
+    callbacks.log?.("warn", "filehandler", `${stage}: FileHandler completed partially; some source content was retained`);
+  }
+  for (const skip of metadata.skipped || []) {
+    if (skip.severity !== "warning") continue;
+    const location = [skip.unitIndex != null ? `index=${skip.unitIndex}` : "",
+      skip.location ? JSON.stringify(skip.location) : ""].filter(Boolean).join(", ");
+    callbacks.log?.("warn", "filehandler", `${stage}: ${skip.code}: ${skip.message} (count=${skip.count}${location ? `, ${location}` : ""})`);
+  }
 }
 
 async function translateDocument(input = {}, callbacks = {}) {
@@ -1413,6 +1461,7 @@ module.exports = {
   extractDocumentText,
   getDocumentTranslationJob,
   judgeDocumentSheets,
+  judgeDocumentSlides,
   judgeOfficeSheets,
   listCodexModels,
   startDocumentTranslationJob,

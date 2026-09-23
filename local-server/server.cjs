@@ -25,6 +25,7 @@ const {
   extractDocumentText,
   getDocumentTranslationJob,
   judgeDocumentSheets,
+  judgeDocumentSlides,
   listCodexModels,
   startDocumentTranslationJob,
 } = requireLocalModule("codex-translation.cjs");
@@ -610,12 +611,12 @@ async function route(req, res) {
   if (req.method === "POST" && pathname === "/document-translation/sheets") {
     const body = await readJson(req);
     sendJson(req, res, 200, {
-      sheets: await judgeDocumentSheets({
-        fileProcessor: body.fileProcessor ?? body.file_processor,
-        filePath: body.filePath ?? body.file_path,
-        openXmlBaseUrl: body.openXmlBaseUrl ?? body.openxml_base_url,
-      }),
+      sheets: await judgeDocumentSheets(body),
     });
+    return;
+  }
+  if (req.method === "POST" && pathname === "/document-translation/slides") {
+    sendJson(req, res, 200, { slides: await judgeDocumentSlides(await readJson(req)) });
     return;
   }
   if (req.method === "POST" && pathname === "/document-translation/extract") {

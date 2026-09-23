@@ -1,6 +1,6 @@
 using System.Text;
 using FileHandler.Api.Common;
-using FileHandler.Api.Diagnostics;
+using FileHandler.Api.Modules.Excel;
 
 namespace FileHandler.Api.Modules.Office;
 
@@ -21,6 +21,11 @@ public sealed class OfficeTextCodec
     private readonly FileHandlingOptions _fileHandlingOptions;
 
     /// <summary>
+    /// Maximum extraction units permitted by file policy.
+    /// </summary>
+    internal int MaxUnits => _fileHandlingOptions.MaxUnits;
+
+    /// <summary>
     /// Creates text codec instance.
     /// </summary>
     /// <param name="options">Active Office processing options.</param>
@@ -38,71 +43,52 @@ public sealed class OfficeTextCodec
     /// <returns>Plain or structured encoded string.</returns>
     public string Encode(OfficeTextTemplate template)
     {
-        using var trace = DebugTrace.Enter("OfficeTextCodec", "Encode", () => new
+        if (template.Mode == UnitMode.Plain)
         {
-            mode = template.Mode.ToString(),
-            slotCount = template.Slots.Count,
-            anchorCount = template.Anchors.Count
-        });
+            return template.Slots.Count > 0 ? template.Slots[0].OriginalText : string.Empty;
+        }
 
-        try
+        var sb = new StringBuilder();
+        if (template.Order is not null)
         {
-            if (template.Mode == UnitMode.Plain)
+            var slotsById = template.Slots.ToDictionary(s => s.SlotId);
+            foreach (var id in template.Order)
             {
-                var text = template.Slots.Count > 0 ? template.Slots[0].OriginalText : string.Empty;
-                trace.State("sourceText", () => text);
-                return trace.Return<string>(text);
-            }
-
-            var sb = new StringBuilder();
-            if (template.Order is not null)
-            {
-                var slotsById = template.Slots.ToDictionary(s => s.SlotId);
-                foreach (var id in template.Order)
+                if (slotsById.TryGetValue(id, out var slot))
                 {
-                    if (slotsById.TryGetValue(id, out var slot))
-                    {
-                        sb.Append(TranslationTokenSyntax.Open(id));
-                        TranslationTokenSyntax.AppendEscaped(sb, slot.OriginalText);
-                        sb.Append(TranslationTokenSyntax.Close(id));
-                    }
-                    else sb.Append(TranslationTokenSyntax.Anchor(id));
-                }
-                return trace.Return<string>(sb.ToString());
-            }
-            var slotIndex = 0;
-            var anchorIndex = 0;
-
-            // In structured mode, weave slots and anchors based on template order
-            // If template specifies slots and anchors sequentially:
-            while (slotIndex < template.Slots.Count || anchorIndex < template.Anchors.Count)
-            {
-                if (slotIndex < template.Slots.Count)
-                {
-                    var slot = template.Slots[slotIndex];
-                    sb.Append(TranslationTokenSyntax.Open(slot.SlotId));
+                    sb.Append(TranslationTokenSyntax.Open(id));
                     TranslationTokenSyntax.AppendEscaped(sb, slot.OriginalText);
-                    sb.Append(TranslationTokenSyntax.Close(slot.SlotId));
-                    slotIndex++;
+                    sb.Append(TranslationTokenSyntax.Close(id));
                 }
+                else sb.Append(TranslationTokenSyntax.Anchor(id));
+            }
+            return sb.ToString();
+        }
+        var slotIndex = 0;
+        var anchorIndex = 0;
 
-                if (anchorIndex < template.Anchors.Count)
-                {
-                    var anchor = template.Anchors[anchorIndex];
-                    sb.Append(TranslationTokenSyntax.Anchor(anchor.AnchorId));
-                    anchorIndex++;
-                }
+        // In structured mode, weave slots and anchors based on template order
+        // If template specifies slots and anchors sequentially:
+        while (slotIndex < template.Slots.Count || anchorIndex < template.Anchors.Count)
+        {
+            if (slotIndex < template.Slots.Count)
+            {
+                var slot = template.Slots[slotIndex];
+                sb.Append(TranslationTokenSyntax.Open(slot.SlotId));
+                TranslationTokenSyntax.AppendEscaped(sb, slot.OriginalText);
+                sb.Append(TranslationTokenSyntax.Close(slot.SlotId));
+                slotIndex++;
             }
 
-            var encoded = sb.ToString();
-            trace.State("sourceText", () => encoded);
-            return trace.Return<string>(encoded);
+            if (anchorIndex < template.Anchors.Count)
+            {
+                var anchor = template.Anchors[anchorIndex];
+                sb.Append(TranslationTokenSyntax.Anchor(anchor.AnchorId));
+                anchorIndex++;
+            }
         }
-        catch (Exception ex)
-        {
-            trace.Error(ex);
-            throw;
-        }
+
+        return sb.ToString();
     }
 
     /// <summary>
@@ -119,61 +105,64 @@ public sealed class OfficeTextCodec
         OfficeFormat format,
         CancellationToken cancellationToken)
     {
-        using var trace = DebugTrace.Enter("OfficeTextCodec", "ValidateAndDecode", () => new
+        if (texts.Count != units.Count)
         {
-            unitCount = units.Count,
-            translationCount = texts.Count
-        });
+            var error = new FileError("translation_count_mismatch", ProcessingMessages.TranslationCountMismatch(units.Count, texts.Count));
+            return OfficeDecodeResult.Failure([error]);
+        }
 
-        try
+        var errors = new List<FileError>();
+        var decodedUnits = new List<OfficeDecodedUnit>(units.Count);
+        long totalTranslationChars = 0;
+
+        for (var i = 0; i < units.Count; i++)
         {
-            trace.State("stage", () => "checkCount");
-            if (texts.Count != units.Count)
-            {
-                var error = new FileError("translation_count_mismatch", $"Số lượng bản dịch ({texts.Count}) không khớp với số lượng đơn vị ({units.Count}).");
-                trace.Return(new { outcome = "failed", errorCodes = new[] { error.Code } });
-                return OfficeDecodeResult.Failure(new[] { error });
-            }
+            cancellationToken.ThrowIfCancellationRequested();
 
-            trace.State("stage", () => "decodeUnits");
-            var errors = new List<FileError>();
-            var decodedUnits = new List<OfficeDecodedUnit>(units.Count);
-            long totalTranslationChars = 0;
-
-            for (var i = 0; i < units.Count; i++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (errors.Count >= _options.MaxErrors)
-                    break;
-
-                var unit = units[i];
-                var rawText = texts[i];
-
-                using var item = DebugTrace.Item(i + 1);
-                item.State("encodedInput", () => rawText);
+            var unit = units[i];
+            var rawText = texts[i];
+            decodedUnits.Add(new OfficeDecodedUnit(i, unit.EncodedSource, unit.Slots.Select(s => s.OriginalText).ToArray()));
 
                 if (rawText is null)
                 {
-                    errors.Add(new FileError("invalid_translation", "Bản dịch không được là null.") { Index = i });
+                    errors.Add(new FileError(SkipCodes.InvalidTranslation, ProcessingMessages.NullTranslation) { Index = i });
                     continue;
                 }
 
                 if (rawText.Length > _fileHandlingOptions.MaxTranslationChars)
                 {
-                    errors.Add(new FileError("translation_too_long", $"Độ dài bản dịch ({rawText.Length}) vượt quá giới hạn ({_fileHandlingOptions.MaxTranslationChars}).") { Index = i });
+                    errors.Add(new FileError("translation_too_long", ProcessingMessages.TranslationLengthLimit(rawText.Length, _fileHandlingOptions.MaxTranslationChars)) { Index = i });
                     continue;
                 }
 
                 totalTranslationChars += rawText.Length;
                 if (totalTranslationChars > _options.MaxTotalTranslationChars)
                 {
-                    errors.Add(new FileError("office_translation_limit_exceeded", $"Tổng độ dài các chuỗi dịch ({totalTranslationChars}) vượt quá giới hạn ({_options.MaxTotalTranslationChars}).") { Index = i });
+                    errors.Add(new FileError("office_translation_limit_exceeded", ProcessingMessages.TotalTranslationLimit(totalTranslationChars, _options.MaxTotalTranslationChars)) { Index = i });
                     break;
                 }
 
+                if (unit.Kind == OfficeUnitKinds.SheetName && !string.IsNullOrWhiteSpace(rawText))
+                {
+                    try
+                    {
+                        Utf8TextReader.GetByteCount(rawText.AsSpan());
+                        if (!IsValidUnicodeAndXml(ExcelRenamePlanner.Normalize(rawText)))
+                        {
+                            errors.Add(new(SkipCodes.InvalidTranslation, ProcessingMessages.InvalidXmlText) { Index = i });
+                            continue;
+                        }
+                        decodedUnits[i] = new(i, rawText, [rawText]);
+                    }
+                    catch (EncoderFallbackException)
+                    {
+                        errors.Add(new(SkipCodes.InvalidTranslation, ProcessingMessages.InvalidUnicode) { Index = i });
+                    }
+                    continue;
+                }
                 if (!IsValidUnicodeAndXml(rawText))
                 {
-                    errors.Add(new FileError("invalid_translation", "Chuỗi dịch chứa ký tự Unicode hoặc ký tự điều khiển XML không hợp lệ.") { Index = i });
+                    errors.Add(new FileError(SkipCodes.InvalidTranslation, ProcessingMessages.InvalidXmlText) { Index = i });
                     continue;
                 }
 
@@ -181,13 +170,13 @@ public sealed class OfficeTextCodec
                 {
                     if (string.IsNullOrWhiteSpace(rawText))
                     {
-                        errors.Add(new FileError("empty_translation", "Bản dịch không được để trống hoặc chỉ chứa khoảng trắng.") { Index = i });
+                        errors.Add(new FileError(SkipCodes.EmptyTranslation, ProcessingMessages.EmptyTranslation) { Index = i });
                         continue;
                     }
 
                     if (format != OfficeFormat.Excel && (rawText.Contains('\r') || rawText.Contains('\n') || rawText.Contains('\t')))
                     {
-                        errors.Add(new FileError("invalid_translation", "Văn bản Word và PowerPoint không được chứa ký tự xuống dòng hoặc tab thô trong bản dịch.") { Index = i });
+                        errors.Add(new FileError(SkipCodes.InvalidTranslation, ProcessingMessages.RawOfficeWhitespace) { Index = i });
                         continue;
                     }
 
@@ -197,18 +186,18 @@ public sealed class OfficeTextCodec
                         slotText = NormalizeExcelNewlines(rawText);
                         if (slotText.Length > _options.MaxCellTextChars)
                         {
-                            errors.Add(new FileError("office_translation_limit_exceeded", $"Độ dài ô Excel ({slotText.Length}) vượt quá giới hạn ({_options.MaxCellTextChars}).") { Index = i });
+                            errors.Add(new FileError("office_translation_limit_exceeded", ProcessingMessages.CellTextLimit(slotText.Length, _options.MaxCellTextChars)) { Index = i });
                             continue;
                         }
                     }
 
-                    decodedUnits.Add(new OfficeDecodedUnit(i, rawText, new[] { slotText }));
+                    decodedUnits[i] = new OfficeDecodedUnit(i, rawText, new[] { slotText });
                 }
                 else
                 {
                     if (string.IsNullOrWhiteSpace(rawText))
                     {
-                        errors.Add(new FileError("empty_translation", "Bản dịch có cấu trúc không được rỗng.") { Index = i });
+                        errors.Add(new FileError(SkipCodes.EmptyTranslation, ProcessingMessages.EmptyTranslation) { Index = i });
                         continue;
                     }
 
@@ -218,28 +207,18 @@ public sealed class OfficeTextCodec
                         continue;
                     }
 
-                    decodedUnits.Add(new OfficeDecodedUnit(i, rawText, decodedSlots!));
+                    decodedUnits[i] = new OfficeDecodedUnit(i, rawText, decodedSlots!);
                 }
             }
 
-            if (errors.Count > 0)
-            {
-                trace.Return(new { outcome = "failed", errorCount = errors.Count });
-                return OfficeDecodeResult.Failure(errors);
-            }
-
-            trace.Return(new { outcome = "success", decodedCount = decodedUnits.Count });
-            return OfficeDecodeResult.Success(decodedUnits);
-        }
-        catch (OperationCanceledException)
+        var fatal = errors.Where(e => e.Code is "translation_too_long" or "office_translation_limit_exceeded" or "office_plan_limit_exceeded" ||
+            e.Index is int index && texts[index] is null).ToArray();
+        if (fatal.Length > 0) return OfficeDecodeResult.Failure(fatal);
+        return OfficeDecodeResult.Success(decodedUnits) with
         {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            trace.Error(ex);
-            throw;
-        }
+            Skipped = errors.Select(e => new SkipMetadata(e.Code, SkipSeverity.Warning, SkipStage.Translation, SkipScope.Unit, 1,
+                e.Message, OfficeMetadata.Location(units[e.Index!.Value].Location), e.Index)).ToArray()
+        };
     }
 
     /// <summary>
@@ -272,7 +251,7 @@ public sealed class OfficeTextCodec
 
         if (totalTokens > _options.MaxTokensPerUnit)
         {
-            error = new FileError("office_plan_limit_exceeded", $"Số lượng token của đơn vị ({totalTokens}) vượt quá giới hạn ({_options.MaxTokensPerUnit}).") { Index = unitIndex };
+            error = new FileError("office_plan_limit_exceeded", ProcessingMessages.UnitTokenLimit(totalTokens, _options.MaxTokensPerUnit)) { Index = unitIndex };
             return false;
         }
 
@@ -284,14 +263,14 @@ public sealed class OfficeTextCodec
         {
             if (input[pos] != '<')
             {
-                error = new FileError("office_token_mismatch", "Ký tự văn bản nằm ngoài thẻ token không được cho phép.") { Index = unitIndex };
+                error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.TextOutsideToken) { Index = unitIndex };
                 return false;
             }
 
             // Must start with <ox:
             if (pos + 4 >= len || input[pos + 1] != 'o' || input[pos + 2] != 'x' || input[pos + 3] != ':')
             {
-                error = new FileError("office_token_mismatch", "Thẻ không hợp lệ; mọi token phải bắt đầu bằng '<ox:'.") { Index = unitIndex };
+                error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.InvalidTokenPrefix) { Index = unitIndex };
                 return false;
             }
 
@@ -303,14 +282,14 @@ public sealed class OfficeTextCodec
 
             if (pos >= len)
             {
-                error = new FileError("office_token_mismatch", "Thẻ token không được đóng đúng cú pháp.") { Index = unitIndex };
+                error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.UnterminatedToken) { Index = unitIndex };
                 return false;
             }
 
             var tagName = input[tagStart..pos];
             if (tokenIndex >= expectedOrder.Count || expectedOrder[tokenIndex++] != tagName)
             {
-                error = new FileError("office_token_mismatch", "Thứ tự token không khớp với nguồn.") { Index = unitIndex };
+                error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.TokenOrder) { Index = unitIndex };
                 return false;
             }
 
@@ -320,13 +299,13 @@ public sealed class OfficeTextCodec
                 pos += 2;
                 if (!tagName.StartsWith('k'))
                 {
-                    error = new FileError("office_token_mismatch", $"Thẻ tự đóng không hợp lệ: <ox:{tagName}/>.") { Index = unitIndex, Marker = tagName };
+                    error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.InvalidSelfClosingToken(tagName)) { Index = unitIndex, Marker = tagName };
                     return false;
                 }
 
                 if (expectedAnchorIndex >= unit.Anchors.Count || unit.Anchors[expectedAnchorIndex].AnchorId != tagName)
                 {
-                    error = new FileError("office_token_mismatch", $"Anchor token không khớp với mẫu gốc: gặp {tagName}.") { Index = unitIndex, Marker = tagName };
+                    error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.MismatchedAnchor(tagName)) { Index = unitIndex, Marker = tagName };
                     return false;
                 }
 
@@ -338,13 +317,13 @@ public sealed class OfficeTextCodec
                 pos++;
                 if (!tagName.StartsWith('r'))
                 {
-                    error = new FileError("office_token_mismatch", $"Thẻ mở không hợp lệ: <ox:{tagName}>.") { Index = unitIndex, Marker = tagName };
+                    error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.InvalidOpeningToken(tagName)) { Index = unitIndex, Marker = tagName };
                     return false;
                 }
 
                 if (expectedSlotIndex >= unit.Slots.Count || unit.Slots[expectedSlotIndex].SlotId != tagName)
                 {
-                    error = new FileError("office_token_mismatch", $"Slot token không khớp với mẫu gốc: gặp {tagName}.") { Index = unitIndex, Marker = tagName };
+                    error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.MismatchedSlot(tagName)) { Index = unitIndex, Marker = tagName };
                     return false;
                 }
 
@@ -359,7 +338,7 @@ public sealed class OfficeTextCodec
                     {
                         if (pos + 1 >= len)
                         {
-                            error = new FileError("office_token_mismatch", "Ký tự escape '\\' bị bỏ lửng ở cuối chuỗi.") { Index = unitIndex, Marker = tagName };
+                            error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.DanglingEscape) { Index = unitIndex, Marker = tagName };
                             return false;
                         }
                         var next = input[pos + 1];
@@ -370,14 +349,14 @@ public sealed class OfficeTextCodec
                         }
                         else
                         {
-                            error = new FileError("office_token_mismatch", $"Ký tự escape '\\{next}' không hợp lệ; chỉ '\\\\' và '\\<' được cho phép.") { Index = unitIndex, Marker = tagName };
+                            error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.InvalidEscape(next)) { Index = unitIndex, Marker = tagName };
                             return false;
                         }
                     }
                     else if (input[pos] == '<')
                     {
                         // Check if it's the closing tag
-                        if (pos + closingTag.Length <= len && input.Substring(pos, closingTag.Length) == closingTag)
+                        if (input.AsSpan(pos).StartsWith(closingTag, StringComparison.Ordinal))
                         {
                             pos += closingTag.Length;
                             closed = true;
@@ -385,7 +364,7 @@ public sealed class OfficeTextCodec
                         }
                         else
                         {
-                            error = new FileError("office_token_mismatch", "Ký tự '<' bên trong slot phải được escape dạng '\\<'.") { Index = unitIndex, Marker = tagName };
+                            error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.UnescapedSlotTag) { Index = unitIndex, Marker = tagName };
                             return false;
                         }
                     }
@@ -398,20 +377,14 @@ public sealed class OfficeTextCodec
 
                 if (!closed)
                 {
-                    error = new FileError("office_token_mismatch", $"Thiếu thẻ đóng {closingTag}.") { Index = unitIndex, Marker = tagName };
+                    error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.MissingClosingToken(closingTag)) { Index = unitIndex, Marker = tagName };
                     return false;
                 }
 
                 var slotText = slotContentSb.ToString();
-                if (string.IsNullOrWhiteSpace(slotText))
-                {
-                    error = new FileError("empty_translation", $"Slot {tagName} không được để trống hoặc chỉ chứa khoảng trắng.") { Index = unitIndex, Marker = tagName };
-                    return false;
-                }
-
                 if (format != OfficeFormat.Excel && (slotText.Contains('\r') || slotText.Contains('\n') || slotText.Contains('\t')))
                 {
-                    error = new FileError("invalid_translation", $"Slot {tagName} chứa ký tự xuống dòng hoặc tab không được phép trong Word/PowerPoint.") { Index = unitIndex, Marker = tagName };
+                    error = new FileError(SkipCodes.InvalidTranslation, ProcessingMessages.InvalidSlotWhitespace(tagName)) { Index = unitIndex, Marker = tagName };
                     return false;
                 }
 
@@ -421,7 +394,7 @@ public sealed class OfficeTextCodec
                     totalCellChars += slotText.Length;
                     if (totalCellChars > _options.MaxCellTextChars)
                     {
-                        error = new FileError("office_translation_limit_exceeded", $"Tổng độ dài ô Excel vượt quá giới hạn ({_options.MaxCellTextChars}).") { Index = unitIndex, Marker = tagName };
+                        error = new FileError("office_translation_limit_exceeded", ProcessingMessages.TotalCellTextLimit(_options.MaxCellTextChars)) { Index = unitIndex, Marker = tagName };
                         return false;
                     }
                 }
@@ -431,14 +404,20 @@ public sealed class OfficeTextCodec
             }
             else
             {
-                error = new FileError("office_token_mismatch", "Cú pháp token không hợp lệ.") { Index = unitIndex };
+                error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.InvalidTokenSyntax) { Index = unitIndex };
                 return false;
             }
         }
 
         if (expectedSlotIndex != unit.Slots.Count || expectedAnchorIndex != unit.Anchors.Count)
         {
-            error = new FileError("office_token_mismatch", "Số lượng hoặc thứ tự token không khớp với mẫu gốc của đơn vị dịch.") { Index = unitIndex };
+            error = new FileError(SkipCodes.OfficeTokenMismatch, ProcessingMessages.TokenCount) { Index = unitIndex };
+            return false;
+        }
+
+        if (slots.All(string.IsNullOrWhiteSpace))
+        {
+            error = new FileError(SkipCodes.EmptyTranslation, ProcessingMessages.EmptySlots) { Index = unitIndex };
             return false;
         }
 

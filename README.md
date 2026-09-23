@@ -119,9 +119,11 @@ Frontend route: `/document-translation` (`Translate Docs` tab). The UI translate
 
 Codex CLI must be installed and logged in on the machine running Node. FileHandler defaults to `http://<current-web-host>:5001` in the web UI; override this with `window.CONTRACK_CONFIG.fileHandlerBase` in `config.js`, then `VITE_FILEHANDLER_BASE` at build time. For direct Node requests without a URL, `CONTRACK_FILEHANDLER_BASE_URL` takes precedence over `http://127.0.0.1:5001`. OpenXML keeps port 5000 and its existing `openXmlBase`, `VITE_OPENXML_BASE`, and `CONTRACK_OPENXML_BASE_URL` settings.
 
-Health, extraction, and translation requests accept `file_processor` (`filehandler` or `openxml`, default `openxml`) and `filehandler_base_url`. The web UI sends the shared admin setting. Camel-case aliases `fileProcessor` and `fileHandlerBaseUrl` are also accepted. Health returns `file_processor`, `processor: { ok, base_url, message }`, `codex`, and `defaults`; overall readiness checks only the selected processor and Codex. Translation results include the processor and its URL. FileHandler does not support the sheets endpoint or explicit sheet selection.
+Health, discovery, extraction, and translation requests accept `file_processor` (`filehandler` or `openxml`, default `openxml`) and `filehandler_base_url`. The web UI sends the shared admin setting. Camel-case aliases `fileProcessor` and `fileHandlerBaseUrl` are also accepted. Health returns `file_processor`, `processor: { ok, base_url, message }`, `codex`, and `defaults`; overall readiness checks only the selected processor and Codex. Translation results include the processor, its URL, and FileHandler export `metadata` when applicable.
 
-FileHandler multipart export sends `file` and one `translatedTexts` JSON-array field. Node preserves segment order and skipped segments; structured Markdown/Office prompts require preservation of all `ox:r`/`ox:k` tokens and escapes. TXT remains literal text. API error codes, indices, and source lines appear in job logs. Empty imports stop with a no-text message. FileHandler requests use the selected timeout (health checks use 3 seconds), and canceling a job aborts active requests before output is written. Existing explicit output paths are not overwritten in FileHandler mode.
+FileHandler routes `.txt`, `.md`, `.docx`, `.xlsx`, and `.pptx` to `/api/plaintext`, `/api/markdown`, `/api/word`, `/api/excel`, and `/api/powerpoint`, respectively. Import reads `{ texts, metadata, errors }`; export sends `file` and a `texts` JSON-array field and parses `multipart/mixed` as bytes, writing only the `<file>` attachment. Node preserves segment order and skipped segments; structured Markdown/Office prompts require preservation of all `ox:r`/`ox:k` tokens and escapes. TXT remains literal text. API error codes, indices, source lines, and partial-processing warnings appear in job logs. Empty imports stop with a no-text message. FileHandler requests use the selected timeout (health checks use 3 seconds), and canceling a job aborts active requests before output is written. Existing explicit output paths are not overwritten in FileHandler mode.
+
+In FileHandler mode, `POST /document-translation/sheets` returns native Excel sheet objects (`sheetId`, `name`, `state`, `canImport`, etc.); `POST /document-translation/slides` returns PowerPoint slide objects (`slideId`, `title`, `hidden`, etc.). They map to `/api/excel/sheets` and `/api/powerpoint/slides`. Extraction and translation accept `sheetIds`/`sheet_ids` or `slideIds`/`slide_ids` as arrays of source ID strings: omit to process visible parts, pass `[]` to select nothing, or include hidden IDs explicitly. The same source snapshot and selection are sent for import and export. Excel imports include sheet-name translation units. OpenXML retains its sheet-name array and `sheets` selection contract. FileHandler extraction also returns `metadata`; passing `debug: true` reads the `units.json` attachment and returns `units` for source mapping. The translation UI uses the default visible selection.
 
 `docker compose up --build -d` includes FileHandler at port **5001**, with `GET /health` for readiness; OpenXML stays at **5000**. FileHandler uses the published `sdk:10.0-alpine` and `aspnet:10.0-alpine` images. Its `global.json` selects the latest installed stable .NET 10.0 SDK feature band (`latestFeature`), starting from 10.0.100. Debug tracing is disabled by default in Compose; it can be enabled through `DebugTrace__Enabled`. For a standalone development API on the same port, run `dotnet run --project filehandler/src/FileHandler.Api --no-launch-profile --urls http://127.0.0.1:5001` with a compatible .NET 10 SDK.
 
@@ -135,10 +137,13 @@ Verification commands (use `npm.cmd` on Windows if PowerShell blocks `npm.ps1`):
 
 ```bash
 npm run build
+node --test local-server/tests/filehandler-client.test.cjs
 dotnet test filehandler/FileHandler.sln
 docker compose config --quiet
 docker compose build filehandler
 ```
+
+Set `CT_FILEHANDLER_TEST_URL` to a running FileHandler base URL to include the live TXT/Markdown round-trip test in the Node suite.
 
 ## Build web + local server
 

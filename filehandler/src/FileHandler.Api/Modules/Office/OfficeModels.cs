@@ -216,7 +216,19 @@ public sealed record OfficeLocation(
     string? ShapeId = null,
     string? TableLocation = null,
     int? RowIndex = null,
-    int? ColumnIndex = null);
+    int? ColumnIndex = null)
+{
+
+    /// <summary>
+    /// Actual part root for root-inclusive public paths.
+    /// </summary>
+    public OfficeElementPathSegment? Root { get; init; }
+
+    /// <summary>
+    /// Native workbook sheet identifier.
+    /// </summary>
+    public string? SheetId { get; init; }
+}
 
 /// <summary>
 /// Mutable text slot corresponding to format run or cell text.
@@ -278,7 +290,14 @@ public sealed record OfficeTranslationUnit(
     IReadOnlyList<OfficeTextSlot> Slots,
     IReadOnlyList<OfficeProtectedAnchor> Anchors,
     IReadOnlyList<OfficeTextBinding> Bindings,
-    string OriginalPlainTextHash);
+    string OriginalPlainTextHash)
+{
+
+    /// <summary>
+    /// Semantic unit kind, including dedicated worksheet name units.
+    /// </summary>
+    public string Kind { get; init; } = "paragraph";
+}
 
 /// <summary>
 /// Semantic document object discovered during package inspection.
@@ -367,13 +386,18 @@ public sealed record OfficeInventory(
 /// <summary>
 /// Owned immutable source snapshot for Office processing.
 /// </summary>
-public sealed class OfficeSource : IDisposable
+public sealed partial class OfficeSource : IDisposable
 {
 
     /// <summary>
-    /// Owned immutable byte array of original document.
+    /// Request-local extraction facts retained when mapping cannot complete.
     /// </summary>
-    public byte[] OriginalBytes { get; }
+    internal FileMetadata? ProcessingMetadata { get; set; }
+
+    /// <summary>
+    /// Independent copy of original document bytes for external callers.
+    /// </summary>
+    public byte[] OriginalBytes => Bytes.ToArray();
 
     /// <summary>
     /// Hexadecimal lowercase SHA-256 digest of original bytes.
@@ -408,14 +432,7 @@ public sealed class OfficeSource : IDisposable
         string sourceHash,
         OfficeFormat format,
         OfficeProcessingOptions limits,
-        string profileVersion = "office-v1")
-    {
-        OriginalBytes = originalBytes;
-        SourceHash = sourceHash;
-        Format = format;
-        Limits = limits;
-        ProfileVersion = profileVersion;
-    }
+        string profileVersion = "office-v1") : this(originalBytes, sourceHash, format, limits, profileVersion, false) { }
 
     /// <summary>
     /// Disposes resources held by source.
@@ -476,6 +493,11 @@ public sealed record OfficeDecodeResult(IReadOnlyList<OfficeDecodedUnit>? Decode
 {
 
     /// <summary>
+    /// Invalid translation units retained directly from source.
+    /// </summary>
+    public IReadOnlyList<SkipMetadata> Skipped { get; init; } = [];
+
+    /// <summary>
     /// Creates successful decode result.
     /// </summary>
     /// <param name="decodedUnits">Decoded unit list.</param>
@@ -525,7 +547,24 @@ public sealed record OfficeEditMask(
     IReadOnlyList<string> AllowedElementPaths,
     bool SstOptionalCountersRemoved = false,
     IReadOnlyDictionary<string, OfficeScalarEdit>? ScalarEdits = null,
-    IReadOnlyList<string>? AppendedXml = null);
+    IReadOnlyList<string>? AppendedXml = null)
+{
+
+    /// <summary>
+    /// Exact attribute edits, limited to explicitly planned rename references.
+    /// </summary>
+    public IReadOnlyList<OfficeAttributeEdit> AttributeEdits { get; init; } = [];
+}
+
+/// <summary>
+/// Exact attribute modification with expected source value.
+/// </summary>
+/// <param name="ElementPath">Canonical root-relative element key.</param>
+/// <param name="NamespaceUri">Attribute namespace URI.</param>
+/// <param name="LocalName">Attribute local name.</param>
+/// <param name="SourceValue">Expected original value.</param>
+/// <param name="Value">Planned replacement value.</param>
+public sealed record OfficeAttributeEdit(string ElementPath, string NamespaceUri, string LocalName, string SourceValue, string Value);
 
 /// <summary>
 /// Expected immutable source hash and translated scalar value.
@@ -588,40 +627,6 @@ public static class OfficeIdentity
             AppendLengthPrefixed(sb, segment.SiblingOrdinal.ToString());
         }
         AppendLengthPrefixed(sb, localOrdinal.ToString());
-        var bytes = Encoding.UTF8.GetBytes(sb.ToString());
-        return Convert.ToHexStringLower(SHA256.HashData(bytes));
-    }
-
-    /// <summary>
-    /// Builds deterministic lowercase 64-hex SHA-256 object identifier.
-    /// </summary>
-    /// <param name="profileVersion">Profile version identifier.</param>
-    /// <param name="sourceHash">Hexadecimal SHA-256 of source file.</param>
-    /// <param name="format">Document format.</param>
-    /// <param name="partUri">Canonical part URI.</param>
-    /// <param name="kind">Object kind.</param>
-    /// <param name="elementPath">Hierarchical element path.</param>
-    /// <returns>Deterministic 64-hex SHA-256 object ID.</returns>
-    public static string CreateObjectId(
-        string profileVersion,
-        string sourceHash,
-        OfficeFormat format,
-        string partUri,
-        OfficeObjectKind kind,
-        IReadOnlyList<OfficeElementPathSegment> elementPath)
-    {
-        var sb = new StringBuilder();
-        AppendLengthPrefixed(sb, profileVersion);
-        AppendLengthPrefixed(sb, sourceHash);
-        AppendLengthPrefixed(sb, format.ToString());
-        AppendLengthPrefixed(sb, partUri);
-        AppendLengthPrefixed(sb, kind.ToString());
-        foreach (var segment in elementPath)
-        {
-            AppendLengthPrefixed(sb, segment.NamespaceUri);
-            AppendLengthPrefixed(sb, segment.LocalName);
-            AppendLengthPrefixed(sb, segment.SiblingOrdinal.ToString());
-        }
         var bytes = Encoding.UTF8.GetBytes(sb.ToString());
         return Convert.ToHexStringLower(SHA256.HashData(bytes));
     }

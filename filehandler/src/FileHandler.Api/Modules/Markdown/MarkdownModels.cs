@@ -1,5 +1,4 @@
 using FileHandler.Api.Common;
-using FileHandler.Api.Diagnostics;
 
 namespace FileHandler.Api.Modules.Markdown;
 
@@ -26,17 +25,8 @@ internal sealed record LineMap(int[] Starts)
     /// <returns>One-based line number containing this offset.</returns>
     public int GetLine(int offset)
     {
-        using var trace = DebugTrace.Enter("LineMap", "GetLine", () => new { offset });
-        try
-        {
-            var index = Array.BinarySearch(Starts, Math.Max(0, offset));
-            return trace.Return<int>(index >= 0 ? index + 1 : ~index);
-        }
-        catch (Exception traceError)
-        {
-            trace.Error(traceError);
-            throw;
-        }
+        var index = Array.BinarySearch(Starts, Math.Max(0, offset));
+        return index >= 0 ? index + 1 : ~index;
     }
 
     /// <summary>
@@ -47,16 +37,7 @@ internal sealed record LineMap(int[] Starts)
     /// <returns>Inclusive, one-based source line range.</returns>
     public SourceLineRange GetRange(int start, int end)
     {
-        using var trace = DebugTrace.Enter("LineMap", "GetRange", () => new { start, end });
-        try
-        {
-            return trace.Return<SourceLineRange>(new(GetLine(start), GetLine(Math.Max(start, end - 1))));
-        }
-        catch (Exception traceError)
-        {
-            trace.Error(traceError);
-            throw;
-        }
+        return new(GetLine(start), GetLine(Math.Max(start, end - 1)));
     }
 }
 
@@ -84,7 +65,14 @@ internal enum MarkerKind
 /// <param name="Kind">Marker&apos;s preservation behavior.</param>
 /// <param name="OpenSource">Source restored at opening marker.</param>
 /// <param name="CloseSource">Source restored at closing marker.</param>
-internal sealed record MarkerDefinition(int Id, MarkerKind Kind, string OpenSource, string CloseSource);
+internal sealed record MarkerDefinition(int Id, MarkerKind Kind, string OpenSource, string CloseSource)
+{
+
+    /// <summary>
+    /// Whether empty emphasis delimiters can be omitted during restoration.
+    /// </summary>
+    public bool IsEmphasis { get; init; }
+}
 
 /// <summary>
 /// Translatable source span with preservation metadata.
@@ -98,7 +86,29 @@ internal sealed record MarkerDefinition(int Id, MarkerKind Kind, string OpenSour
 /// <param name="NewlineReplacement">Source newline sequence and any required prefix.</param>
 /// <param name="HasSoftBreak">Whether unit contains soft line break.</param>
 /// <param name="TokenTemplate">Public run and anchor mapping, when extracted from Markdown.</param>
-internal sealed record MarkdownUnit(int Start, int End, string Text, IReadOnlyDictionary<int, MarkerDefinition> Markers, SourceLineRange Line, bool IsHeading, string NewlineReplacement, bool HasSoftBreak, MarkdownTokenTemplate? TokenTemplate = null);
+internal sealed record MarkdownUnit(int Start, int End, string Text, IReadOnlyDictionary<int, MarkerDefinition> Markers, SourceLineRange Line, bool IsHeading, string NewlineReplacement, bool HasSoftBreak, MarkdownTokenTemplate? TokenTemplate = null)
+{
+
+    /// <summary>
+    /// Inclusive enclosing block start for local structure validation.
+    /// </summary>
+    public int? BlockStart { get; init; }
+
+    /// <summary>
+    /// Exclusive enclosing block end for local structure validation.
+    /// </summary>
+    public int? BlockEnd { get; init; }
+
+    /// <summary>
+    /// Whether translated text requires Mermaid label encoding instead of Markdown escaping.
+    /// </summary>
+    public bool IsMermaidLabel { get; init; }
+
+    /// <summary>
+    /// Whether Mermaid label requires enclosing double quotes on export.
+    /// </summary>
+    public bool MermaidQuoted { get; init; }
+}
 
 /// <summary>
 /// Extracted units and document validation metadata.
@@ -107,13 +117,20 @@ internal sealed record MarkdownUnit(int Start, int End, string Text, IReadOnlyDi
 /// <param name="Units">Translation units in source order.</param>
 /// <param name="Errors">Extraction errors.</param>
 /// <param name="HasInternalLinks">Whether document contains internal anchor links.</param>
-internal sealed record MarkdownExtraction(MarkdownSource Source, IReadOnlyList<MarkdownUnit> Units, IReadOnlyList<FileError> Errors, bool HasInternalLinks = false);
+internal sealed record MarkdownExtraction(MarkdownSource Source, IReadOnlyList<MarkdownUnit> Units, IReadOnlyList<FileError> Errors, bool HasInternalLinks = false)
+{
+
+    /// <summary>
+    /// Protected source blocks and inline objects excluded during extraction.
+    /// </summary>
+    public IReadOnlyList<SkipMetadata> Skipped { get; init; } = [];
+}
 
 /// <summary>
 /// Encoded inline text and its original source span.
 /// </summary>
-/// <param name="Text">Text with preservation markers.</param>
+/// <param name="Tokens">Typed text and syntax bindings without serialized markers.</param>
 /// <param name="Start">Inclusive start character offset.</param>
 /// <param name="End">Exclusive end character offset.</param>
 /// <param name="Markers">Marker definitions keyed by ID.</param>
-internal sealed record EncodedInline(string Text, int Start, int End, IReadOnlyDictionary<int, MarkerDefinition> Markers);
+internal sealed record EncodedInline(IReadOnlyList<MarkerToken> Tokens, int Start, int End, IReadOnlyDictionary<int, MarkerDefinition> Markers);

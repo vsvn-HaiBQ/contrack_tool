@@ -1,9 +1,9 @@
+using System.Buffers;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml;
 using FileHandler.Api.Common;
-using FileHandler.Api.Diagnostics;
 
 namespace FileHandler.Api.Modules.Office;
 
@@ -41,19 +41,6 @@ public sealed class OfficePackageReader
     }
 
     /// <summary>
-    /// Computes CRC-32 checksum for byte buffer.
-    /// </summary>
-    /// <param name="data">Data buffer to process.</param>
-    /// <returns>Computed 32-bit CRC checksum.</returns>
-    public static uint ComputeCrc32(ReadOnlySpan<byte> data)
-    {
-        uint crc = 0xFFFFFFFFu;
-        foreach (var b in data)
-            crc = (crc >> 8) ^ CrcTable[(crc & 0xFF) ^ b];
-        return crc ^ 0xFFFFFFFFu;
-    }
-
-    /// <summary>
     /// Creates package reader instance.
     /// </summary>
     /// <param name="options">Active processing options.</param>
@@ -74,44 +61,25 @@ public sealed class OfficePackageReader
         OfficeFormat expectedFormat,
         CancellationToken cancellationToken)
     {
-        using var trace = DebugTrace.Enter("OfficePackageReader", "ReadAsync", () => new
-        {
-            expectedFormat,
-            sourceCanRead = sourceStream.CanRead,
-            sourceCanSeek = sourceStream.CanSeek
-        });
-
         try
         {
-            trace.State("stage", () => "readBytes");
             using var ms = new MemoryStream();
             await sourceStream.CopyToAsync(ms, cancellationToken).ConfigureAwait(false);
             var bytes = ms.ToArray();
-            trace.State("bytesRead", () => bytes.Length);
 
             if (bytes.Length < 4)
-            {
-                trace.Return(new { outcome = "failed", code = "invalid_office_package" });
-                return OfficeReadResult.Failure(new[] { new FileError("invalid_office_package", "Kích thước tệp không hợp lệ.") });
-            }
+                return OfficeReadResult.Failure([new FileError("invalid_office_package", ProcessingMessages.InvalidFileSize)]);
 
             // Check for OLE compound document magic: D0 CF 11 E0 A1 B1 1A E1
             if (bytes.Length >= 8 && bytes[0] == 0xD0 && bytes[1] == 0xCF && bytes[2] == 0x11 && bytes[3] == 0xE0)
-            {
-                trace.Return(new { outcome = "failed", code = "office_unsupported_content" });
-                return OfficeReadResult.Failure(new[] { new FileError("office_unsupported_content", "Định dạng nhị phân cũ (OLE) hoặc mã hóa không được hỗ trợ.") });
-            }
+                return OfficeReadResult.Failure([new FileError("office_unsupported_content", ProcessingMessages.UnsupportedOlePackage)]);
 
             // Check ZIP magic: PK\x03\x04
             if (bytes[0] != 0x50 || bytes[1] != 0x4B || (bytes[2] != 0x03 && bytes[2] != 0x05 && bytes[2] != 0x07))
-            {
-                trace.Return(new { outcome = "failed", code = "invalid_office_package" });
-                return OfficeReadResult.Failure(new[] { new FileError("invalid_office_package", "Tệp không phải là định dạng nén ZIP hợp lệ.") });
-            }
+                return OfficeReadResult.Failure([new FileError("invalid_office_package", ProcessingMessages.InvalidZipFormat)]);
 
             var sourceHash = Convert.ToHexStringLower(SHA256.HashData(bytes));
 
-            trace.State("stage", () => "scanZip");
             ZipArchive zip;
             try
             {
@@ -119,22 +87,18 @@ public sealed class OfficePackageReader
             }
             catch (Exception)
             {
-                trace.Return(new { outcome = "failed", code = "invalid_office_package" });
-                return OfficeReadResult.Failure(new[] { new FileError("invalid_office_package", "Tệp ZIP bị hỏng hoặc không mở được.") });
+                return OfficeReadResult.Failure([new FileError("invalid_office_package", ProcessingMessages.UnreadableZip)]);
             }
 
             using (zip)
             {
                 if (zip.Entries.Count > _options.MaxPackageEntries)
-                {
-                    trace.Return(new { outcome = "failed", code = "office_package_limit_exceeded" });
-                    return OfficeReadResult.Failure(new[] { new FileError("office_package_limit_exceeded", $"Số lượng tệp trong gói ({zip.Entries.Count}) vượt quá giới hạn ({_options.MaxPackageEntries}).") });
-                }
+                    return OfficeReadResult.Failure([new FileError("office_package_limit_exceeded", ProcessingMessages.PackageEntryLimit(zip.Entries.Count, _options.MaxPackageEntries))]);
 
                 byte[]? contentTypesBytes = null;
                 var normalizedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 long totalExpandedBytes = 0;
-                var entryIndex = 0;
+                long actualExpandedBytes = 0;
                 string? mainContentType = null;
                 var hasContentTypes = false;
                 var hasRootRels = false;
@@ -144,68 +108,46 @@ public sealed class OfficePackageReader
                 foreach (var entry in zip.Entries)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    entryIndex++;
-
-                    using var entryItem = DebugTrace.Item(entryIndex);
-                    entryItem.State("entry", () => new { uri = entry.FullName, compressedSize = entry.Length, uncompressedSize = entry.Length });
 
                     var rawName = entry.FullName;
-                    if (rawName.StartsWith('/') || rawName.StartsWith('\\') || rawName.Contains("../") || rawName.Contains("..\\") || rawName.EndsWith('/'))
+                    var pathSegments = rawName.TrimEnd('/').Split('/');
+                    if (rawName.StartsWith('/') || rawName.Contains('\\') || pathSegments.Any(segment =>
                     {
-                        if (rawName.EndsWith('/'))
-                            continue; // Directory entry
-                        trace.Return(new { outcome = "failed", code = "invalid_office_package" });
-                        return OfficeReadResult.Failure(new[] { new FileError("invalid_office_package", $"Đường dẫn tệp con không an toàn hoặc chứa ký tự cấm: {rawName}.") });
-                    }
+                        var decoded = Uri.UnescapeDataString(segment);
+                        return decoded.Length == 0 || decoded is "." or ".." || decoded.IndexOfAny(['/', '\\', ':']) >= 0;
+                    }))
+                        return OfficeReadResult.Failure([new FileError("invalid_office_package", "Unsafe package entry path.")]);
+                    if (rawName.EndsWith('/')) continue;
 
                     var normalized = rawName.Replace('\\', '/').TrimStart('/');
                     if (!normalizedPaths.Add(normalized))
-                    {
-                        trace.Return(new { outcome = "failed", code = "invalid_office_package" });
-                        return OfficeReadResult.Failure(new[] { new FileError("invalid_office_package", $"Trùng lặp đường dẫn tệp con trong gói: {normalized}.") });
-                    }
+                        return OfficeReadResult.Failure([new FileError("invalid_office_package", ProcessingMessages.DuplicatePackageEntry(normalized))]);
 
                     if (entry.Length > _options.MaxPartBytes)
-                    {
-                        trace.Return(new { outcome = "failed", code = "office_package_limit_exceeded" });
-                        return OfficeReadResult.Failure(new[] { new FileError("office_package_limit_exceeded", $"Kích thước phần ({entry.Length} bytes) vượt quá giới hạn phần ({_options.MaxPartBytes} bytes).") });
-                    }
+                        return OfficeReadResult.Failure([new FileError("office_package_limit_exceeded", ProcessingMessages.PartSizeLimit(entry.Length, _options.MaxPartBytes))]);
 
                     totalExpandedBytes += entry.Length;
                     if (totalExpandedBytes > _options.MaxExpandedBytes)
-                    {
-                        trace.Return(new { outcome = "failed", code = "office_package_limit_exceeded" });
-                        return OfficeReadResult.Failure(new[] { new FileError("office_package_limit_exceeded", $"Tổng kích thước giải nén ({totalExpandedBytes} bytes) vượt quá giới hạn ({_options.MaxExpandedBytes} bytes).") });
-                    }
+                        return OfficeReadResult.Failure([new FileError("office_package_limit_exceeded", ProcessingMessages.ExpandedSizeLimit(totalExpandedBytes, _options.MaxExpandedBytes))]);
 
-                    // Decompress entry into memory and verify CRC32
-                    byte[] entryBytes;
+                    var retain = string.Equals(normalized, "[Content_Types].xml", StringComparison.OrdinalIgnoreCase);
                     try
                     {
-                        using (var entryStream = entry.Open())
-                        using (var entryMs = new MemoryStream())
+                        using var entryStream = entry.Open();
+                        var scanned = await ScanEntryAsync(entryStream, Math.Min(_options.MaxPartBytes,
+                            _options.MaxExpandedBytes - actualExpandedBytes), retain, cancellationToken).ConfigureAwait(false);
+                        actualExpandedBytes += scanned.Bytes;
+                        if (scanned.Bytes != entry.Length || scanned.Crc != entry.Crc32)
+                            return OfficeReadResult.Failure([new FileError("invalid_office_package", "Entry length or CRC mismatch.")]);
+                        if (retain)
                         {
-                            await entryStream.CopyToAsync(entryMs, cancellationToken).ConfigureAwait(false);
-                            entryBytes = entryMs.ToArray();
+                            hasContentTypes = true;
+                            contentTypesBytes = scanned.Content;
                         }
                     }
                     catch (Exception ex) when (ex is InvalidDataException or IOException)
                     {
-                        trace.Return(new { outcome = "failed", code = "invalid_office_package" });
-                        return OfficeReadResult.Failure(new[] { new FileError("invalid_office_package", $"Tệp ZIP hoặc phần tử nén {normalized} bị hỏng.") });
-                    }
-
-                    var computedCrc = ComputeCrc32(entryBytes);
-                    if (computedCrc != entry.Crc32)
-                    {
-                        trace.Return(new { outcome = "failed", code = "invalid_office_package" });
-                        return OfficeReadResult.Failure(new[] { new FileError("invalid_office_package", $"Mã kiểm tra CRC-32 của tệp con {normalized} không khớp.") });
-                    }
-
-                    if (string.Equals(normalized, "[Content_Types].xml", StringComparison.OrdinalIgnoreCase))
-                    {
-                        hasContentTypes = true;
-                        contentTypesBytes = entryBytes;
+                        return OfficeReadResult.Failure([new FileError("invalid_office_package", "Invalid compressed entry.")]);
                     }
 
                     if (string.Equals(normalized, "_rels/.rels", StringComparison.OrdinalIgnoreCase))
@@ -219,18 +161,11 @@ public sealed class OfficePackageReader
                 }
 
                 if (!hasContentTypes || !hasRootRels)
-                {
-                    trace.Return(new { outcome = "failed", code = "invalid_office_package" });
-                    return OfficeReadResult.Failure(new[] { new FileError("invalid_office_package", "Thiếu thành phần bắt buộc [Content_Types].xml hoặc _rels/.rels trong gói.") });
-                }
+                    return OfficeReadResult.Failure([new FileError("invalid_office_package", ProcessingMessages.MissingPackageManifest)]);
 
                 if (hasDigitalSignature)
-                {
-                    trace.Return(new { outcome = "failed", code = "office_unsupported_content" });
-                    return OfficeReadResult.Failure(new[] { new FileError("office_unsupported_content", "Gói chứa chữ ký số (digital signature) không được hỗ trợ chỉnh sửa.") });
-                }
+                    return OfficeReadResult.Failure([new FileError("office_unsupported_content", ProcessingMessages.SignedPackageUnsupported)]);
 
-                trace.State("stage", () => "scanXml");
                 long totalXmlNodes = 0;
                 long totalXmlElements = 0;
                 var xmlReaderSettings = new XmlReaderSettings
@@ -249,6 +184,8 @@ public sealed class OfficePackageReader
                     while (typesReader.Read())
                     {
                         cancellationToken.ThrowIfCancellationRequested();
+                        if (typesReader.AttributeCount > _options.MaxAttributesPerElement)
+                            throw new FileLimitException("office_package_limit_exceeded");
                         var mime = typesReader.GetAttribute("ContentType");
                         if (mime is null || !(mime.EndsWith("+xml", StringComparison.OrdinalIgnoreCase) ||
                             mime.Equals("application/xml", StringComparison.OrdinalIgnoreCase) ||
@@ -261,7 +198,7 @@ public sealed class OfficePackageReader
                 }
                 catch (XmlException)
                 {
-                    return OfficeReadResult.Failure([new FileError("invalid_office_package", "Content types XML không hợp lệ.")]);
+                    return OfficeReadResult.Failure([new FileError("invalid_office_package", ProcessingMessages.InvalidContentTypes)]);
                 }
 
                 foreach (var entry in zip.Entries)
@@ -281,22 +218,17 @@ public sealed class OfficePackageReader
                         while (xmlReader.Read())
                         {
                             cancellationToken.ThrowIfCancellationRequested();
+                            if (xmlReader.AttributeCount > _options.MaxAttributesPerElement) throw new FileLimitException("office_package_limit_exceeded");
                             nodeCount++;
                             totalXmlNodes++;
                             if (xmlReader.Depth > maxDepth)
                                 maxDepth = xmlReader.Depth;
 
                             if (maxDepth > _options.MaxXmlDepth)
-                            {
-                                trace.Return(new { outcome = "failed", code = "office_package_limit_exceeded" });
-                                return OfficeReadResult.Failure(new[] { new FileError("office_package_limit_exceeded", $"Độ sâu XML ({maxDepth}) vượt quá giới hạn ({_options.MaxXmlDepth}).") });
-                            }
+                                return OfficeReadResult.Failure([new FileError("office_package_limit_exceeded", ProcessingMessages.XmlDepthLimit(maxDepth, _options.MaxXmlDepth))]);
 
                             if (totalXmlNodes > _options.MaxXmlNodes)
-                            {
-                                trace.Return(new { outcome = "failed", code = "office_package_limit_exceeded" });
-                                return OfficeReadResult.Failure(new[] { new FileError("office_package_limit_exceeded", $"Tổng số nút XML ({totalXmlNodes}) vượt quá giới hạn ({_options.MaxXmlNodes}).") });
-                            }
+                                return OfficeReadResult.Failure([new FileError("office_package_limit_exceeded", ProcessingMessages.XmlNodeLimit(totalXmlNodes, _options.MaxXmlNodes))]);
 
                             if (xmlReader.NodeType == XmlNodeType.Element)
                             {
@@ -312,24 +244,20 @@ public sealed class OfficePackageReader
                     }
                     catch (XmlException ex)
                     {
-                        trace.Return(new { outcome = "failed", code = "invalid_office_package" });
                         var code = ex.Message.Contains("MaxCharactersInDocument", StringComparison.Ordinal) ? "office_package_limit_exceeded" : "invalid_office_package";
-                        return OfficeReadResult.Failure([new FileError(code, "XML không hợp lệ hoặc vượt giới hạn ký tự.")]);
+                        return OfficeReadResult.Failure([new FileError(code, ProcessingMessages.InvalidOrOversizedXml)]);
                     }
                 }
 
                 if (isStrictOoxml)
-                {
-                    trace.Return(new { outcome = "failed", code = "office_unsupported_content" });
-                    return OfficeReadResult.Failure(new[] { new FileError("office_unsupported_content", "Định dạng Strict OOXML không được hỗ trợ trong phiên bản office-v1.") });
-                }
+                    return OfficeReadResult.Failure([new FileError("office_unsupported_content", ProcessingMessages.StrictOoxmlUnsupported)]);
 
-                trace.State("stage", () => "openPackage");
                 // Check content types for main document part
                 using (var ctStream = new MemoryStream(contentTypesBytes!))
                 {
                     var ctDoc = new XmlDocument { XmlResolver = null };
-                    ctDoc.Load(ctStream);
+                    using var ctReader = XmlReader.Create(ctStream, xmlReaderSettings);
+                    ctDoc.Load(ctReader);
                     var nsmgr = new XmlNamespaceManager(ctDoc.NameTable);
                     nsmgr.AddNamespace("ct", "http://schemas.openxmlformats.org/package/2006/content-types");
                     var overrideNodes = ctDoc.SelectNodes("//ct:Override", nsmgr);
@@ -380,22 +308,13 @@ public sealed class OfficePackageReader
                     _ => null
                 };
 
-                trace.State("detectedFormat", () => detectedFormat?.ToString() ?? "unknown");
-
                 if (detectedFormat is null)
-                {
-                    trace.Return(new { outcome = "failed", code = "invalid_office_package" });
-                    return OfficeReadResult.Failure(new[] { new FileError("invalid_office_package", "Không tìm thấy kiểu nội dung tài liệu chính hợp lệ trong gói.") });
-                }
+                    return OfficeReadResult.Failure([new FileError("invalid_office_package", ProcessingMessages.InvalidMainContentType)]);
 
                 if (detectedFormat != expectedFormat)
-                {
-                    trace.Return(new { outcome = "failed", code = "office_format_mismatch" });
-                    return OfficeReadResult.Failure(new[] { new FileError("office_format_mismatch", $"Định dạng tệp thực tế ({detectedFormat}) không khớp với phần mở rộng yêu cầu ({expectedFormat}).") });
-                }
+                    return OfficeReadResult.Failure([new FileError("office_format_mismatch", ProcessingMessages.FormatMismatch(detectedFormat.ToString(), expectedFormat.ToString()))]);
 
-                var source = new OfficeSource(bytes, sourceHash, expectedFormat, _options);
-                trace.Return(new { outcome = "success", bytes = bytes.Length, entryCount = zip.Entries.Count, format = expectedFormat.ToString() });
+                var source = OfficeSource.TakeOwnership(bytes, sourceHash, expectedFormat, _options);
                 return OfficeReadResult.Success(source);
             }
         }
@@ -403,14 +322,36 @@ public sealed class OfficePackageReader
         {
             return OfficeReadResult.Failure([new FileError(ex.Code, ex.Message)]);
         }
-        catch (OperationCanceledException)
+    }
+
+    /// <summary>
+    /// Streams CRC and actual byte accounting, retaining only required metadata.
+    /// </summary>
+    /// <param name="input">Decompressed entry stream.</param>
+    /// <param name="limit">Remaining expanded byte budget.</param>
+    /// <param name="retain">Whether metadata bytes must be retained.</param>
+    /// <param name="token">Cancellation token.</param>
+    /// <returns>Checksum, actual size, and optional metadata bytes.</returns>
+    private static async Task<(uint Crc, long Bytes, byte[]? Content)> ScanEntryAsync(Stream input, long limit, bool retain, CancellationToken token)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(65536);
+        using var metadata = retain ? new MemoryStream() : null;
+        long total = 0;
+        uint crc = uint.MaxValue;
+        try
         {
-            throw;
+            while (true)
+            {
+                var remaining = limit - total;
+                var wanted = remaining >= 65536 ? 65536 : (int)remaining + 1;
+                var read = await input.ReadAsync(buffer.AsMemory(0, wanted), token).ConfigureAwait(false);
+                if (read == 0) return (crc ^ uint.MaxValue, total, metadata?.ToArray());
+                if (read > remaining) throw new FileLimitException("office_package_limit_exceeded");
+                total += read;
+                for (var i = 0; i < read; i++) crc = (crc >> 8) ^ CrcTable[(crc ^ buffer[i]) & 0xff];
+                metadata?.Write(buffer, 0, read);
+            }
         }
-        catch (Exception ex)
-        {
-            trace.Error(ex);
-            throw;
-        }
+        finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
     }
 }

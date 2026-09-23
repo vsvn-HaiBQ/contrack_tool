@@ -1,6 +1,5 @@
 using System.Text;
 using FileHandler.Api.Common;
-using FileHandler.Api.Diagnostics;
 
 namespace FileHandler.Api.Modules.Markdown;
 
@@ -14,102 +13,112 @@ internal static class MarkdownTranslationApplier
     /// <param name="translations">Translated units in source order.</param>
     /// <param name="options">File processing limits.</param>
     /// <param name="cancellationToken">Token for cancelling this operation.</param>
-    /// <returns>Patched Markdown text, or null with validation errors.</returns>
-    public static (string? Text, IReadOnlyList<FileError> Errors) Apply(MarkdownExtraction extraction, IReadOnlyList<string> translations, FileHandlingOptions options, CancellationToken cancellationToken)
+    /// <param name="validationBaseline">Whether nonempty translations use source text to validate intended structure changes.</param>
+    /// <param name="validateStructure">Optional block structure validator.</param>
+    /// <returns>Patched text, fatal errors and recoverable unit skips.</returns>
+    public static (string? Text, IReadOnlyList<FileError> Errors, IReadOnlyList<SkipMetadata> Skipped) Apply(MarkdownExtraction extraction, IReadOnlyList<string> translations, FileHandlingOptions options, CancellationToken cancellationToken, bool validationBaseline = false, Func<string, string, IReadOnlyList<FileError>>? validateStructure = null)
     {
-        using var trace = DebugTrace.Enter("MarkdownTranslationApplier", "Apply", () => new { extraction, translations, options, cancellationToken });
-        try
+        var errors = ValidateBatch(extraction, translations, options);
+        var skipped = new List<SkipMetadata>();
+        if (errors.Count > 0)
+            return (null, errors, skipped);
+
+        var replacements = new List<(int Index, int Start, int End, string Value)>();
+        long outputChars = extraction.Source.Text.Length;
+        long outputBytes = Encoding.UTF8.GetByteCount(extraction.Source.Text) + (extraction.Source.HasBom ? 3 : 0);
+        for (var i = 0; i < extraction.Units.Count; i++)
         {
-            var errors = ValidateBatch(extraction, translations, options);
-            if (errors.Count > 0)
-                return trace.Return<(string? Text, IReadOnlyList<FileError> Errors)>((null, errors));
+            cancellationToken.ThrowIfCancellationRequested();
+            var unit = extraction.Units[i];
+            var translated = translations[i];
+            if (translated == unit.Text)
+                continue;
 
-            if (extraction.HasInternalLinks && extraction.Units.Select((unit, index) => (unit, index)).Where(x => x.unit.IsHeading).Any(x => translations[x.index] != x.unit.Text))
+            if (string.IsNullOrWhiteSpace(translated))
             {
-                trace.State("outcome", () => "internalAnchorChange");
-                return trace.Return<(string? Text, IReadOnlyList<FileError> Errors)>((null, [new("internal_anchor_change_unsupported", "Không thể đổi heading khi tài liệu có liên kết anchor nội bộ trong profile V1.")]));
+                skipped.Add(new(SkipCodes.EmptyTranslation, SkipSeverity.Warning, SkipStage.Translation, SkipScope.Unit, 1, ProcessingMessages.EmptyTranslation, new(Line: unit.Line), i));
+                continue;
+            }
+            try { Utf8TextReader.GetByteCount(translated.AsSpan()); }
+            catch (EncoderFallbackException)
+            {
+                skipped.Add(new(SkipCodes.InvalidTranslation, SkipSeverity.Warning, SkipStage.Translation, SkipScope.Unit, 1, ProcessingMessages.InvalidUnicode, new(Line: unit.Line), i));
+                continue;
+            }
+            if (unit.IsHeading && extraction.HasInternalLinks)
+            {
+                skipped.Add(new(SkipCodes.InternalAnchorChangeUnsupported, SkipSeverity.Warning, SkipStage.Translation, SkipScope.Unit, 1, ProcessingMessages.InternalAnchorChange, new(Line: unit.Line), i));
+                continue;
+            }
+            if (unit.IsHeading && translated.IndexOfAny(['\r', '\n']) >= 0)
+            {
+                skipped.Add(new(SkipCodes.InvalidStructure, SkipSeverity.Warning, SkipStage.Translation, SkipScope.Unit, 1, ProcessingMessages.HeadingStructure, new(Line: unit.Line), i));
+                continue;
             }
 
-            var replacements = new List<(int Start, int End, string Value)>();
-            long outputBytes = Encoding.UTF8.GetByteCount(extraction.Source.Text) + (extraction.Source.HasBom ? 3 : 0);
-            for (var i = 0; i < extraction.Units.Count; i++)
+            var (value, markerErrors) = DecodeTranslation(unit, translated, i, validationBaseline);
+            if (markerErrors.Count > 0)
+                skipped.Add(new(markerErrors[0].Code, SkipSeverity.Warning, SkipStage.Translation, SkipScope.Unit, 1,
+                    string.Join(" ", markerErrors.Select(e => e.Message).Distinct(StringComparer.Ordinal)), new(Line: unit.Line), i));
+            if (value is not null)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var unit = extraction.Units[i];
-                var translated = translations[i];
-                using var item = DebugTrace.Item(i + 1);
-                item.State("unit", () => unit);
-                item.State("translation", () => translated);
-                if (translated == unit.Text)
+                if (validateStructure is not null && !unit.IsMermaidLabel && unit.BlockStart is int blockStart && unit.BlockEnd is int blockEnd)
                 {
-                    item.State("outcome", () => "unchanged");
-                    continue;
+                    var prefix = extraction.Source.Text[blockStart..unit.Start];
+                    var suffix = extraction.Source.Text[unit.End..blockEnd];
+                    var original = extraction.Source.Text[blockStart..blockEnd];
+                    var candidate = prefix + value + suffix;
+                    var findings = validateStructure(original, candidate);
+                    if (findings.Count > 0)
+                    {
+                        var baseline = DecodeTranslation(unit, translated, i, true);
+                        if (baseline.Value is not null) findings = validateStructure(prefix + baseline.Value + suffix, candidate);
+                    }
+                    if (findings.Count > 0)
+                    {
+                        skipped.Add(new(SkipCodes.InvalidStructure, SkipSeverity.Warning, SkipStage.Translation, SkipScope.Unit, 1, ProcessingMessages.BlockStructure, new(Line: unit.Line), i));
+                        continue;
+                    }
                 }
-
-                if (unit.IsHeading && translated.IndexOfAny(['\r', '\n']) >= 0)
-                {
-                    errors.Add(new("invalid_structure", "Bản dịch heading không được tạo thêm dòng hoặc block.", i, unit.Line));
-                    item.State("error", () => errors[^1]);
-                    continue;
-                }
-
-                var (value, markerErrors) = DecodeTranslation(unit, translated, i);
-                errors.AddRange(markerErrors);
-                if (value is not null)
-                {
-                    outputBytes += Encoding.UTF8.GetByteCount(value) - Encoding.UTF8.GetByteCount(extraction.Source.Text.AsSpan(unit.Start, unit.End - unit.Start));
-                    replacements.Add((unit.Start, unit.End, value));
-                    item.State("outcome", () => "replacementQueued");
-                }
-                else
-                    item.State("outcome", () => "invalidMarkers");
+                outputChars += value.Length - (unit.End - unit.Start);
+                outputBytes += Encoding.UTF8.GetByteCount(value) - Encoding.UTF8.GetByteCount(extraction.Source.Text.AsSpan(unit.Start, unit.End - unit.Start));
+                replacements.Add((i, unit.Start, unit.End, value));
             }
-
-            trace.State("replacementCount", () => replacements.Count);
-            if (errors.Count > 0)
-                return trace.Return<(string? Text, IReadOnlyList<FileError> Errors)>((null, errors));
-
-            replacements.Sort((a, b) => b.Start.CompareTo(a.Start));
-            for (var i = 1; i < replacements.Count; i++)
-            {
-                if (replacements[i - 1].Start < replacements[i].End)
-                {
-                    trace.State("conflict", () => new { previous = new { replacements[i - 1].Start, replacements[i - 1].End }, current = new { replacements[i].Start, replacements[i].End } });
-                    errors.Add(new("patch_conflict", "Các vùng thay thế bị chồng lấn."));
-                }
-            }
-
-            if (errors.Count > 0)
-                return trace.Return<(string? Text, IReadOnlyList<FileError> Errors)>((null, errors));
-
-            foreach (var patch in replacements)
-                trace.State("patch", () => new { patch.Start, patch.End, patch.Value });
-
-            if (outputBytes > options.MaxOutputBytes)
-                return (null, [new FileError("output_too_large", "Kết quả vượt giới hạn đầu ra.")]);
-            var output = new StringBuilder((int)Math.Min(outputBytes, int.MaxValue));
-            var offset = 0;
-            for (var i = replacements.Count - 1; i >= 0; i--)
-            {
-                var patch = replacements[i];
-                output.Append(extraction.Source.Text, offset, patch.Start - offset);
-                output.Append(patch.Value);
-                offset = patch.End;
-            }
-
-            output.Append(extraction.Source.Text, offset, extraction.Source.Text.Length - offset);
-
-            return trace.Return<(string? Text, IReadOnlyList<FileError> Errors)>((output.ToString(), []));
         }
-        catch (Exception traceError)
+
+        if (errors.Count > 0)
+            return (null, errors, skipped);
+
+        for (var i = 1; i < replacements.Count; i++)
         {
-            trace.Error(traceError);
-            throw;
+            if (replacements[i - 1].End > replacements[i].Start)
+            {
+                errors.Add(new("patch_conflict", ProcessingMessages.PatchConflict));
+            }
         }
+
+        if (errors.Count > 0)
+            return (null, errors, skipped);
+
+        if (outputBytes > options.MaxOutputBytes)
+            return (null, [new FileError("output_too_large", ProcessingMessages.OutputSizeLimit)], skipped);
+        var output = new StringBuilder((int)Math.Min(outputChars, int.MaxValue));
+        var offset = 0;
+        for (var i = 0; i < replacements.Count; i++)
+        {
+            var patch = replacements[i];
+            output.Append(extraction.Source.Text, offset, patch.Start - offset);
+            output.Append(patch.Value);
+            offset = patch.End;
+        }
+
+        output.Append(extraction.Source.Text, offset, extraction.Source.Text.Length - offset);
+
+        return (output.ToString(), [], skipped);
     }
 
     /// <summary>
-    /// Validates extraction errors, translation count, lengths, and non-empty translations.
+    /// Checks fatal extraction, count, null and translation length constraints.
     /// </summary>
     /// <param name="extraction">Extracted source units.</param>
     /// <param name="translations">Translated units.</param>
@@ -117,45 +126,23 @@ internal static class MarkdownTranslationApplier
     /// <returns>Validation errors found in batch.</returns>
     private static List<FileError> ValidateBatch(MarkdownExtraction extraction, IReadOnlyList<string> translations, FileHandlingOptions options)
     {
-        using var trace = DebugTrace.Enter("MarkdownTranslationApplier", "ValidateBatch", () => new { extraction, translations, options });
-        try
+        var errors = new List<FileError>();
+        if (extraction.Errors.Count > 0)
+            errors.AddRange(extraction.Errors);
+
+        if (translations.Count != extraction.Units.Count)
+            errors.Add(new("translation_count_mismatch", ProcessingMessages.TranslationCountMismatch(extraction.Units.Count, translations.Count)));
+
+        var count = Math.Min(translations.Count, extraction.Units.Count);
+        for (var i = 0; i < count; i++)
         {
-            var errors = new List<FileError>();
-            if (extraction.Errors.Count > 0)
-                errors.AddRange(extraction.Errors);
-
-            if (translations.Count != extraction.Units.Count)
-                errors.Add(new("translation_count_mismatch", $"Cần {extraction.Units.Count} bản dịch nhưng nhận được {translations.Count}."));
-
-            var count = Math.Min(translations.Count, extraction.Units.Count);
-            for (var i = 0; i < count; i++)
-            {
-                if (translations[i] is null)
-                    errors.Add(new("invalid_translation", "Bản dịch không được null.", i, extraction.Units[i].Line));
-                else if (string.IsNullOrWhiteSpace(translations[i]))
-                    errors.Add(new("empty_translation", "Bản dịch không được rỗng hoặc chỉ chứa khoảng trắng.", i, extraction.Units[i].Line));
-                else if (translations[i].Length > options.MaxTranslationChars)
-                    errors.Add(new("translation_too_long", $"Bản dịch vượt giới hạn {options.MaxTranslationChars} ký tự.", i, extraction.Units[i].Line));
-                else
-                {
-                    try
-                    {
-                        Utf8TextReader.GetByteCount(translations[i].AsSpan());
-                    }
-                    catch (EncoderFallbackException)
-                    {
-                        errors.Add(new("invalid_translation", "Bản dịch chứa chuỗi Unicode không hợp lệ.", i, extraction.Units[i].Line));
-                    }
-                }
-            }
-
-            return trace.Return<List<FileError>>(errors);
+            if (translations[i] is null)
+                errors.Add(new(SkipCodes.InvalidTranslation, ProcessingMessages.NullTranslation, i, extraction.Units[i].Line));
+            else if (translations[i].Length > options.MaxTranslationChars)
+                errors.Add(new("translation_too_long", ProcessingMessages.TranslationLimit(options.MaxTranslationChars), i, extraction.Units[i].Line));
         }
-        catch (Exception traceError)
-        {
-            trace.Error(traceError);
-            throw;
-        }
+
+        return errors;
     }
 
     /// <summary>
@@ -164,90 +151,117 @@ internal static class MarkdownTranslationApplier
     /// <param name="unit">Original translation unit definition.</param>
     /// <param name="translation">Translated text containing preservation markers.</param>
     /// <param name="index">Zero-based unit index.</param>
+    /// <param name="validationBaseline">Whether nonempty translated bindings retain source text.</param>
     /// <returns>Decoded Markdown text, or null with marker validation errors.</returns>
-    private static (string? Value, List<FileError> Errors) DecodeTranslation(MarkdownUnit unit, string translation, int index)
+    private static (string? Value, List<FileError> Errors) DecodeTranslation(MarkdownUnit unit, string translation, int index, bool validationBaseline)
     {
-        using var trace = DebugTrace.Enter("MarkdownTranslationApplier", "DecodeTranslation", () => new { unit, translation, index });
-        try
+        var errors = new List<FileError>();
+        if (unit.IsMermaidLabel)
         {
-            var errors = new List<FileError>();
-            IReadOnlyList<MarkerToken> rawTokens;
-            if (unit.TokenTemplate is { } template)
+            if (translation.Any(char.IsControl))
+                return (null, [new(SkipCodes.InvalidStructure, ProcessingMessages.MermaidStructure, index, unit.Line)]);
+            var value = MermaidCodec.Encode(validationBaseline ? unit.Text : translation, unit.MermaidQuoted);
+            return (value, errors);
+        }
+        IReadOnlyList<MarkerToken> rawTokens;
+        if (unit.TokenTemplate is { } template)
+        {
+            var decoded = MarkdownTokenCodec.Decode(template, translation, index, unit.Line);
+            if (decoded.Error is not null)
+                return (null, [decoded.Error]);
+            rawTokens = validationBaseline
+                ? decoded.Tokens.Select((token, i) => !token.IsMarker && !string.IsNullOrWhiteSpace(token.Value)
+                    ? token with { Value = template.Tokens[i].Value } : token).ToArray()
+                : decoded.Tokens;
+        }
+        else
+            rawTokens = MarkdownMarkerCodec.Parse(translation);
+        var tokens = CanonicalizeFormattingTokens(rawTokens, unit.Markers);
+        var emptyEmphasis = FindEmptyEmphasis(tokens, unit.Markers);
+        var seenOpen = new HashSet<int>();
+        var seenClose = new HashSet<int>();
+        var stack = new Stack<int>();
+        var output = new StringBuilder();
+        foreach (var token in tokens)
+        {
+            if (!token.IsMarker)
             {
-                var decoded = MarkdownTokenCodec.Decode(template, translation, index, unit.Line);
-                if (decoded.Error is not null)
-                    return trace.Return<(string? Value, List<FileError> Errors)>((null, [decoded.Error]));
-                rawTokens = decoded.Tokens;
+                if (token.Value.Length > 0 && stack.TryPeek(out var owner) && unit.Markers[owner].Kind == MarkerKind.Protected)
+                    errors.Add(new(SkipCodes.ProtectedMarkerNotEmpty, ProcessingMessages.ProtectedMarkerNotEmpty, index, unit.Line));
+                if (unit.TokenTemplate is null && token.Value.Contains(MarkdownMarkerCodec.MarkerPrefix, StringComparison.Ordinal))
+                    errors.Add(new(SkipCodes.InvalidMarkerSyntax, ProcessingMessages.LegacyMarkerSyntax, index, unit.Line));
+                output.Append(EscapeText(token.Value, unit.NewlineReplacement));
+                continue;
+            }
+
+            var canonical = unit.TokenTemplate is null
+                ? (token.IsClosing ? MarkdownMarkerCodec.Close(token.Id) : MarkdownMarkerCodec.Open(token.Id))
+                : token.Value;
+            if (!string.Equals(token.Value, canonical, StringComparison.Ordinal))
+            {
+                errors.Add(new(SkipCodes.InvalidMarkerSyntax, ProcessingMessages.NoncanonicalMarker(token.Value, canonical), index, unit.Line, token.Value));
+                continue;
+            }
+
+            if (!unit.Markers.TryGetValue(token.Id, out var definition))
+            {
+                errors.Add(new(SkipCodes.UnexpectedMarker, ProcessingMessages.UnexpectedMarker(token.Value), index, unit.Line, token.Value));
+                continue;
+            }
+
+            if (!token.IsClosing)
+            {
+                if (!seenOpen.Add(token.Id))
+                    errors.Add(new(SkipCodes.DuplicateMarker, ProcessingMessages.DuplicateMarker(token.Value), index, unit.Line, token.Value));
+                stack.Push(token.Id);
+                if (!emptyEmphasis.Contains(token.Id)) output.Append(definition.OpenSource);
             }
             else
-                rawTokens = MarkdownMarkerCodec.Parse(translation);
-            trace.State("tokens", () => rawTokens);
-            var tokens = CanonicalizeFormattingTokens(rawTokens, unit.Markers);
-            trace.State("tokens", () => tokens);
-            var seenOpen = new HashSet<int>();
-            var seenClose = new HashSet<int>();
-            var stack = new Stack<int>();
-            var output = new StringBuilder();
-            foreach (var token in tokens)
             {
-                if (!token.IsMarker)
-                {
-                    if (token.Value.Length > 0 && stack.TryPeek(out var owner) && unit.Markers[owner].Kind == MarkerKind.Protected)
-                        errors.Add(new("protected_marker_not_empty", "Marker bảo vệ phải rỗng.", index, unit.Line));
-                    if (unit.TokenTemplate is null && token.Value.Contains(MarkdownMarkerCodec.MarkerPrefix, StringComparison.Ordinal))
-                        errors.Add(new("invalid_marker_syntax", "Marker keepme không đúng cú pháp hoặc vượt miền ID hỗ trợ.", index, unit.Line));
-                    output.Append(EscapeText(token.Value, unit.NewlineReplacement));
-                    continue;
-                }
-
-                var canonical = token.IsClosing ? MarkdownMarkerCodec.Close(token.Id) : MarkdownMarkerCodec.Open(token.Id);
-                if (!string.Equals(token.Value, canonical, StringComparison.Ordinal))
-                {
-                    errors.Add(new("invalid_marker_syntax", $"Marker {token.Value} không ở dạng chuẩn {canonical}.", index, unit.Line, token.Value));
-                    continue;
-                }
-
-                if (!unit.Markers.TryGetValue(token.Id, out var definition))
-                {
-                    errors.Add(new("unexpected_marker", $"Marker {token.Value} không thuộc đơn vị này.", index, unit.Line, token.Value));
-                    continue;
-                }
-
-                if (!token.IsClosing)
-                {
-                    if (!seenOpen.Add(token.Id))
-                        errors.Add(new("duplicate_marker", $"Marker {token.Value} bị lặp.", index, unit.Line, token.Value));
-                    stack.Push(token.Id);
-                    output.Append(definition.OpenSource);
-                }
-                else
-                {
-                    if (!seenClose.Add(token.Id))
-                        errors.Add(new("duplicate_marker", $"Marker {token.Value} bị lặp.", index, unit.Line, token.Value));
-                    if (stack.Count == 0 || stack.Pop() != token.Id)
-                        errors.Add(new("invalid_marker_nesting", $"Marker {token.Value} đóng sai thứ tự.", index, unit.Line, token.Value));
-                    output.Append(definition.CloseSource);
-                }
+                if (!seenClose.Add(token.Id))
+                    errors.Add(new(SkipCodes.DuplicateMarker, ProcessingMessages.DuplicateMarker(token.Value), index, unit.Line, token.Value));
+                if (stack.Count == 0 || stack.Pop() != token.Id)
+                    errors.Add(new(SkipCodes.InvalidMarkerNesting, ProcessingMessages.InvalidMarkerNesting(token.Value), index, unit.Line, token.Value));
+                if (!emptyEmphasis.Contains(token.Id)) output.Append(definition.CloseSource);
             }
-
-            foreach (var marker in unit.Markers.Values)
-            {
-                if (!seenOpen.Contains(marker.Id))
-                    errors.Add(new("missing_marker", $"Thiếu marker mở {MarkdownMarkerCodec.Open(marker.Id)}.", index, unit.Line, MarkdownMarkerCodec.Open(marker.Id)));
-                if (!seenClose.Contains(marker.Id))
-                    errors.Add(new("missing_marker", $"Thiếu marker đóng {MarkdownMarkerCodec.Close(marker.Id)}.", index, unit.Line, MarkdownMarkerCodec.Close(marker.Id)));
-            }
-
-            trace.State("markerValidation", () => new { seenOpen, seenClose, unclosed = stack.ToArray() });
-            if (errors.Count > 0)
-                trace.State("partialOutput", () => output);
-            return trace.Return<(string? Value, List<FileError> Errors)>(errors.Count == 0 ? (output.ToString(), errors) : (null, errors));
         }
-        catch (Exception traceError)
+
+        foreach (var marker in unit.Markers.Values)
         {
-            trace.Error(traceError);
-            throw;
+            if (!seenOpen.Contains(marker.Id))
+                errors.Add(new(SkipCodes.MissingMarker, ProcessingMessages.MissingOpeningMarker(MarkdownMarkerCodec.Open(marker.Id)), index, unit.Line, MarkdownMarkerCodec.Open(marker.Id)));
+            if (!seenClose.Contains(marker.Id))
+                errors.Add(new(SkipCodes.MissingMarker, ProcessingMessages.MissingClosingMarker(MarkdownMarkerCodec.Close(marker.Id)), index, unit.Line, MarkdownMarkerCodec.Close(marker.Id)));
         }
+
+        return errors.Count == 0 ? (output.ToString(), errors) : (null, errors);
+    }
+
+    /// <summary>
+    /// Finds emphasis wrappers without visible text or protected content.
+    /// </summary>
+    /// <param name="tokens">Decoded typed restoration bindings.</param>
+    /// <param name="markers">Source formatting and protection definitions.</param>
+    /// <returns>Emphasis IDs whose delimiters must be omitted.</returns>
+    private static HashSet<int> FindEmptyEmphasis(IReadOnlyList<MarkerToken> tokens, IReadOnlyDictionary<int, MarkerDefinition> markers)
+    {
+        var empty = markers.Values.Where(m => m.IsEmphasis).Select(m => m.Id).ToHashSet();
+        var owners = new Stack<int>();
+        foreach (var token in tokens)
+        {
+            if (!token.IsMarker)
+            {
+                if (!string.IsNullOrWhiteSpace(token.Value)) empty.ExceptWith(owners);
+            }
+            else if (!token.IsClosing)
+            {
+                if (markers.TryGetValue(token.Id, out var definition) &&
+                    (definition.Kind == MarkerKind.Protected || !definition.IsEmphasis)) empty.ExceptWith(owners);
+                owners.Push(token.Id);
+            }
+            else if (owners.Count > 0) owners.Pop();
+        }
+        return empty;
     }
 
     /// <summary>
@@ -329,60 +343,51 @@ internal static class MarkdownTranslationApplier
     /// <returns>Escaped text using source newline policy.</returns>
     private static string EscapeText(string text, string newlineReplacement)
     {
-        using var trace = DebugTrace.Enter("MarkdownTranslationApplier", "EscapeText", () => new { text, newlineReplacement });
-        try
+        var sb = new StringBuilder(text.Length);
+        var atLineStart = true;
+        var digitsOnlySinceLineStart = true;
+
+        for (var i = 0; i < text.Length; i++)
         {
-            var sb = new StringBuilder(text.Length);
-            var atLineStart = true;
-            var digitsOnlySinceLineStart = true;
-
-            for (var i = 0; i < text.Length; i++)
+            var c = text[i];
+            if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
             {
-                var c = text[i];
-                if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
-                {
-                    sb.Append(newlineReplacement);
-                    i++;
-                    atLineStart = true;
-                    digitsOnlySinceLineStart = true;
-                    continue;
-                }
-
-                if (c is '\r' or '\n')
-                {
-                    sb.Append(newlineReplacement);
-                    atLineStart = true;
-                    digitsOnlySinceLineStart = true;
-                    continue;
-                }
-
-                if (atLineStart && char.IsAsciiDigit(c))
-                {
-                    // Track digits at line start.
-                }
-                else if (atLineStart && (c == '.' || c == ')') && digitsOnlySinceLineStart && i > 0 && char.IsAsciiDigit(text[i - 1]))
-                {
-                    sb.Append('\\');
-                    atLineStart = false;
-                    digitsOnlySinceLineStart = false;
-                }
-                else
-                {
-                    atLineStart = false;
-                    digitsOnlySinceLineStart = false;
-                }
-
-                if (c is '\\' or '`' or '*' or '_' or '{' or '}' or '[' or ']' or '(' or ')' or '<' or '>' or '#' or '!' or '|' or '+' or '-' or '=' or '~' or '&')
-                    sb.Append('\\');
-                sb.Append(c);
+                sb.Append(newlineReplacement);
+                i++;
+                atLineStart = true;
+                digitsOnlySinceLineStart = true;
+                continue;
             }
 
-            return trace.Return<string>(sb.ToString());
+            if (c is '\r' or '\n')
+            {
+                sb.Append(newlineReplacement);
+                atLineStart = true;
+                digitsOnlySinceLineStart = true;
+                continue;
+            }
+
+            if (atLineStart && char.IsAsciiDigit(c))
+            {
+                // Track digits at line start.
+            }
+            else if (atLineStart && (c == '.' || c == ')') && digitsOnlySinceLineStart && i > 0 && char.IsAsciiDigit(text[i - 1]))
+            {
+                sb.Append('\\');
+                atLineStart = false;
+                digitsOnlySinceLineStart = false;
+            }
+            else
+            {
+                atLineStart = false;
+                digitsOnlySinceLineStart = false;
+            }
+
+            if (c is '\\' or '`' or '*' or '_' or '{' or '}' or '[' or ']' or '(' or ')' or '<' or '>' or '#' or '!' or '|' or '+' or '-' or '=' or '~' or '&')
+                sb.Append('\\');
+            sb.Append(c);
         }
-        catch (Exception traceError)
-        {
-            trace.Error(traceError);
-            throw;
-        }
+
+        return sb.ToString();
     }
 }

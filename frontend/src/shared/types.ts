@@ -146,6 +146,46 @@ export type BuildJobLog = {
 
 export type DocumentFileProcessor = "filehandler" | "openxml";
 
+export type FileHandlerSheet = {
+  sheetId: string;
+  index: number;
+  name: string;
+  state: "visible" | "hidden" | "veryHidden";
+  kind: string;
+  canImport: boolean;
+  selected?: boolean;
+  unitStartIndex?: number;
+  unitEndIndex?: number;
+};
+
+export type FileHandlerSlide = {
+  slideId: string;
+  index: number;
+  title: string | null;
+  hidden: boolean;
+  selected?: boolean;
+  unitStartIndex?: number;
+  unitEndIndex?: number;
+};
+
+export type FileHandlerUnit = { index: number; kind: string; location: Record<string, unknown> };
+
+export type FileHandlerMetadata = {
+  format: "plaintext" | "markdown" | "word" | "excel" | "powerpoint";
+  status: "success" | "partial" | "failed";
+  unitCount?: number | null;
+  skipCount: { warning: number; info: number };
+  skipped: Array<{
+    code: string; severity: "info" | "warning"; stage: string; scope: string;
+    count: number; message: string; unitIndex?: number; location: Record<string, unknown>;
+  }>;
+  sheets?: FileHandlerSheet[];
+  slides?: FileHandlerSlide[];
+  sheetNameChanges?: Array<{ sheetId: string; originalName: string; requestedName: string; finalName: string }>;
+  encoding?: string;
+  newlinePolicy?: string;
+};
+
 export type DocumentTranslationSettings = {
   output_directory?: string | null;
   direction?: "ja_to_vi" | "vi_to_ja" | string | null;
@@ -229,6 +269,7 @@ export type DocumentTranslationProgress = {
 export type DocumentTranslationResult = {
   file_processor: DocumentFileProcessor;
   filehandler_base_url?: string;
+  metadata?: FileHandlerMetadata;
   file_path: string;
   output_path: string;
   output_file_name?: string;

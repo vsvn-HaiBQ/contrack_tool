@@ -1,185 +1,253 @@
 # FileHandler
 
-REST API ASP.NET Core 10 xử lý Markdown (`.md`), văn bản thuần (`.txt`) và Office Open XML (`.docx`, `.xlsx`, `.pptx`) theo luồng stateless: `POST /import` trả array chuỗi cần dịch; `POST /export` nhận lại đúng file nguồn và `translatedTexts` là JSON array nằm trong một field multipart, rồi trả file có cùng tên gốc (basename), giữ nguyên extension và chữ hoa/thường, không thêm `.translated`.
+ASP.NET Core 10 API xử lý Markdown (`.md`), TXT (`.txt`), Word (`.docx`), Excel (`.xlsx`) và PowerPoint (`.pptx`). Server không lưu phiên import. Client gửi lại **đúng file nguồn và selection** khi export.
 
 ## Chạy và kiểm thử
 
-Solution dùng .NET 10 và C# 14 theo SDK hiện tại.
-
-`global.json` yêu cầu SDK từ `10.0.100` và dùng `latestFeature` để chọn SDK ổn định mới nhất đã cài trong dòng .NET 10.0. Docker dùng image `mcr.microsoft.com/dotnet/sdk:10.0-alpine` để build và `mcr.microsoft.com/dotnet/aspnet:10.0-alpine` để chạy.
+SDK theo `global.json`: **10.0.401**, `latestPatch`. Chạy trong thư mục `filehandler`:
 
 ```powershell
 dotnet restore FileHandler.sln
-dotnet test FileHandler.sln
+dotnet build FileHandler.sln --no-restore -p:GenerateDocumentationFile=true
+dotnet test FileHandler.sln --no-restore -p:GenerateDocumentationFile=true
 dotnet run --project src/FileHandler.Api
 ```
 
-Swagger UI ở `/swagger`; OpenAPI JSON ở `/swagger/v1/swagger.json`.
-Endpoint kiểm tra kết nối: `GET /health` trả `{"status":"ok"}`. Khi chạy bằng Docker Compose từ thư mục gốc CT Tool, FileHandler dùng cổng `5001`, độc lập với OpenXML ở cổng `5000`; Translate Docs mặc định dùng OpenXML / Local. Admin chọn phương thức dùng chung tại Settings → Admin Settings → Document extraction method.
-Trang quản lý và xem debug trace trực quan ở `/debug` (hoặc `/debug.html`).
+Swagger UI: `/swagger`; OpenAPI: `/swagger/v1/swagger.json`. Mô tả dùng tiếng Việt và ngắt dòng; message lỗi/skip trong response dùng tiếng Anh ngắn gọn. `sheetIds`/`slideIds` mặc định trống: chọn phần hiển thị; `[]` nghĩa là không chọn.
 
-## Debug trace
+Khung **Kết quả multipart** mặc định thu gọn, ẩn cùng endpoint khi đóng và có link tải riêng metadata, `units.json` hoặc tệp kết quả. Response JSON lớn cũng có link tải đầy đủ. Preview tối đa 16.384 ký tự; JSON trên 32 KB không được parse/pretty-print để làm preview. Multipart và JSON lớn được xử lý bằng Web Worker. Swagger chỉ render thông báo ngắn thay cho body lớn; header gốc nằm trong khung kết quả. API và tệp tải xuống vẫn giữ đầy đủ dữ liệu.
 
-Bật `DebugTrace.Enabled` trong `src/FileHandler.Api/appsettings.json`, hoặc dùng biến môi trường khi chạy:
+## Contract HTTP
 
-```powershell
-$env:DebugTrace__Enabled = "true"
-dotnet run --project src/FileHandler.Api
-```
+`format` nhận `markdown`, `plaintext`, `word`, `excel`, `powerpoint`. Request dùng `multipart/form-data`.
 
-Có thể bật/tắt realtime ngay trên trang `/debug` hoặc qua API `POST /debug/toggle`.
+| Endpoint | Field | Response thành công |
+|---|---|---|
+| `POST /api/{format}/import` | `file`, selection tùy chọn, `debug` tùy chọn | Mặc định JSON `{ texts, metadata, errors }`; `debug=true` trả multipart có thêm `units.json` |
+| `POST /api/{format}/export` | `file`, `texts`, selection tương ứng import | `multipart/mixed`, hai part |
+| `POST /api/excel/sheets` | `file` | JSON `{ sheets, metadata, errors }` |
+| `POST /api/powerpoint/slides` | `file` | JSON `{ slides, metadata, errors }` |
 
-Mỗi HTTP request tạo một file JSON có cấu trúc cây lồng nhau theo luồng gọi hàm trong `logs/debug/`, tính từ content root của API. Tên file gồm giờ UTC và ID ngẫu nhiên.
+`texts` là JSON array chuỗi, gửi bằng field hoặc upload file JSON có field name `texts`. Giữ hỗ trợ comment, trailing comma và newline thô trong chuỗi theo parser hiện có. Phần tử `null`, số, boolean, JSON hỏng và surrogate escape hỏng là lỗi request.
 
-Các file log được lưu trong thư mục `logs/debug/` và có thể xem trực quan trên trang `/debug`.
+Export luôn trả hai part khi hoàn tất, kể cả có skip:
 
-Giao diện `/debug` hỗ trợ:
-- Bật/tắt Debug Mode tức thì (không cần restart app).
-- Xem danh sách trace log với status code, method, path, thời gian chạy.
-- Tìm kiếm theo text đã extract hoặc nội dung bất kỳ trong trace.
-- Lọc theo function/method đã gọi.
-- Xem cây gọi hàm chi tiết (tree view) có thể expand/collapse:
-  - `In`: tham số đầu vào (màu xanh dương).
-  - `Out`: giá trị trả về (màu xanh lá).
-  - `State`: snapshot biến và dữ liệu trung gian (màu vàng/hổ phách).
-  - `Item`: vòng lặp xử lý dữ liệu (màu tím).
-  - `Error`: lỗi hoặc ngoại lệ nếu có (màu đỏ).
-  - `Time`: thời gian chạy từng method (ms).
-- Copy / Download JSON trace.
-- Xóa từng log hoặc xóa toàn bộ log.
+1. `Content-Type: application/json; charset=utf-8`, `Content-ID: <metadata>`; body `{ "metadata": ..., "errors": [] }`.
+2. MIME của file gốc, `Content-ID: <file>`, `Content-Disposition: attachment`; bytes file đầu ra. Tên download là basename an toàn, giữ Unicode và extension hoa/thường.
 
-Tracing bao phủ các method hiện có của controller, service, reader, extractor, marker codec, translation applier, line map và file type detector. Không instrument constructor, property, lambda, nội bộ .NET/Markdig hay chính hệ thống tracing. Khi thêm method mới, dùng mẫu dưới đây; không tự động instrument method mới bằng attribute.
+Import có `debug=true` trả thêm skip info trong metadata và hai part:
 
-```csharp
-using var trace = DebugTrace.Enter("MyService", "Process", () => new { input });
-try
-{
-    var result = ProcessCore(input);
-    trace.State("unitCount", () => result.Count);
-    return trace.Return(result);
-}
-catch (Exception error)
-{
-    trace.Error(error);
-    throw;
-}
-```
+1. `Content-Type: application/json; charset=utf-8`, `Content-ID: <metadata>`; body `{ "texts": [...], "metadata": {...}, "errors": [] }`.
+2. `Content-Type: application/json; charset=utf-8`, `Content-ID: <units>`, `Content-Disposition: attachment; filename="units.json"`; body `{ "units": [{ "index": 0, "kind": "paragraph", "location": {...} }] }`.
 
-Đặt `State` ở nơi giá trị vừa thay đổi hoặc quyết định xử lý vừa được xác định; dùng tên camelCase có nghĩa và giữ cùng tên khi cần xem chuỗi thay đổi. `stage` được ghi **trước** mỗi bước service để chỉ bước đã bắt đầu; lỗi hoặc cancellation giữ lại bước cuối, không có nghĩa bước đó đã thành công. Đầu vào/giá trị trả về đã nằm ở `In`/`Out`, không cần chụp lại toàn bộ bằng state.
+`debug` chỉ có trên import; bỏ field hoặc gửi `false` trả JSON thông thường. `metadata.units` không xuất hiện trong JSON chính ở cả hai chế độ. `metadata.skipped` luôn trả warning; chỉ import có `debug=true` mới trả thêm info. Export và discovery không nhận debug, không trả skip info. Lỗi toàn tác vụ luôn là JSON, không đính kèm mapping kể cả đã gửi `debug=true`.
 
-- Controller ghi `fileType` sau khi nhận diện thành công, nguồn `translationInput`, tiến trình `parseMode` và JSON sau chuẩn hóa newline.
-- Reader ghi `bytesRead` trước khi trả lỗi kích thước hoặc decode; `hasBom` có sẵn cả khi UTF-8 lỗi. Số byte lúc vượt giới hạn là lượng đã đọc đến khi phát hiện lỗi, có thể chưa phải toàn bộ file.
-- Markdown mở `Item` trước khi xử lý từng leaf block đủ điều kiện. `Item.index` là thứ tự block được xét (từ 1), `unitIndex` là chỉ số unit được trích xuất (từ 0); block không có chữ cần dịch có `outcome: noTranslatableText` và không có `unitIndex`.
-- Buffer trước/sau chỉ ghi tại `EncodeInline`, gồm text và số marker; snapshot cuối vẫn giữ buffer dở dang khi lỗi. Hàm tạo marker ghi riêng `marker` ngay sau khi đăng ký. Export ghi `tokens` trước/sau chuẩn hóa, quyết định từng unit, patch sau khi áp dụng và signature trước/sau kiểm tra cấu trúc.
-- TXT ghi span/line khi chốt đoạn, quyết định identity/thay thế và chuỗi `outputBytes` gồm BOM, separator, bản dịch trước khi kiểm tra giới hạn. `unitIndex` khi vượt byte limit chỉ unit gây dừng; vượt ở separator cuối chỉ có tổng byte.
+`debug=false` bỏ qua việc tạo danh sách unit public và chuỗi đường dẫn vị trí cho danh sách này ngay trong service, đồng thời không serialize hoặc gửi `units.json`. Với Office, extraction cũng không tạo `SkipMetadata` hoặc chuỗi đường dẫn chẩn đoán cho skip info bị ẩn; vẫn giữ số đếm và tọa độ tối thiểu để validation kiểm tra chính xác vùng bảo toàn. Mapping nội bộ và warning được thu thập đầy đủ. Export dùng cùng cách thu thập gọn và không tạo danh sách unit public. Cờ này điều khiển mapping chẩn đoán và skip info trong response; không bật log server hay trả thêm chi tiết exception.
 
-Mọi phép dựng snapshot phải nằm trong lambda `State(..., () => ...)` để giữ cơ chế bỏ qua khi tracing tắt, ẩn nội dung hoặc hết quota. Không tạo state theo từng ký tự hay chụp lặp toàn bộ buffer/dictionary ở các tầng helper.
+Khi gọi service trực tiếp, `ImportAsync(stream, cancellationToken)` mặc định không có `Metadata.Units`. Muốn lấy mapping, dùng `ImportAsync(stream, debug: true, cancellationToken: cancellationToken)`; overload có selection cũng nhận `debug` trước `cancellationToken`.
 
-`CaptureContent: true` ghi nội dung nguồn/bản dịch; đặt `false` để chỉ theo dõi luồng với giá trị `[Hidden]` (và `[Redacted]` cho thông báo lỗi). Object/AST được chụp theo các trường dữ liệu; stream không bị đọc thêm và lazy enumerable không bị thực thi (`[Deferred]`). Mỗi snapshot tối đa 20 phần tử/collection và có giới hạn độ sâu. `MaxValueLength` mặc định 1000 ký tự; phần bị cắt ghi `[Truncated]`. Log xuất cấu trúc cây JSON chuẩn gồm `calls`, `states`, `in`, `out`, `error`, `durationMs`. `MaxEvents` mặc định 10000 sự kiện/request; khi chạm ngưỡng, log ghi `[Truncated - MaxEvents reached]` và dừng chi tiết nhưng vẫn ghi `Result` khi hoàn tất.
+Không có `responseMode` hoặc header `X-File-Metadata`. Writer ghi trực tiếp từng part sau khi validate xong; boundary thay đổi theo response. So sánh identity bằng bytes **file part**.
 
-Middleware serialize và flush bất đồng bộ khi kết thúc request. `MaxTraceBytes` mặc định 4 MiB (cấu hình được giới hạn trong 4 KiB–64 MiB) chặn cả capture và file JSON; khi vượt mức serialize, ghi bản tóm tắt JSON hợp lệ. Log mới có `version: 1`; danh sách không lọc nội dung chỉ đọc metadata, còn log cũ và tìm kiếm nội dung dùng đường đọc đầy đủ. Tắt `Enabled` để ngừng tạo file cho request mới; request đang chạy giữ cấu hình ban đầu. Lỗi ghi trace không làm thay đổi kết quả API. Thư mục `logs/` được Git bỏ qua; file cũ chưa tự động xóa, cần chính sách retention bên ngoài hoặc xóa qua `/debug`.
+| HTTP | Ý nghĩa |
+|---|---|
+| 200 | Hoàn tất hoặc hoàn tất một phần |
+| 400 | Thiếu field, JSON hoặc kiểu dữ liệu request sai |
+| 413 | Vượt quota nguồn, multipart, mapping, bản dịch, schema hoặc output |
+| 415 | Extension hoặc Content-Type không được hỗ trợ |
+| 422 | Nguồn hỏng, count mismatch, ID không tồn tại hoặc lỗi xử lý toàn tác vụ |
+| 429 | Hết permit xử lý đồng thời |
+| 500 | Lỗi ngoài dự kiến; response không chứa nội dung exception |
 
-```bash
-curl -F "file=@guide.md" http://localhost:5000/import
-curl -OJ -F "file=@guide.md" -F 'translatedTexts=["Bắt đầu nhanh"]' http://localhost:5000/export
-```
+Lỗi toàn tác vụ trả JSON `{ metadata, errors }`, không có file. Metadata giữ những thông tin đã thu thập; `unitCount: null` nếu chưa xác định mapping. Discovery không có `unitCount`/`units`, kể cả khi lỗi. Reverse proxy có thể trả lỗi trước khi request tới ứng dụng.
 
-Thành công import trả array JSON thuần. Thành công export trả `text/markdown; charset=utf-8` cho `.md`, `text/plain; charset=utf-8` cho `.txt`, hoặc MIME tương ứng cho Office (`.docx`, `.xlsx`, `.pptx`) với attachment. Chọn handler bằng extension cuối, không phân biệt hoa thường, không dựa vào MIME client gửi. Mọi lỗi trả array gồm `code`, `message` và các field định vị nếu có. HTTP 400 dùng cho multipart/JSON sai; 413 cho giới hạn tài nguyên; 415 cho extension ngoài `.md`/`.txt`/`.docx`/`.xlsx`/`.pptx` hoặc Content-Type request không được hỗ trợ; 422 cho UTF-8, count, nội dung bản dịch, marker/token hoặc mapping sai; 500 cho lỗi ngoài dự kiến. Reverse proxy có thể chặn request trước ứng dụng nên response của proxy không được ứng dụng chuẩn hóa.
+## Metadata và skip
 
-## Token thống nhất Markdown và Office
+Xem [danh mục trạng thái, skip và message](docs/skip-status-messages.md) để tra cứu mã theo định dạng, message dùng chung trong source và quy tắc hiển thị theo debug.
 
-Sau cập nhật hardening, client phải import lại nguồn trước khi export: soft break Markdown, whitespace và ký tự điều khiển Office được bảo vệ bằng token `k`; giữ nguyên thứ tự token `r/k`. Không tái sử dụng array dịch từ phiên bản template cũ. Office từ chối bound/locked SDT, markup compatibility không được hỗ trợ và complex field xuyên paragraph; nội dung cached field được bảo vệ.
+Metadata luôn có `format`, `status`, `skipped`, `skipCount`. Import/export có `unitCount`, tính cả unit tên sheet. Chi tiết `units: [{ index, kind, location }]` chỉ nằm trong tệp `units.json` khi import có `debug=true`. Import vẫn có khoảng index của sheet/slide; export không có các khoảng index này và không có tệp unit.
 
-Markdown và Office dùng cùng wire syntax; unit có một vùng dịch, không anchor, trả chuỗi Plain (ví dụ `**Hello**` import thành `Hello`). Unit phức tạp dùng `<ox:r0>text</ox:r0>` cho vùng dịch và `<ox:k0/>` cho code, HTML, hard break hoặc nội dung phải giữ. Định dạng lồng nhau nằm trong mapping nguồn, không lồng thẻ r trong chuỗi import.
+`skipCount: { "warning": 2, "info": 7 }` là tổng `count` theo severity **trước khi lọc debug**. Vì vậy info vẫn có số lượng khi chi tiết info bị ẩn. Đây là số đối tượng theo scope, không phải số unit; lỗi chỉ đếm những phần đã thu thập được. Discovery hoặc lỗi trước extraction trả hai giá trị 0 khi chưa có skip.
 
-Ví dụ nguồn Markdown gồm Before, chữ red in đậm, after và inline code:
+- `success`: không có warning; vẫn có thể có skip `info` theo lựa chọn/quy tắc.
+- `partial`: có vùng chưa hỗ trợ hoặc bản dịch lỗi được giữ nguyên.
+- `failed`: không hoàn tất tác vụ.
 
-```text
-<ox:r0>Before </ox:r0><ox:r1>red</ox:r1><ox:r2> after </ox:r2><ox:k0/>
-```
+`skipped` gồm `code`, `severity` (`info`/`warning`), `stage` (`selection`/`extraction`/`translation`/`rename`), `scope`, `count`, `message`, `location`. `unitIndex` chỉ có khi đối tượng đã trở thành unit. Không cắt danh sách warning theo `MaxErrors`; info chỉ xuất hiện khi import có debug=true.
 
-Dịch nội dung trong r, giữ nguyên IDs/thứ tự/token. Các span chỉ có whitespace được giữ bằng k nếu nằm riêng giữa các cấu trúc. Trong Structured, backslash encode thành hai backslash và `<` encode thành backslash + `<`; không tự xóa escape. Plain/TXT giữ literal, không diễn giải token. Markdown vẫn escape ký tự Markdown và bảo toàn cấu trúc nguồn khi export. Mỗi r-slot không được rỗng/chỉ whitespace; lỗi trả `invalid_marker_syntax` hoặc `empty_translation` với index/line của unit.
+Index unit từ **0**; dòng, thứ tự sheet/slide và ordinal XML từ **1**. Word location dùng `partUri` thật và path có root, dạng `/w:document[1]/w:body[1]/w:p[2]`; không phải số trang. Excel có `sheetId`/`cellReference`; PowerPoint có `slideId`/`shapeId` và tọa độ bảng khi áp dụng.
 
-**Đổi contract Markdown:** Public import không còn phát `<keepme...>`. Hãy import lại file nguồn trước khi dịch/export theo phiên bản mới; không gửi lại array token cũ. Marker nội bộ vẫn phục vụ restoration của parser Markdown, không là format trao đổi API. Token builders/escaping dùng chung tại `Common/TranslationTokenSyntax.cs`, không khiến Markdown phụ thuộc module Office.
+Metadata public không có `schemaVersion`, `operation`, `sourceHash`, `appliedUnitCount`, `changedUnitCount`, `skippedUnitCount`, `paragraphCount`, `hasFrontmatter`, `hasBom`. Hash/BOM/binding vẫn dùng nội bộ để bảo toàn nguồn.
 
-**Tên tải xuống:** `guide.md`, `Guide.TXT`, `Report.DOCX`, `Budget.xlsx`, `Deck.pptx` giữ nguyên tên khi export; đường dẫn client bị loại, không thêm hậu tố. Nếu tên gốc đã là `already.translated.md` thì giữ nguyên tên đó. Tên thiếu dùng `document.{ext}`; nội dung MIME và loại file không đổi.
-
-## Văn bản thuần TXT
-
-Mỗi đoạn gồm các dòng có nội dung liên tiếp là một chuỗi cần dịch. Dòng rỗng hoặc chỉ chứa whitespace (space, tab, Unicode whitespace) phân cách các đoạn. Scanner nhận diện CRLF, LF và CR; không diễn giải heading, link, HTML, code, entity hay marker. Ví dụ cùng nội dung `# Hello`, `.md` import thành `["Hello"]`, còn `.txt` thành `["# Hello"]`.
-
-Nguồn `guide.txt` (hiển thị newline bằng escape):
-
-```text
-Hello world.\r\nSecond line.\r\n\r\n# Plain text.\r\n
-```
-
-Import trả:
+Ví dụ TXT import:
 
 ```json
-["Hello world.\r\nSecond line.", "# Plain text."]
+{
+  "texts": ["Hello", "World"],
+  "metadata": {
+    "format": "plaintext", "status": "success", "unitCount": 2,
+    "skipped": [], "skipCount": { "warning": 0, "info": 0 }, "encoding": "utf-8"
+  },
+  "errors": []
+}
 ```
 
-Gửi lại file nguồn cùng bản dịch theo đúng thứ tự, bằng field JSON hoặc upload file JSON:
+Với `debug=true`, JSON trên nằm trong part `<metadata>`, còn tệp `units.json` chứa:
 
-```bash
-curl -F "file=@guide.txt" http://localhost:5000/import
-curl -OJ -F "file=@guide.txt" -F 'translatedTexts=["Xin chào.\r\nDòng thứ hai.","# Văn bản thuần."]' http://localhost:5000/export
-curl -OJ -F "file=@guide.txt" -F "translatedTexts=@translations.json;type=application/json" http://localhost:5000/export
+```json
+{
+  "units": [
+    { "index": 0, "kind": "paragraph", "location": { "line": { "start": 1, "end": 1 } } },
+    { "index": 1, "kind": "paragraph", "location": { "line": { "start": 3, "end": 3 } } }
+  ]
+}
 ```
 
-Output là `guide.txt`:
+Export cùng nguồn với `texts=["Xin chào", ""]` trả HTTP 200 multipart. JSON part:
 
-```text
-Xin chào.\r\nDòng thứ hai.\r\n\r\n# Văn bản thuần.\r\n
+```json
+{
+  "metadata": {
+    "format": "plaintext", "status": "partial", "unitCount": 2,
+    "skipCount": { "warning": 1, "info": 0 },
+    "skipped": [{
+      "code": "empty_translation", "severity": "warning", "stage": "translation",
+      "scope": "unit", "unitIndex": 1, "count": 1,
+      "message": "Empty translation; source retained.",
+      "location": { "line": { "start": 3, "end": 3 } }
+    }],
+    "encoding": "utf-8"
+  },
+  "errors": []
+}
 ```
 
-- Import giữ nguyên space/tab đầu cuối và newline nội bộ mỗi đoạn; không trim hoặc normalize Unicode.
-- Export thay nguyên đoạn bằng bản dịch, không thêm escaping hoặc kiểm tra cấu trúc. Bản dịch có thể thay số dòng, thêm dòng trống hoặc chứa literal `<ox:r0>...</ox:r0>`; TXT luôn là Plain, không parse token.
-- BOM, newline kết thúc đoạn, các dòng trống ngăn đoạn và phần trống đầu/cuối file được giữ nguyên. Khoảng trắng bên trong đoạn thuộc nội dung dịch và được thay theo chuỗi client gửi.
-- Newline trong giá trị JSON hợp lệ được chèn nguyên văn: bản dịch LF vào nguồn CRLF có thể tạo output trộn EOL. Parser JSON chịu lỗi hiện tại có thể chuyển CRLF thô bên trong string thành LF; dùng JSON escape chuẩn để giữ chính xác.
-- File rỗng, chỉ BOM hoặc toàn whitespace import thành `[]`; export với `[]` giữ bytes gốc trong giới hạn output.
-- Số bản dịch phải đúng số đoạn; mỗi bản dịch không được null, rỗng hoặc chỉ whitespace. Lỗi từng đoạn có `index` từ 0 và `line.start`/`line.end` từ 1. Có lỗi thì không trả file một phần.
-- TXT dùng các giới hạn chung bên dưới và chỉ nhận UTF-8 nghiêm ngặt có/không BOM. Chưa hỗ trợ tự đoán encoding hoặc tự chia đoạn dài theo token/ký tự.
-- Import có thể trả đoạn nguồn dài hơn `MaxTranslationChars`; export vẫn kiểm tra giới hạn này trên từng bản dịch, kể cả identity. Identity export giữ nguyên bytes khi đáp ứng mọi giới hạn.
+File part chứa `Xin chào`, separator gốc và `World` được giữ lại. Markdown thêm `newlinePolicy: "preserve"`; Office trả inventory định dạng tương ứng và vị trí nguồn.
 
-## Office Open XML (.docx, .xlsx, .pptx)
+## Discovery và lựa chọn sheet/slide
 
-Hỗ trợ tài liệu Microsoft Word (`.docx`), Excel (`.xlsx`) và PowerPoint (`.pptx`) tuân thủ chuẩn ISO/IEC 29500 Transitional Profile (office-v1).
+Excel dùng `sheetIds`; PowerPoint dùng `slideIds`. Field là JSON array **chuỗi ID gốc**:
 
-- **Word (.docx)**:
-  - Trích xuất paragraphs trong Body, Headers/Footers theo section, Footnotes và Endnotes.
-  - Bảng (`w:tbl`): duyệt cell theo hàng/cột (kể cả bảng lồng nhau theo thứ tự Outer, Nested, After, Right). Bỏ qua cell tiếp nối merge dọc rỗng và cell chỉ chứa paragraph rỗng.
-  - Đoạn văn bản có nhiều runs formatting khác nhau được mã hóa bằng token canonical: `<ox:r0>Run 1</ox:r0><ox:r1>Run 2</ox:r1>`.
-  - Phân cách dòng mềm/cứng: `<ox:k0/>` (Break), `<ox:k1/>` (Cr), `<ox:k2/>` (Tab), `<ox:k3/>` (NoBreakHyphen), `<ox:k4/>` (SoftHyphen), `<ox:k5/>` (Sym).
-  - Khối trường (`w:fldSimple`, `w:fldChar`): chỉ dịch kết quả hiển thị của trường an toàn; giữ nguyên instruction và field codes.
+- Không truyền hoặc field trống: chọn phần hiển thị.
+- `[]`: không chọn phần nào, mapping rỗng.
+- ID trùng được gộp; xử lý theo thứ tự nguồn.
+- Chọn ID ẩn thì vẫn dịch và giữ trạng thái ẩn.
+- File xuất giữ toàn bộ sheet/slide ngoài lựa chọn.
 
-- **Excel (.xlsx)**:
-  - Trích xuất các ô chuỗi ký tự (`SharedStringTable` và `inlineStr`) trong các sheet hiển thị (`Visible`).
-  - Bỏ qua sheet ẩn (`Hidden`, `VeryHidden`), hàng và cột ẩn. Workbook có `Chartsheet` ngoài profile hiện tại bị từ chối.
-  - Bỏ qua ô công thức, ô số, ô ngày tháng, boolean và error.
-  - Bảo vệ tiêu đề bảng Excel (`Table` / `ListObject`): các ô thuộc header row và `TableColumn.Name` được giữ nguyên, không trích xuất unit.
-  - Quản lý Shared String Table (SST): giải chỉ mục, tạo mới SST sạch cho bản dịch, tự động loại bỏ các thuộc tính bộ đếm tùy chọn (`count`, `uniqueCount`) theo đặc tả OpenXML.
+Discovery đọc topology và title cần thiết, không gọi extractor dịch. ID bắt buộc thiếu hoặc trùng làm nguồn không hợp lệ.
 
-- **PowerPoint (.pptx)**:
-  - Trích xuất văn bản trong slide shapes (`p:sp`) và bảng DrawingML (`a:tbl`).
-  - Bỏ qua slide ẩn (`show="0"`), slide layouts và master slides.
-  - Hỗ trợ cell chứa rich text runs và line breaks (`a:br` -> `<ox:k0/>`).
-  - Bỏ qua ô tiếp nối của ô merge ngang/dọc (`hMerge="1"` / `vMerge="1"`).
+Ví dụ `/api/excel/sheets`:
 
-- **Quy tắc bảo toàn và tính bất biến**:
-  - File nguồn được mở hoàn toàn Read-Only với `AutoSave = false` và chế độ tương thích markup `NoProcess`.
-  - Identity export (nội dung dịch giống hệt văn bản trích xuất) đảm bảo trả về chính xác 100% từng byte của file gốc.
-  - Xác thực hai lớp sau khi xuất: Open XML SDK package validation và structure topology validation đảm bảo file đích hợp lệ và không bị hỏng hóc.
+```json
+{
+  "sheets": [
+    { "sheetId": "7", "index": 1, "name": "Sales", "state": "visible", "kind": "worksheet", "canImport": true },
+    { "sheetId": "42", "index": 2, "name": "Internal", "state": "veryHidden", "kind": "worksheet", "canImport": true }
+  ],
+  "metadata": { "format": "excel", "status": "success", "skipped": [], "skipCount": { "warning": 0, "info": 0 } },
+  "errors": []
+}
+```
 
-## Giới hạn mặc định
+`veryHidden` là trạng thái Excel không cho người dùng unhide bằng hộp thoại thông thường; khác `hidden`. Chartsheet được liệt kê với `canImport: false` và được bảo toàn khi import/export.
 
-- File nguồn: 5 MiB (Office: 50 MiB); multipart: 25 MiB; output: 20 MiB.
-- 10.000 unit/tệp; 100.000 UTF-16 code unit/bản dịch.
-- Cấu hình chung trong `FileHandling` và giới hạn gói Office trong `OfficeProcessing` của `appsettings.json`.
+Ví dụ `/api/powerpoint/slides`:
 
-API chỉ nhận file và `string[]`, không lưu phiên. Vì vậy server không thể chứng minh file export giống file import trước đó; caller phải gửi đúng nguồn. Các đoạn không có marker bị đảo thứ tự cũng không thể luôn được phát hiện. Marker kiểm tra tính toàn vẹn của từng unit, không chứng minh lịch sử import.
+```json
+{
+  "slides": [
+    { "slideId": "300", "index": 1, "title": "Overview", "hidden": false },
+    { "slideId": "900", "index": 2, "title": null, "hidden": true }
+  ],
+  "metadata": { "format": "powerpoint", "status": "success", "skipped": [], "skipCount": { "warning": 0, "info": 0 } },
+  "errors": []
+}
+```
 
-V1 giữ code, URL, autolink và HTML inline dưới marker bảo vệ; dịch heading/paragraph cùng emphasis và nhãn link. Code fence, front matter và thematic break không sinh unit. Soft break được biểu diễn bằng `\n`; hard line break (hai space hoặc backslash) cùng newline CRLF/LF được bảo toàn nguyên vẹn; khi bản dịch thay đổi, ký tự Markdown nhạy cảm được escape.
+Metadata import có `sheets`/`slides`, thêm `selected` và khoảng `[unitStartIndex, unitEndIndex)` cho vùng đã trích xuất. Export giữ inventory/selection nhưng bỏ khoảng này.
 
-Token public dùng r0/r1… cho vùng dịch và k0/k1… cho phần bảo vệ, đánh số riêng từ 0 trong mỗi unit; không có zero dư. Sai cú pháp, thiếu/thừa/lặp/đổi thứ tự token bị từ chối trước khi xuất file.
+## Tên sheet Excel
+
+Mỗi worksheet được chọn có unit Plain `sheetName` **đầu vùng**, kể cả sheet rỗng. Ví dụ sheet `Sales` có ô `Hello`: `texts=["Sales", "Hello"]`. Không dùng tên để nhận diện; mapping liên kết bằng `sheetId`.
+
+Tên mới được trim, thay ký tự cấm/control bằng `_`, bỏ nháy đơn đầu/cuối, giới hạn 31 UTF-16 code unit không cắt đôi surrogate pair. Rỗng sau normalize dùng `Sheet`; `History` thêm `_`; trùng tên không phân biệt hoa thường thêm ` (2)`, ` (3)` trong giới hạn. Bản dịch rỗng trước normalize giữ tên nguồn và ghi warning. Surrogate lỗi hoặc tên sau normalize chứa ký tự XML 1.0 cấm sẽ giữ tên nguồn với `invalid_translation`; các ô hợp lệ vẫn được dịch.
+
+Rename cập nhật qualifier qua tokenizer trong công thức ô, defined name, table formula, conditional formatting/data validation (gồm ngưỡng `cfvo` có `type="formula"`), chart formula và hyperlink nội bộ được nhận diện. Giữ string literal, tên cột trong structured reference và cấu trúc shared/array formula. Hyperlink sang workbook khác giữ nguyên `location`. Tính từ bảng tên nguồn để hỗ trợ đổi chéo tên.
+
+Dynamic/3D/external reference, pivot và extension chưa chứng minh được an toàn khiến rename liên quan được giữ nguyên; khi không xác định chắc phạm vi ảnh hưởng, giữ các rename của workbook. Nội dung ô vẫn được dịch. `sheetNameChanges` của export ghi `sheetId`, `originalName`, `requestedName`, `finalName`, kể cả rename bị skip.
+
+VML/control, shape liên kết ô, data consolidation và hyperlink có đích dạng `#...` trong relationship hiện chặn rename với `unsafe_sheet_reference`. Đây là cơ chế giữ tên khi chưa phân tích được các dạng tham chiếu này; workbook chỉ dùng VML cho comment cũng có thể bị chặn rename. Structured reference có ngoặc hoặc escape không xác định được an toàn cũng giữ tên nguồn.
+
+Với tham chiếu 3D tĩnh, hệ thống nhận diện cả khoảng sheet theo thứ tự nguồn và giữ tên các sheet liên quan; sheet độc lập vẫn có thể đổi tên. Collision được tính lại sau khi quyết định tên nào phải giữ nguyên.
+
+## Bảo toàn theo định dạng
+
+- **TXT:** UTF-8 nghiêm ngặt, giữ separator/newline/BOM. Paragraph rỗng hoặc Unicode dịch hỏng được giữ nguồn; null/count/quota vẫn fatal.
+- **Markdown:** giữ code/front matter, URL, HTML, anchor, soft/hard break và escaping. Token sai, Mermaid label lỗi, heading không thể đổi an toàn hoặc thay đổi cấu trúc định vị được sẽ skip unit. Patch chồng lấn và lỗi cấu trúc cuối không cô lập được là fatal.
+- **Word:** giữ subtree SDT khóa/binding, revision, ruby, altChunk, alternate content; tiếp tục vùng độc lập. Inline được giữ bằng anchor khi an toàn. Field xuyên paragraph giữ các paragraph liên quan; biên không xác định giữ story. Duyệt các story tham chiếu theo thứ tự hiện có, không lặp header/footer dùng chung.
+- **Excel:** tiếp tục ô/drawing hỗ trợ khi có chart/chartsheet/SmartArt. Bảo toàn formula, table header/totals, hàng/cột ẩn, phonetic cell và merge follower chưa hỗ trợ. Shared strings dùng copy-on-write để không sửa ô ngoài lựa chọn.
+- **PowerPoint:** tiếp tục shape/table hỗ trợ khi gặp graphic frame chưa hỗ trợ; bảo toàn merge continuation, thứ tự, ID và trạng thái ẩn.
+
+Open XML dùng `AutoSave=false`, `NoProcess`, kiểm tra package/schema, relationships, inventory và edit mask chính xác. Chỉ chấp nhận schema baseline trong vùng đã xác định được giữ nguyên; lỗi mới và sửa ngoài mask làm export thất bại. Không có thay đổi hiệu lực thì trả bytes nguồn, sau khi kiểm tra quota.
+
+## Token dịch
+
+Markdown/Office dùng `<ox:r0>text</ox:r0>` cho slot dịch và `<ox:k0/>` cho anchor bảo vệ. Unit một slot không anchor là Plain; TXT luôn literal. Giữ IDs/thứ tự/cấu trúc token. Trong Structured, escape `\` thành `\\`, `<` thành `\<`.
+
+Run liền nhau cùng style/ngữ cảnh được gộp, kể cả Nhật/Latin. Khác style, hyperlink hoặc anchor giữ ranh giới. Slot riêng lẻ có thể rỗng nếu unit còn nội dung; toàn bộ unit rỗng sẽ skip. Các test vẫn kiểm tra nội dung/style/XML độc lập với mapping.
+
+## Client chuyển đổi
+
+Client cần đọc import envelope, giữ bản sao file gốc và selection, sửa `texts` đúng index rồi parse **multipart response bằng parser nhị phân**. Nếu cần mapping, gửi `debug=true` và đọc tệp `units.json`; mapping không còn nằm trong `metadata.units`. Không đọc toàn response thành text hoặc lưu toàn multipart thành `.xlsx/.docx/.pptx/.json`.
+
+Ví dụ Python với `requests`, parser MIME chuẩn:
+
+```python
+import json
+from email import policy
+from email.parser import BytesParser
+from pathlib import Path
+import requests
+
+def read_response(response):
+    if response.status_code != 200:
+        raise RuntimeError(response.json())
+    if response.headers["Content-Type"].startswith("application/json"):
+        return response.json(), {}
+    message = BytesParser(policy=policy.default).parsebytes(
+        ("Content-Type: " + response.headers["Content-Type"] + "\r\nMIME-Version: 1.0\r\n\r\n").encode("ascii")
+        + response.content)
+    parts = list(message.iter_parts())
+    assert len(parts) == 2 and parts[0]["Content-ID"] == "<metadata>"
+    return json.loads(parts[0].get_payload(decode=True)), {
+        parts[1]["Content-ID"]: parts[1].get_payload(decode=True)
+    }
+
+source = Path("source.xlsx")
+selection = {"sheetIds": json.dumps(["7"])}
+with source.open("rb") as file:
+    imported, attachments = read_response(requests.post(
+        "http://localhost:5000/api/excel/import",
+        files={"file": (source.name, file)}, data={**selection, "debug": "true"}))
+Path("units.json").write_bytes(attachments["<units>"])
+texts = imported["texts"]
+# Cập nhật các unit cần dịch, gồm unit sheetName nếu muốn đổi tên.
+with source.open("rb") as file:
+    response = requests.post("http://localhost:5000/api/excel/export",
+                             files={"file": (source.name, file)},
+                             data={**selection, "texts": json.dumps(texts)})
+result, attachments = read_response(response)
+metadata = result["metadata"]
+Path("translated.xlsx").write_bytes(attachments["<file>"])
+```
+
+Sau thay đổi mapping/token hoặc khi dùng file xuất làm nguồn mới, **import lại** để lấy mapping mới. Server không chứng minh lịch sử import hoặc phát hiện mọi trường hợp đảo các unit Plain của client.
+
+## Giới hạn và hiệu năng
+
+Giữ cấu hình `FileHandling`, `OfficeProcessing` và các giới hạn tài nguyên hiện có. `MaxConcurrentRequests` áp dụng chung cho import/export/discovery, admission trước khi đọc multipart. Warning không vô hiệu hóa quota, cancellation hoặc stream ownership.
+
+Office tái sử dụng hash payload và baseline lỗi schema trong từng request; output vẫn được validate, hash và đối chiếu edit mask. Snapshot không giữ DOM hoặc cache giữa các request. Khi gọi lớp nguồn trực tiếp, `OfficeSource` sao chép buffer đầu vào và mỗi lần đọc `OriginalBytes` trả một bản sao độc lập.
+
+CI tại [filehandler.yml](../.github/workflows/filehandler.yml) build với XML documentation và chạy test C# cùng JavaScript. Quy tắc comment theo [AGENTS.md](../AGENTS.md); các yêu cầu về phạm vi thành viên, thứ tự param/typeparam, nội dung và định dạng cần được rà soát khi review code.
+
+Kiểm thử parser multipart và preview giới hạn: `node --test tests/swagger-multipart.test.cjs tests/swagger-response.test.cjs`.

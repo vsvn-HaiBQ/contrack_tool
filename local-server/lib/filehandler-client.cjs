@@ -1,5 +1,8 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { parseMultipart } = require("./filehandler-multipart.cjs");
+
+const FORMATS = { ".txt": "plaintext", ".md": "markdown", ".docx": "word", ".xlsx": "excel", ".pptx": "powerpoint" };
 
 const MIME_TYPES = {
   ".txt": "text/plain",
@@ -32,15 +35,31 @@ async function snapshotFile(filePath, signal) {
   return { bytes, fileName: path.basename(resolved), mimeType };
 }
 
-function fileForm(snapshot) {
+function formatOf(snapshot) {
+  const format = FORMATS[path.extname(snapshot.fileName).toLowerCase()];
+  if (!format) throw new Error("Unsupported FileHandler file extension");
+  return format;
+}
+
+function fileForm(snapshot, options = {}) {
   const form = new FormData();
   form.append("file", new Blob([snapshot.bytes], { type: snapshot.mimeType }), snapshot.fileName);
+  for (const [key, format] of [["sheetIds", "excel"], ["slideIds", "powerpoint"]]) {
+    const ids = options[key];
+    if (ids == null) continue;
+    if (formatOf(snapshot) !== format) throw new Error(`${key} requires a ${format} file`);
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string" || !id.trim())) {
+      throw new Error(`${key} must be an array of non-empty source ID strings`);
+    }
+    form.append(key, JSON.stringify(ids));
+  }
   return form;
 }
 
 function errorDetails(text, response) {
   try {
-    const errors = JSON.parse(text);
+    const payload = JSON.parse(text);
+    const errors = Array.isArray(payload) ? payload : payload?.errors;
     if (Array.isArray(errors) && errors.length) {
       return errors.map((error) => {
         const location = [
@@ -55,7 +74,7 @@ function errorDetails(text, response) {
   return text.trim() || `${response.status} ${response.statusText}`.trim();
 }
 
-async function requestFileHandler(route, { fileHandlerBaseUrl, signal, timeoutMs = 120000, form, binary = false } = {}) {
+async function requestFileHandler(route, { fileHandlerBaseUrl, signal, timeoutMs = 120000, form, attachment } = {}) {
   assertActive(signal);
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -71,7 +90,24 @@ async function requestFileHandler(route, { fileHandlerBaseUrl, signal, timeoutMs
     if (!response.ok) {
       throw new Error(`FileHandler ${route} failed (HTTP ${response.status}): ${errorDetails(await response.text(), response)}`);
     }
-    const result = binary ? Buffer.from(await response.arrayBuffer()) : await response.json();
+    let result;
+    if (attachment) {
+      const parts = parseMultipart(Buffer.from(await response.arrayBuffer()), response.headers.get("content-type"));
+      if (parts.length !== 2 || parts[0].id !== "<metadata>" || parts[1].id !== `<${attachment}>`
+          || !/^application\/json(?:\s*;|$)/i.test(parts[0].contentType)) {
+        throw new Error("Invalid FileHandler multipart response parts");
+      }
+      const envelope = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(parts[0].bytes));
+      result = { ...envelope, attachment: parts[1].bytes };
+    } else {
+      result = await response.json();
+    }
+    if (form && (!result?.metadata || !Array.isArray(result.errors))) {
+      throw new Error("Invalid FileHandler response envelope");
+    }
+    if (result?.errors?.length || result?.metadata?.status === "failed") {
+      throw new Error(errorDetails(JSON.stringify(result), response));
+    }
     assertActive(signal);
     return result;
   } catch (error) {
@@ -85,20 +121,40 @@ async function requestFileHandler(route, { fileHandlerBaseUrl, signal, timeoutMs
 }
 
 async function importFileHandler(snapshot, options = {}) {
-  const segments = await requestFileHandler("import", { ...options, form: fileForm(snapshot) });
-  if (!Array.isArray(segments) || segments.some((item) => typeof item !== "string")) {
-    throw new Error("FileHandler import returned an invalid response: expected an array of strings");
+  const form = fileForm(snapshot, options);
+  if (options.debug) form.append("debug", "true");
+  const result = await requestFileHandler(`api/${formatOf(snapshot)}/import`, {
+    ...options, form, attachment: options.debug ? "units" : undefined,
+  });
+  if (!Array.isArray(result.texts) || result.texts.some((item) => typeof item !== "string")) {
+    throw new Error("FileHandler import returned invalid texts: expected an array of strings");
   }
-  return segments;
+  if (options.debug) {
+    const mapping = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(result.attachment));
+    if (!Array.isArray(mapping.units)) throw new Error("FileHandler import returned invalid units");
+    result.units = mapping.units;
+    delete result.attachment;
+  }
+  return result;
 }
 
 async function exportFileHandler(snapshot, translations, options = {}) {
   if (!Array.isArray(translations) || translations.some((item) => typeof item !== "string")) {
     throw new Error("FileHandler translations must be an array of strings");
   }
-  const form = fileForm(snapshot);
-  form.append("translatedTexts", JSON.stringify(translations));
-  return requestFileHandler("export", { ...options, form, binary: true });
+  const form = fileForm(snapshot, options);
+  form.append("texts", JSON.stringify(translations));
+  const result = await requestFileHandler(`api/${formatOf(snapshot)}/export`, { ...options, form, attachment: "file" });
+  return { bytes: result.attachment, metadata: result.metadata, errors: result.errors };
+}
+
+async function discoverFileHandler(snapshot, options = {}) {
+  const format = formatOf(snapshot);
+  const collection = format === "excel" ? "sheets" : format === "powerpoint" ? "slides" : null;
+  if (!collection) throw new Error("FileHandler discovery requires an Excel or PowerPoint file");
+  const result = await requestFileHandler(`api/${format}/${collection}`, { ...options, form: fileForm(snapshot) });
+  if (!Array.isArray(result[collection])) throw new Error(`FileHandler returned invalid ${collection}`);
+  return result;
 }
 
 async function checkFileHandler(options = {}) {
@@ -113,4 +169,4 @@ async function checkFileHandler(options = {}) {
   }
 }
 
-module.exports = { defaultFileHandlerBaseUrl, snapshotFile, importFileHandler, exportFileHandler, checkFileHandler };
+module.exports = { defaultFileHandlerBaseUrl, snapshotFile, importFileHandler, exportFileHandler, discoverFileHandler, checkFileHandler };

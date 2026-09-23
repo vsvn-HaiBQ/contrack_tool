@@ -30,8 +30,9 @@ public sealed class WordTranslationApplier
                 masks[uri] = new OfficeEditMask(uri, new[] { "//w:t" });
             }
         }
+        var editsByPart = OfficeTextBindings.EditsByPart(plan.Units, decodedUnits);
         foreach (var uri in masks.Keys.ToArray())
-            masks[uri] = masks[uri] with { ScalarEdits = OfficeTextBindings.Edits(plan.Units, decodedUnits, uri) };
+            masks[uri] = masks[uri] with { ScalarEdits = editsByPart[uri] };
         return new(plan, decodedUnits, masks);
     }
 
@@ -52,7 +53,11 @@ public sealed class WordTranslationApplier
             cancellationToken.ThrowIfCancellationRequested();
             var unit = patch.Plan.Units[i];
             var decoded = patch.DecodedUnits[i];
-            if (!OfficeTextBindings.Changed(unit, decoded)) continue;
+            if (!OfficeTextBindings.Changed(unit, decoded))
+            {
+                continue;
+            }
+
             if (!map.TryGetValue(unit.Location.PartUri, out var part) || part.RootElement is null)
                 throw new InvalidOperationException("Missing target part.");
             OfficeTextBindings.Apply(part.RootElement, unit, decoded);

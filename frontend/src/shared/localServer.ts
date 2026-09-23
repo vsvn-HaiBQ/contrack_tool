@@ -1,6 +1,6 @@
 import { HttpError } from "./http";
 import { nodeServerBase, openXmlBase, fileHandlerBase } from "./runtimeConfig";
-import type { DocumentFileProcessor, LocalServerHealth, LocalServerUpdateCheck, LocalServerUpdateInstallResult } from "./types";
+import type { DocumentFileProcessor, FileHandlerMetadata, FileHandlerSheet, FileHandlerSlide, FileHandlerUnit, LocalServerHealth, LocalServerUpdateCheck, LocalServerUpdateInstallResult } from "./types";
 
 export const localServerBase = nodeServerBase;
 
@@ -161,11 +161,15 @@ export const localServerApi = {
       return response.models;
     },
     sheets: async (payload: unknown) => {
-      const response = await localHttp<{ sheets: string[] }>("/document-translation/sheets", jsonBody(withDocumentProcessor(payload)));
+      const response = await localHttp<{ sheets: string[] | FileHandlerSheet[] }>("/document-translation/sheets", jsonBody(withDocumentProcessor(payload)));
       return response.sheets;
     },
+    slides: async (payload: unknown) => {
+      const response = await localHttp<{ slides: FileHandlerSlide[] }>("/document-translation/slides", jsonBody(withDocumentProcessor(payload)));
+      return response.slides;
+    },
     extract: (payload: unknown) =>
-      localHttp<{ file_path: string; extension: string; file_type?: string; sheets: string[]; segment_count: number; segments: string[] }>(
+      localHttp<{ file_path: string; extension: string; file_type?: string; sheets: string[]; segment_count: number; segments: string[]; metadata?: FileHandlerMetadata; units?: FileHandlerUnit[] }>(
         "/document-translation/extract",
         jsonBody(withDocumentProcessor(payload))
       ),
