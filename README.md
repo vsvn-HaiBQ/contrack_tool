@@ -123,7 +123,9 @@ Health, discovery, extraction, and translation requests accept `file_processor` 
 
 FileHandler routes `.txt`, `.md`, `.docx`, `.xlsx`, and `.pptx` to `/api/plaintext`, `/api/markdown`, `/api/word`, `/api/excel`, and `/api/powerpoint`, respectively. Import reads `{ texts, metadata, errors }`; export sends `file` and a `texts` JSON-array field and parses `multipart/mixed` as bytes, writing only the `<file>` attachment. Node preserves segment order and skipped segments; structured Markdown/Office prompts require preservation of all `ox:r`/`ox:k` tokens and escapes. TXT remains literal text. API error codes, indices, source lines, and partial-processing warnings appear in job logs. Empty imports stop with a no-text message. FileHandler requests use the selected timeout (health checks use 3 seconds), and canceling a job aborts active requests before output is written. Existing explicit output paths are not overwritten in FileHandler mode.
 
-In FileHandler mode, `POST /document-translation/sheets` returns native Excel sheet objects (`sheetId`, `name`, `state`, `canImport`, etc.); `POST /document-translation/slides` returns PowerPoint slide objects (`slideId`, `title`, `hidden`, etc.). They map to `/api/excel/sheets` and `/api/powerpoint/slides`. Extraction and translation accept `sheetIds`/`sheet_ids` or `slideIds`/`slide_ids` as arrays of source ID strings: omit to process visible parts, pass `[]` to select nothing, or include hidden IDs explicitly. The same source snapshot and selection are sent for import and export. Excel imports include sheet-name translation units. OpenXML retains its sheet-name array and `sheets` selection contract. FileHandler extraction also returns `metadata`; passing `debug: true` reads the `units.json` attachment and returns `units` for source mapping. The translation UI uses the default visible selection.
+In FileHandler mode, `POST /document-translation/sheets` returns native Excel sheet objects (`sheetId`, `name`, `state`, `canImport`, etc.); `POST /document-translation/slides` returns PowerPoint slide objects (`slideId`, `title`, `hidden`, etc.). They map to `/api/excel/sheets` and `/api/powerpoint/slides`. Extraction and translation accept `sheetIds`/`sheet_ids` or `slideIds`/`slide_ids` as arrays of source ID strings: omit to process visible parts, pass `[]` to select nothing, or include hidden IDs explicitly. The same source snapshot and selection are sent for import and export. Excel imports include sheet-name translation units. OpenXML retains its sheet-name array and `sheets` selection contract. FileHandler extraction also returns `metadata`; passing `debug: true` reads the `units.json` attachment and returns `units` for source mapping. Translation accepts `debug` for import diagnostics and includes informational skips in job logs when enabled.
+
+The translation UI shows FileHandler options per queued file: visible or individual sheets/slides for Excel/PowerPoint, source-location diagnostics, and a text preview for every supported format (including Markdown). Empty selections and failed discovery block starting; options stay locked while the queue runs. FileHandler sends all extracted text containing letters to the translator, including mixed-language text, instead of silently filtering by the selected source language's script. An unchanged model response or an export identical to the source fails without saving a misleading output file. Partial exports display a warning in both the result and completion message.
 
 `docker compose up --build -d` includes FileHandler at port **5001**, with `GET /health` for readiness; OpenXML stays at **5000**. FileHandler uses the published `sdk:10.0-alpine` and `aspnet:10.0-alpine` images. Its `global.json` selects the latest installed stable .NET 10.0 SDK feature band (`latestFeature`), starting from 10.0.100. Debug tracing is disabled by default in Compose; it can be enabled through `DebugTrace__Enabled`. For a standalone development API on the same port, run `dotnet run --project filehandler/src/FileHandler.Api --no-launch-profile --urls http://127.0.0.1:5001` with a compatible .NET 10 SDK.
 
@@ -137,13 +139,13 @@ Verification commands (use `npm.cmd` on Windows if PowerShell blocks `npm.ps1`):
 
 ```bash
 npm run build
-node --test local-server/tests/filehandler-client.test.cjs
+node --test local-server/tests/*.test.cjs frontend/tests/*.test.cjs
 dotnet test filehandler/FileHandler.sln
 docker compose config --quiet
 docker compose build filehandler
 ```
 
-Set `CT_FILEHANDLER_TEST_URL` to a running FileHandler base URL to include the live TXT/Markdown round-trip test in the Node suite.
+Set `CT_FILEHANDLER_TEST_URL` to a running FileHandler base URL to include live TXT/Markdown round trips and the full Markdown translation pipeline. Pipeline tests use deterministic model responses and the real FileHandler API; they verify saved translations, formatting preservation, and rejection of unchanged output.
 
 ## Build web + local server
 

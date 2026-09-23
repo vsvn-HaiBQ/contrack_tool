@@ -146,6 +146,12 @@ export type BuildJobLog = {
 
 export type DocumentFileProcessor = "filehandler" | "openxml";
 
+export type FileHandlerInputOptions = {
+  debug: boolean;
+  sheetIds?: string[];
+  slideIds?: string[];
+};
+
 export type FileHandlerSheet = {
   sheetId: string;
   index: number;
@@ -270,6 +276,7 @@ export type DocumentTranslationResult = {
   file_processor: DocumentFileProcessor;
   filehandler_base_url?: string;
   metadata?: FileHandlerMetadata;
+  changed_segments?: number;
   file_path: string;
   output_path: string;
   output_file_name?: string;

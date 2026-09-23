@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import LoadingCircle from "../../shared/LoadingCircle.vue";
+import FileHandlerOptions from "./FileHandlerOptions.vue";
 import { localServerApi, localServerBase, type CodexModelOption } from "../../shared/localServer";
 import { sessionState } from "../../shared/session";
 import { showToast } from "../../shared/toast";
 import { auditApi } from "../audit/api";
 import { usersApi } from "../users/api";
 import { settingsApi } from "../settings/api";
-import type { BuildJobLog, DocumentFileProcessor, DocumentTranslationJob, DocumentTranslationSettings } from "../../shared/types";
+import type { BuildJobLog, DocumentFileProcessor, DocumentTranslationJob, DocumentTranslationSettings, FileHandlerInputOptions } from "../../shared/types";
 
 const LANGUAGE_OPTIONS = ["Japanese", "Vietnamese", "English"] as const;
 
@@ -48,6 +49,8 @@ const form = reactive({
 });
 
 const filesQueue = ref<string[]>([]);
+const fileOptions = reactive<Record<string, FileHandlerInputOptions>>({});
+const fileOptionsValid = reactive<Record<string, boolean>>({});
 const queueRunning = ref(false);
 const queueIndex = ref(0);
 
@@ -85,7 +88,8 @@ const progressPercent = computed(() => {
   if (!current || current.translatable_segments <= 0) return 0;
   return Math.min(100, Math.round((current.translated_segments / current.translatable_segments) * 100));
 });
-const canStart = computed(() => processorSupported.value && filesQueue.value.length > 0 && Boolean(form.model.trim()) && !running.value && !queueRunning.value);
+const selectionValid = computed(() => fileProcessor.value !== "filehandler" || filesQueue.value.every(path => fileOptionsValid[path] !== false));
+const canStart = computed(() => processorSupported.value && fileProcessorOk.value && codexOk.value && selectionValid.value && filesQueue.value.length > 0 && Boolean(form.model.trim()) && !running.value && !queueRunning.value);
 const result = computed(() => job.value?.result ?? null);
 const archivedLogs = ref<BuildJobLog[]>([]);
 const archivedJobIds = new Set<string>();
@@ -333,6 +337,7 @@ async function addFilesToQueue(paths: string[]) {
     try {
       const validated = await validateFile(path);
       if (!filesQueue.value.includes(validated)) {
+        fileOptions[validated] = { debug: false };
         filesQueue.value.push(validated);
         added++;
       }
@@ -347,10 +352,16 @@ async function addFilesToQueue(paths: string[]) {
 }
 
 function removeFileFromQueue(index: number) {
+  delete fileOptions[filesQueue.value[index]];
+  delete fileOptionsValid[filesQueue.value[index]];
   filesQueue.value.splice(index, 1);
 }
 
 function clearQueue() {
+  for (const path of filesQueue.value) {
+    delete fileOptions[path];
+    delete fileOptionsValid[path];
+  }
   filesQueue.value = [];
 }
 
@@ -439,6 +450,7 @@ async function runOneFile(filePath: string, position: number, total: number): Pr
     nextJob = await localServerApi.documentTranslation.start({
       file_processor: fileProcessor.value,
       filePath: validated,
+      ...(fileProcessor.value === "filehandler" ? fileOptions[filePath] : {}),
       outputDirectory: form.outputDirectory || undefined,
       direction: direction.value,
       model: form.model.trim() || undefined,
@@ -519,13 +531,14 @@ async function runOneFile(filePath: string, position: number, total: number): Pr
 }
 
 async function startTranslation() {
-  if (!processorSupported.value || queueRunning.value || running.value) return;
+  if (!canStart.value) return;
   const pending = [...filesQueue.value];
   if (!pending.length) {
     showToast("Document file is required", "warning");
     return;
   }
 
+  queueRunning.value = true;
   try {
     if (form.outputDirectory.trim()) {
       form.outputDirectory = await validateDirectory(form.outputDirectory, "Output folder");
@@ -535,23 +548,27 @@ async function startTranslation() {
     form.contextWindow = normalizeNumber(form.contextWindow, 20, 0, 200);
     await saveTranslationSettings();
   } catch (error) {
+    queueRunning.value = false;
     showToast((error as Error).message, "error");
     return;
   }
 
-  queueRunning.value = true;
   queueIndex.value = 0;
   archivedLogs.value = [];
   archivedJobIds.clear();
   job.value = null;
   let succeeded = 0;
   let failed = 0;
+  let partial = 0;
   try {
     for (let i = 0; i < pending.length; i++) {
       queueIndex.value = i + 1;
       try {
         await runOneFile(pending[i], queueIndex.value, pending.length);
-        if (job.value?.status === "succeeded") succeeded++;
+        if (job.value?.status === "succeeded") {
+          succeeded++;
+          if (job.value.result?.metadata?.status === "partial") partial++;
+        }
         else failed++;
         if (job.value?.status === "canceled") {
           break;
@@ -566,17 +583,17 @@ async function startTranslation() {
   }
 
   if (pending.length > 1) {
-    showToast(`Translated ${succeeded}/${pending.length} files${failed ? ` (${failed} failed)` : ""}`, failed ? "warning" : "success");
+    showToast(`Translated ${succeeded}/${pending.length} files${failed ? ` (${failed} failed)` : ""}${partial ? ` (${partial} partial; review warnings)` : ""}`, failed || partial ? "warning" : "success");
   } else {
     const status = job.value?.status;
     showToast(
-      status === "succeeded" ? "Document translated" : status === "canceled" ? "Translation stopped" : job.value?.error || "Translation failed",
-      status === "succeeded" ? "success" : "error"
+      status === "succeeded" ? (partial ? "Document partially translated; review warnings" : "Document translated") : status === "canceled" ? "Translation stopped" : job.value?.error || "Translation failed",
+      status === "succeeded" ? (partial ? "warning" : "success") : "error"
     );
   }
 
   if (filesQueue.value.length && succeeded > 0) {
-    filesQueue.value = [];
+    clearQueue();
   }
 }
 
@@ -658,7 +675,7 @@ onBeforeUnmount(() => {
           <span class="rounded px-2 py-1 text-xs font-medium" :class="healthBadgeClass(codexOk)">Codex</span>
           <button
             class="rounded border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-[#393C41] transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
-            :disabled="checkingHealth"
+            :disabled="checkingHealth || queueRunning || running"
             @click="refreshHealth(true)"
           >
             {{ checkingHealth ? "Checking..." : localServerBase }}
@@ -670,7 +687,7 @@ onBeforeUnmount(() => {
         {{ healthMessage }}
       </p>
 
-      <div class="grid gap-4 lg:grid-cols-2">
+      <fieldset :disabled="queueRunning || running" class="m-0 grid min-w-0 gap-4 border-0 p-0 lg:grid-cols-2">
         <div class="grid gap-2 lg:col-span-2">
           <div class="flex items-center justify-between">
             <label class="text-sm font-medium text-[#393C41]">Document Files</label>
@@ -703,9 +720,10 @@ onBeforeUnmount(() => {
             </div>
             <div
               v-for="(filePath, index) in filesQueue"
-              :key="`${filePath}-${index}`"
-              class="flex items-center gap-2 rounded bg-white px-2 py-1 text-sm text-[#171A20]"
+              :key="filePath"
+              class="grid gap-2 rounded bg-white px-2 py-2 text-sm text-[#171A20]"
             >
+              <div class="flex items-center gap-2">
               <span class="min-w-0 flex-1 truncate" :title="filePath">{{ filePath }}</span>
               <button
                 class="rounded px-2 py-0.5 text-xs text-[#7A7C80] transition hover:bg-neutral-100 hover:text-[#171A20] disabled:cursor-not-allowed disabled:opacity-50"
@@ -714,6 +732,10 @@ onBeforeUnmount(() => {
               >
                 Remove
               </button>
+              </div>
+              <FileHandlerOptions v-if="fileProcessor === 'filehandler'" :file-path="filePath"
+                :model-value="fileOptions[filePath] || { debug: false }" :disabled="queueRunning || running" :timeout-seconds="form.timeoutSeconds"
+                @update:model-value="fileOptions[filePath] = $event" @valid="fileOptionsValid[filePath] = $event" />
             </div>
           </div>
         </div>
@@ -792,13 +814,13 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
-      </div>
+      </fieldset>
 
       <details class="rounded-lg border border-neutral-200 bg-neutral-50">
         <summary class="cursor-pointer select-none px-4 py-3 text-sm font-medium text-[#393C41]">
           Codex config
         </summary>
-        <div class="grid gap-4 border-t border-neutral-200 bg-white p-4 lg:grid-cols-2">
+        <fieldset :disabled="queueRunning || running" class="m-0 grid min-w-0 gap-4 border-0 border-t border-neutral-200 bg-white p-4 lg:grid-cols-2">
         <div class="grid gap-2">
           <label class="text-sm font-medium text-[#393C41]">Model</label>
           <select v-model="form.model" class="w-full rounded border border-[#D0D1D2] bg-white px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]">
@@ -860,7 +882,7 @@ onBeforeUnmount(() => {
             class="w-full resize-y rounded border border-[#D0D1D2] px-2 py-2 text-[#171A20] outline-none transition focus:border-[#3E6AE1]"
           />
         </div>
-        </div>
+        </fieldset>
       </details>
 
       <div class="flex flex-wrap items-center gap-3">
@@ -884,6 +906,9 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="result" class="grid gap-3 rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
+      <p v-if="result.metadata?.status === 'partial'" role="alert" class="m-0 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        Partially translated. Some content remains unchanged; review the warnings in the log.
+      </p>
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 class="m-0 text-xl leading-tight font-medium text-[#171A20]">Output</h3>

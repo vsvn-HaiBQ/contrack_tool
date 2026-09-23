@@ -314,6 +314,7 @@ function translationOptions(input = {}) {
     documentSummary: normalizeText(input.documentSummary ?? input.document_summary, "(no summary provided)"),
     sheets,
     ...selection,
+    debug: parseBoolean(input.debug, false),
     outputPath: normalizeText(input.outputPath ?? input.output_path),
     outputDirectory: normalizeText(input.outputDirectory ?? input.output_directory),
   };
@@ -538,7 +539,7 @@ function buildPrompt({ batch, allSegments, firstIndex, options }) {
   const segments = batch.map((item, index) => `[${index + 1}] ${item.text}`).join("\n");
 
   const formatInstructions = options.fileHandlerTokens
-    ? "\nMANDATORY FILE FORMAT RULES (also apply with custom instructions):\nFor structured segments, translate only text inside <ox:rN>...</ox:rN>. Preserve every opening/closing r token and <ox:kN/> anchor exactly, including IDs, count, and order. Do not add, remove, nest, or reorder tokens. Keep each translated r-slot nonempty. Preserve backslash escaping (escaped backslashes and escaped <) inside runs. Preserve whitespace and newlines. Plain segments have no structural tokens and must remain plain."
+    ? "\nMANDATORY FILE FORMAT RULES (also apply with custom instructions):\nTranslate every supplied segment into the target language, including plain text and sheet names. Keep text already in the target language, identifiers, and numbers when appropriate. For structured segments, translate text inside <ox:rN>...</ox:rN>. Preserve every opening/closing r token and <ox:kN/> anchor exactly, including IDs, count, and order. Do not add, remove, nest, or reorder tokens. Preserve backslash escaping (escaped backslashes and escaped <) inside runs. Preserve whitespace and newlines. Plain segments have no structural tokens: translate their entire text and do not add tokens."
     : options.fileProcessor === "filehandler"
       ? "\nFILE FORMAT: Plain text. Preserve whitespace and newlines; any token-like text is literal, not formatting markup."
       : "";
@@ -874,9 +875,15 @@ async function translateSegments(segments, options, callbacks = {}) {
   const translatedSegments = segments.map((item) => String(item ?? ""));
   const candidates = translatedSegments
     .map((text, index) => ({ index, text: options.fileProcessor === "filehandler" ? text : text.trim() }))
-    .filter((item) => shouldTranslate(options.fileHandlerTokens
-      ? item.text.replace(/<\/?ox:r\d+>|<ox:k\d+\/>/g, "")
-      : item.text, options.direction));
+    .filter((item) => {
+      const text = options.fileHandlerTokens ? item.text.replace(/<\/?ox:r\d+>|<ox:k\d+\/>/g, "") : item.text;
+      // FileHandler has already extracted translatable units. A script heuristic
+      // must not discard mixed-language text or custom source languages.
+      return options.fileProcessor === "filehandler" ? /\p{L}/u.test(text) : shouldTranslate(text, options.direction);
+    });
+  if (options.fileProcessor === "filehandler" && !candidates.length) {
+    throw new Error("No text to translate in the selected content. Check the sheet/slide selection and source document.");
+  }
   const batches = chunks(candidates, options.batchSize);
 
   callbacks.progress?.({
@@ -1268,9 +1275,9 @@ async function translateFileHandlerDocument(input, callbacks) {
   throwIfCanceled(callbacks);
   const snapshot = await snapshotFile(file.path, callbacks.signal);
   callbacks.log?.("info", "filehandler", `Extracting ${file.fileName}`);
-  const imported = await importFileHandler(snapshot, requestOptions);
+  const imported = await importFileHandler(snapshot, { ...requestOptions, debug: options.debug });
   const segments = imported.texts;
-  logFileHandlerMetadata(imported.metadata, "import", callbacks);
+  logFileHandlerMetadata(imported.metadata, "import", callbacks, options.debug);
   if (!segments.length) throw new Error("FileHandler extracted no text segments from the document");
   throwIfCanceled(callbacks);
   const codex = await checkCodexAvailability({ codexCommand: options.codexCommand });
@@ -1278,6 +1285,10 @@ async function translateFileHandlerDocument(input, callbacks) {
   callbacks.log?.("info", "filehandler", `Extracted ${segments.length} segments`);
   const translated = await translateSegments(segments, { ...options, fileHandlerTokens: file.kind !== "text" }, callbacks);
   throwIfCanceled(callbacks);
+  const changedSegments = translated.translatedSegments.filter((text, index) => text !== segments[index]).length;
+  if (!changedSegments) {
+    throw new Error("The translator returned all source text unchanged. Check the source/target languages and instructions; no output file was saved.");
+  }
   const outputBaseName = options.outputPath ? "" : await translateFileBaseName(file, options, callbacks);
   let outputPath = options.outputPath ? path.resolve(options.outputPath) : defaultDocumentOutputPath(file.path, options.outputDirectory, outputBaseName);
   const comparablePath = (value) => process.platform === "win32" ? value.toLowerCase() : value;
@@ -1287,6 +1298,10 @@ async function translateFileHandlerDocument(input, callbacks) {
   const exported = await exportFileHandler(snapshot, translated.translatedSegments, requestOptions);
   logFileHandlerMetadata(exported.metadata, "export", callbacks);
   throwIfCanceled(callbacks);
+  if (exported.bytes.equals(snapshot.bytes)) {
+    throw new Error("FileHandler retained the entire source document instead of applying translations. Review the export warnings; no output file was saved.");
+  }
+  callbacks.log?.("info", "filehandler", `Submitted ${changedSegments}/${segments.length} changed text segments; export status: ${exported.metadata.status}`);
   // Synchronous exclusive creation prevents a cancellation or filename collision
   // between the final check and publication of the completed document.
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -1314,18 +1329,19 @@ async function translateFileHandlerDocument(input, callbacks) {
     fast_mode: options.fastMode,
     total_segments: translated.total_segments,
     translatable_segments: translated.translatable_segments,
+    changed_segments: changedSegments,
   };
 }
 
-function logFileHandlerMetadata(metadata, stage, callbacks) {
+function logFileHandlerMetadata(metadata, stage, callbacks, debug = false) {
   if (metadata.status === "partial") {
     callbacks.log?.("warn", "filehandler", `${stage}: FileHandler completed partially; some source content was retained`);
   }
   for (const skip of metadata.skipped || []) {
-    if (skip.severity !== "warning") continue;
+    if (skip.severity !== "warning" && !debug) continue;
     const location = [skip.unitIndex != null ? `index=${skip.unitIndex}` : "",
       skip.location ? JSON.stringify(skip.location) : ""].filter(Boolean).join(", ");
-    callbacks.log?.("warn", "filehandler", `${stage}: ${skip.code}: ${skip.message} (count=${skip.count}${location ? `, ${location}` : ""})`);
+    callbacks.log?.(skip.severity === "warning" ? "warn" : "info", "filehandler", `${stage}: ${skip.code}: ${skip.message} (count=${skip.count}${location ? `, ${location}` : ""})`);
   }
 }
 
