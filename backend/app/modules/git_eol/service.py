@@ -346,14 +346,8 @@ class GitEolService:
 
     def _restore_space_only_lines(self, base_lines: list[RawLine], source_lines: list[RawLine]) -> list[int]:
         """Restore lines whose content differs only by leading/trailing spaces or tabs."""
-        matcher = difflib.SequenceMatcher(
-            None,
-            [line.content for line in base_lines],
-            [line.content for line in source_lines],
-            autojunk=False,
-        )
         fixed_lines: list[int] = []
-        for tag, base_start, base_end, source_start, source_end in matcher.get_opcodes():
+        for tag, base_start, base_end, source_start, source_end in self._content_opcodes(base_lines, source_lines):
             if tag != "replace":
                 continue
             for offset in range(min(base_end - base_start, source_end - source_start)):
@@ -369,16 +363,10 @@ class GitEolService:
     def _diff_stats(self, base_bytes: bytes, source_bytes: bytes) -> DiffStats:
         base_lines = self._split_lines(base_bytes)
         source_lines = self._split_lines(source_bytes)
-        matcher = difflib.SequenceMatcher(
-            None,
-            [line.content for line in base_lines],
-            [line.content for line in source_lines],
-            autojunk=False,
-        )
         changed_lines = 0
         eol_only_lines = 0
         space_only_lines = 0
-        for tag, base_start, base_end, source_start, source_end in matcher.get_opcodes():
+        for tag, base_start, base_end, source_start, source_end in self._content_opcodes(base_lines, source_lines):
             if tag == "equal":
                 for offset in range(base_end - base_start):
                     if source_lines[source_start + offset].eol != base_lines[base_start + offset].eol:
@@ -405,6 +393,41 @@ class GitEolService:
             base_content != source_content
             and base_content.strip(b" \t") == source_content.strip(b" \t")
         )
+
+    def _content_opcodes(
+        self, base_lines: list[RawLine], source_lines: list[RawLine]
+    ) -> list[tuple[str, int, int, int, int]]:
+        """Align edge-whitespace edits without hiding their changed content."""
+        matcher = difflib.SequenceMatcher(
+            None,
+            [line.content.strip(b" \t") for line in base_lines],
+            [line.content.strip(b" \t") for line in source_lines],
+            autojunk=False,
+        )
+        opcodes: list[tuple[str, int, int, int, int]] = []
+        for tag, base_start, base_end, source_start, source_end in matcher.get_opcodes():
+            if tag != "equal":
+                opcodes.append((tag, base_start, base_end, source_start, source_end))
+                continue
+            for offset in range(base_end - base_start):
+                base_index = base_start + offset
+                source_index = source_start + offset
+                line_tag = (
+                    "equal"
+                    if base_lines[base_index].content == source_lines[source_index].content
+                    else "replace"
+                )
+                previous = opcodes[-1] if opcodes else None
+                if (
+                    previous is not None
+                    and previous[0] == line_tag
+                    and previous[2] == base_index
+                    and previous[4] == source_index
+                ):
+                    opcodes[-1] = (line_tag, previous[1], base_index + 1, previous[3], source_index + 1)
+                else:
+                    opcodes.append((line_tag, base_index, base_index + 1, source_index, source_index + 1))
+        return opcodes
 
     def _split_lines(self, data: bytes) -> list[RawLine]:
         lines: list[RawLine] = []
@@ -884,12 +907,6 @@ class GitEolService:
         fold_unchanged: bool = False,
         context: int = 3,
     ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-        matcher = difflib.SequenceMatcher(
-            None,
-            [line.content for line in base_lines],
-            [line.content for line in source_lines],
-            autojunk=False,
-        )
         rows: list[dict[str, Any]] = []
         added = removed = changed = eol_only = space_only = 0
 
@@ -919,7 +936,7 @@ class GitEolService:
         opcodes = self._display_opcodes(
             base_lines,
             source_lines,
-            matcher.get_opcodes(),
+            self._content_opcodes(base_lines, source_lines),
             fixed_eol_lines=fixed_eol_lines,
             fixed_space_only_lines=fixed_space_only_lines,
         )
