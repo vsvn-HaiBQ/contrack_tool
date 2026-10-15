@@ -271,13 +271,32 @@ function eolSummary(lines) {
 }
 
 function lineKeys(lines) {
-  return lines.map((line) => line.content.toString("latin1"));
+  return lines.map((line) => line.content.toString("latin1").replace(/^[ \t]+|[ \t]+$/g, ""));
 }
 
 function opcodes(leftLines, rightLines) {
   const left = lineKeys(leftLines);
   const right = lineKeys(rightLines);
-  return normalizeOpcodes(diffRangeOpcodes(left, right, 0, left.length, 0, right.length));
+  const aligned = normalizeOpcodes(diffRangeOpcodes(left, right, 0, left.length, 0, right.length));
+  const result = [];
+  for (const op of aligned) {
+    if (op.tag !== "equal") {
+      appendOpcode(result, op);
+      continue;
+    }
+    for (let offset = 0; offset < op.i2 - op.i1; offset += 1) {
+      const i = op.i1 + offset;
+      const j = op.j1 + offset;
+      appendOpcode(result, {
+        tag: leftLines[i].content.equals(rightLines[j].content) ? "equal" : "replace",
+        i1: i,
+        i2: i + 1,
+        j1: j,
+        j2: j + 1,
+      });
+    }
+  }
+  return result;
 }
 
 function diffRangeOpcodes(left, right, i1, i2, j1, j2) {

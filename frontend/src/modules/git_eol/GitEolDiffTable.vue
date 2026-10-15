@@ -232,7 +232,7 @@ async function toggleFold(row: GitEolDiffRow, key: string) {
             <template v-for="(token, tokenIndex) in tokenizeDiffText(entry.row.left?.text)" :key="`left-${entry.key}-${tokenIndex}`">
               <span v-if="token.type === 'text'">{{ token.value }}</span>
               <span v-else-if="token.type === 'space'" class="text-neutral-400/60">.</span>
-              <span v-else class="inline-block w-[4ch] text-center text-neutral-400/60">-&gt;</span>
+              <span v-else class="inline-block w-[4ch] text-center text-neutral-400/60">⟶</span>
             </template>
             <span
               v-if="entry.row.left"
@@ -247,7 +247,7 @@ async function toggleFold(row: GitEolDiffRow, key: string) {
             <template v-for="(token, tokenIndex) in tokenizeDiffText(entry.row.right?.text)" :key="`right-${entry.key}-${tokenIndex}`">
               <span v-if="token.type === 'text'">{{ token.value }}</span>
               <span v-else-if="token.type === 'space'" class="text-neutral-400/60">.</span>
-              <span v-else class="inline-block w-[4ch] text-center text-neutral-400/60">-&gt;</span>
+              <span v-else class="inline-block w-[4ch] text-center text-neutral-400/60">⟶</span>
             </template>
             <span
               v-if="entry.row.right"
