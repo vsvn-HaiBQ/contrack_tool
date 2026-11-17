@@ -59,6 +59,7 @@ const router = createRouter({
         { path: "document-translation", name: "document-translation", component: DocumentTranslationPage, meta: { keepAlive: true, permission: "document_translation" } },
         { path: "notes", name: "notes", component: NotesPage, meta: { permission: "notes" } },
         { path: "audit", name: "audit", component: AuditPage, meta: { permission: "audit" } },
+        { path: "contrack-environments", name: "contrack-environments", component: () => import("./modules/contrack_environments/ConTrackEnvironmentsPage.vue"), meta: { permission: "contrack_environments" } },
       ]
     }
   ]
@@ -93,7 +94,7 @@ router.beforeEach(async (to) => {
   if (
     authenticated &&
     !hasRequiredRedmineKeys() &&
-    !["settings", "git-eol", "build-source", "confluence-preview", "document-translation", "login"].includes(String(to.name))
+    !["settings", "git-eol", "build-source", "confluence-preview", "document-translation", "contrack-environments", "login"].includes(String(to.name))
   ) {
     return { name: "settings" };
   }

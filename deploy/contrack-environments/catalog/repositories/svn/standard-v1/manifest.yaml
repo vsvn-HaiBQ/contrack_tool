@@ -1,0 +1,5 @@
+repository_id: SVN-STANDARD-V1
+display_name: SVN Standard
+repository_type: svn
+url: svn://svn.example.internal/contrack
+status: available

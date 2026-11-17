@@ -28,6 +28,7 @@ from app.modules.settings.router import router as settings_router
 from app.modules.tickets.router import router as tickets_router
 from app.modules.users.router import router as users_router
 from app.modules.versions.router import router as versions_router
+from app.modules.contrack_environments.router import router as contrack_environments_router
 from app.modules.settings.service import ensure_system_settings
 from app.modules.users.service import ensure_default_roles
 
@@ -94,6 +95,7 @@ app.include_router(pull_requests_router, prefix=settings.api_prefix)
 app.include_router(git_eol_router, prefix=settings.api_prefix)
 app.include_router(notes_router, prefix=settings.api_prefix)
 app.include_router(versions_router, prefix=settings.api_prefix)
+app.include_router(contrack_environments_router, prefix=settings.api_prefix)
 
 
 def find_frontend_dist() -> Path | None:

@@ -33,6 +33,7 @@ const tabs = [
   { key: "/logtime", label: "Logtime", permission: "logtime" },
   { key: "/notes", label: "Notes", permission: "notes" },
   { key: "/audit", label: "Audit Logs", permission: "audit" },
+  { key: "/contrack-environments", label: "ConTrack Environments", permission: "contrack_environments" },
 ];
 
 const nodeOnlyRoutes = new Set(["/git-eol", "/build-source", "/document-translation"]);

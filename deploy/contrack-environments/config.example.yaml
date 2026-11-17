@@ -1,0 +1,33 @@
+# Copy outside the repository; set CONTRACK_ENV_CONFIG to its absolute path.
+# Enable only after supplying real catalogs, Tomcat conf templates and schema query.
+enabled: false
+root: /srv/contrack-env
+wars: catalog/wars
+databases: catalog/databases
+repositories: catalog/repositories
+bundles: catalog/bundles
+server: runtime/server
+runtime_databases: runtime/databases
+runtime_repositories: runtime/repositories
+current: runtime/current
+runs: runs
+lock: runtime/environment.lock
+
+# Separate PostgreSQL target, not the tool's metadata DB.
+pg_host: postgres.example.internal
+pg_port: 5432
+pg_user: contrack_runtime
+# Prefer a restricted .pgpass file or CONTRACK_ENV_PG_PASSWORD; never put secrets in catalogs.
+pg_passfile: /run/secrets/contrack-runtime.pgpass
+pg_bin: ""
+# REQUIRED: replace with a read-only SELECT returning exactly one schema-version string.
+# The actual schema table is application-specific and absent from this source tree.
+schema_version_query: ""
+
+tomcat_home: /opt/tomcat
+config_templates: /etc/contrack/tomcat-conf
+server_host: 127.0.0.1
+server_port: 8080
+health_url: http://127.0.0.1:8080/contrack/
+command_timeout: 900
+health_timeout: 120

@@ -1,0 +1,10 @@
+bundle_id: CT-5.2.0-HF8383
+display_name: "ConTrack 5.2.0 HotFix #8383"
+application:
+  war_id: WAR-5.2.0-HF8383-001
+database:
+  schema_version: 5.2.0
+  default_database_id: DB-520-STANDARD-V1
+repository:
+  default_repository_id: SVN-STANDARD-V1
+status: available

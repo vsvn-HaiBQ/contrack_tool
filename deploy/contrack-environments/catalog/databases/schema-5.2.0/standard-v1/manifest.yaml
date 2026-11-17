@@ -1,0 +1,6 @@
+database_id: DB-520-STANDARD-V1
+schema_version: 5.2.0
+profile_type: standard
+artifact:
+  file: baseline.dump
+status: available

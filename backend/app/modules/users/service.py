@@ -20,6 +20,7 @@ MENU_PERMISSIONS = (
     ("logtime", "Logtime"),
     ("notes", "Notes"),
     ("audit", "Audit Logs"),
+    ("contrack_environments", "ConTrack Environments"),
 )
 MENU_PERMISSION_KEYS = frozenset(key for key, _ in MENU_PERMISSIONS)
 DEFAULT_ROLE_PERMISSIONS = {

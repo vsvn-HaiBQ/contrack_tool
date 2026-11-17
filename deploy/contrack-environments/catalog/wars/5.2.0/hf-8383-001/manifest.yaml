@@ -1,0 +1,10 @@
+war_id: WAR-5.2.0-HF8383-001
+display_version: 5.2.0
+build_type: hotfix
+build_id: hf-8383-001
+artifact:
+  file: contrack.war
+  # sha256: <64 hexadecimal characters; recommended>
+compatibility:
+  database_schema: 5.2.0
+status: available

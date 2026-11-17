@@ -1,0 +1,16 @@
+# Run from the repo root with: docker compose -f docker-compose.yml -f deploy/contrack-environments/compose.override.yaml up -d --no-build backend
+# Build/tag the opt-in image first as documented. Repository servers are external and unchanged.
+services:
+  backend:
+    image: contrack-tool-backend:environments
+    init: true
+    environment:
+      CONTRACK_ENV_CONFIG: /etc/contrack/environment.yaml
+    ports:
+      - "${CT_APPLICATION_PORT:-8080}:8080"
+    volumes:
+      - ${CT_ENV_ROOT:-/srv/contrack-env}:/srv/contrack-env
+      - ${CT_TOMCAT_HOME:-/opt/tomcat}:/opt/tomcat:ro
+      - ${CT_ENV_CONFIG:-/etc/contrack/environment.yaml}:/etc/contrack/environment.yaml:ro
+      - ${CT_TOMCAT_CONF:-/etc/contrack/tomcat-conf}:/etc/contrack/tomcat-conf:ro
+      - ${CT_PGPASS_FILE:-/etc/contrack/runtime.pgpass}:/run/secrets/contrack-runtime.pgpass:ro
