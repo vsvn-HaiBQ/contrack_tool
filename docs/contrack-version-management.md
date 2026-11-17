@@ -207,7 +207,7 @@ Lỗi trước bước stop giữ nguyên môi trường đang chạy. Lỗi sau
 
 | Triệu chứng | Kiểm tra |
 |---|---|
-| Menu không hiện | Quyền role `contrack_environments`; refresh session |
+| Menu không hiện | Deploy/build cả frontend và backend mới, rồi Ctrl+F5. Admin luôn có menu; Dev/QA/custom role cần được admin bật `ConTrack Environments` tại Settings → Admin Settings → Roles → Edit → Menu Permissions → Save Role, sau đó refresh trang. Thanh menu tự xuống dòng để các mục cuối không bị khuất. |
 | Feature disabled | `CONTRACK_ENV_CONFIG`, file YAML, `enabled` |
 | Catalog trống | Root/mount/path của manifest; catalog mẫu không có binary |
 | Invalid manifest | IDs trùng, field lạ, path traversal, schema YAML |

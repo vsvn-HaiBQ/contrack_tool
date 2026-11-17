@@ -80,8 +80,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-      <div class="flex min-w-0 items-center gap-2">
-        <nav class="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
+      <div class="flex min-w-0 flex-wrap items-center gap-2">
+        <nav aria-label="Main navigation" class="flex min-w-0 basis-full flex-wrap gap-2 pb-1">
           <button
             v-for="tab in tabs"
             :key="tab.key"
