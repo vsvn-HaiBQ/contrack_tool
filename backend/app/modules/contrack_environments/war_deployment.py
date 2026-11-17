@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import errno
+import logging
 from os import replace as replace_war
 import shutil
 import uuid
@@ -13,6 +15,32 @@ from pydantic import Field
 from .catalog import StrictModel, VersionCatalogService, digest
 from .config import EnvironmentError, EnvironmentSettings, contained
 from .state import EnvironmentLock, RunHistoryService, RuntimeStateService, now, read_yaml, write_yaml
+
+logger = logging.getLogger(__name__)
+
+
+def storage_error(exc: Exception, operation: str, copied: bool = False) -> EnvironmentError:
+    """Report actionable filesystem failures without echoing exception arguments or credentials."""
+    number = getattr(exc, "errno", None)
+    failures = {
+        errno.EACCES: ("WAR_PERMISSION_DENIED", "Permission denied; check the backend UID/GID, directory permissions and ACLs"),
+        errno.EPERM: ("WAR_PERMISSION_DENIED", "Operation not permitted; check ownership, ACLs and filesystem restrictions"),
+        errno.ENOSPC: ("WAR_STORAGE_FULL", "No space left on device; check free bytes and inodes on the runtime filesystem"),
+        getattr(errno, "EDQUOT", 122): ("WAR_QUOTA_EXCEEDED", "Filesystem quota exceeded"),
+        errno.EROFS: ("WAR_READ_ONLY", "Runtime filesystem is read-only; check the Docker bind mount and host filesystem"),
+        errno.ENOENT: ("WAR_PATH_NOT_FOUND", "Source, destination or temporary file no longer exists"),
+        errno.ENOTDIR: ("WAR_INVALID_PATH", "A required directory is a file"),
+        errno.EISDIR: ("WAR_INVALID_PATH", "A WAR file path is a directory"),
+        errno.EBUSY: ("WAR_DESTINATION_BUSY", "Destination is busy or individually bind-mounted; inspect its mount before replacing it"),
+        errno.EXDEV: ("WAR_CROSS_DEVICE", "Atomic replacement crossed filesystem boundaries"),
+        errno.EIO: ("WAR_STORAGE_IO_ERROR", "Filesystem I/O error; inspect host storage"),
+    }
+    if isinstance(exc, PermissionError) and number is None:
+        number = errno.EACCES
+    code, detail = failures.get(number, ("WAR_DEPLOY_FAILED", "Deployment operation failed; inspect the server filesystem and run log"))
+    symbol = errno.errorcode.get(number, type(exc).__name__)
+    suffix = "; WAR was already copied, but deployment bookkeeping failed" if copied else ""
+    return EnvironmentError(f"{operation}: {detail} [{symbol}]{suffix}", code)
 
 
 class DeployWarRequest(StrictModel):
@@ -115,6 +143,7 @@ class WarDeploymentService:
         copied = False
         switching = False
         previous = None
+        operation = "record deployment progress"
         try:
             state["status"] = "PREPARING"
             self.history.save(state)
@@ -130,22 +159,33 @@ class WarDeploymentService:
             self.history.log(run_id, step, "Copying WAR to existing Tomcat webapps")
             # A non-.war temporary file prevents Tomcat from picking up a partially copied artifact.
             staged = contained(target.parent, f".contrack-{uuid.uuid4().hex}.tmp")
-            with source.open("rb") as incoming, staged.open("xb") as outgoing:
-                os.chmod(staged, 0o644)
-                shutil.copyfileobj(incoming, outgoing)
-                outgoing.flush()
-                os.fsync(outgoing.fileno())
+            operation = "open catalog WAR"
+            with source.open("rb") as incoming:
+                operation = "create temporary WAR in webapps"
+                with staged.open("xb") as outgoing:
+                    operation = "set temporary WAR permissions"
+                    os.chmod(staged, 0o644)
+                    operation = "copy WAR bytes"
+                    shutil.copyfileobj(incoming, outgoing)
+                    operation = "flush temporary WAR"
+                    outgoing.flush()
+                    operation = "sync temporary WAR to storage"
+                    os.fsync(outgoing.fileno())
+            operation = "verify temporary WAR checksum"
             if digest(staged) != recipe["war_sha256"]:
                 raise EnvironmentError("WAR copy checksum mismatch", "CHECKSUM_MISMATCH")
             if target.is_symlink():
                 raise EnvironmentError("Tomcat WAR destination changed during deployment", "INVALID_PATH")
             # A process crash at the rename boundary must not leave an old RUNNING state published.
+            operation = "save switching state"
             previous = self.runtime.get_current_environment()
             self.runtime.save({**(previous or {}), "operation_mode": "deploy_war", "status": "SWITCHING",
                                "attempt_run_id": run_id, "application_status": "NOT_CHECKED"})
             switching = True
+            operation = "replace runtime WAR"
             replace_war(staged, target)
             copied = True
+            operation = "save deployment result"
             state["steps"][step] = "SUCCESS"
             state.update(status="DEPLOYED", completed_at=now(), application_status="NOT_CHECKED")
             self.history.save(state)
@@ -155,21 +195,28 @@ class WarDeploymentService:
                                "destination": recipe["destination"], "copied_at": now()})
             self.history.log(run_id, step, "WAR copied. Application reload/restart is controlled by the existing Tomcat setup; application health was not checked.")
         except Exception as exc:
-            error = exc if isinstance(exc, EnvironmentError) else EnvironmentError(
-                "WAR deployment failed; check runtime storage permissions and free disk space", "WAR_DEPLOY_FAILED")
+            error = exc if isinstance(exc, EnvironmentError) else storage_error(exc, operation, copied)
             state["steps"][step] = "FAILED"
             state.update(status="FAILED", failed_step=step, error={"code": error.code, "message": str(error)},
-                         war_copied=copied, completed_at=now())
-            self.history.save(state)
-            if copied:
-                self.runtime.save({"operation_mode": "deploy_war", "war": state["war_id"],
-                                   "run_id": run_id, "status": "UNKNOWN", "application_status": "NOT_CHECKED"})
-            elif switching:
-                self.runtime.save(previous or {"operation_mode": "deploy_war", "status": "NOT_PREPARED"})
-            self.history.log(run_id, step, f"FAILED {error.code}: {error}")
+                         failed_operation=operation, war_copied=copied, completed_at=now())
+            # Storage failures may also prevent state/log writes. Keep a sanitized server log in that case.
+            logger.error("WAR run %s failed: %s: %s", run_id, error.code, error)
+            try:
+                self.history.save(state)
+                if copied:
+                    self.runtime.save({"operation_mode": "deploy_war", "war": state["war_id"],
+                                       "run_id": run_id, "status": "UNKNOWN", "application_status": "NOT_CHECKED"})
+                elif switching:
+                    self.runtime.save(previous or {"operation_mode": "deploy_war", "status": "NOT_PREPARED"})
+                self.history.log(run_id, step, f"FAILED {error.code}: {error}")
+            except OSError:
+                logger.error("WAR run %s could not persist failure details; filesystem unavailable", run_id)
         finally:
             try:
                 if staged is not None:
-                    staged.unlink(missing_ok=True)
+                    try:
+                        staged.unlink(missing_ok=True)
+                    except OSError:
+                        logger.error("WAR run %s could not remove its temporary WAR; inspect webapps", run_id)
             finally:
                 lock.release()

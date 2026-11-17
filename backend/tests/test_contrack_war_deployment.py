@@ -1,5 +1,10 @@
 from pathlib import Path
 import os
+import errno
+import io
+import runpy
+from contextlib import redirect_stdout
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from test_contrack_environments import EnvironmentTestCase
@@ -87,6 +92,46 @@ class WarDeploymentTests(EnvironmentTestCase):
         self.assertEqual(self.target.read_bytes(), previous)
         self.assertEqual(list(self.target.parent.glob("*.tmp")), [])
         self.assertFalse(EnvironmentLock.busy(self.settings.path("lock")))
+
+    def test_os_failures_identify_exact_operation_and_errno_without_echoing_exception_values(self):
+        cases = [(errno.EACCES, "WAR_PERMISSION_DENIED"), (errno.ENOSPC, "WAR_STORAGE_FULL"),
+                 (errno.EROFS, "WAR_READ_ONLY"), (getattr(errno, "EDQUOT", 122), "WAR_QUOTA_EXCEEDED")]
+        for number, code in cases:
+            with self.subTest(errno=number), \
+                    patch("app.modules.contrack_environments.war_deployment.shutil.copyfileobj", side_effect=OSError(number, "secret-do-not-echo")), \
+                    self.assertLogs("app.modules.contrack_environments.war_deployment", level="ERROR") as logs:
+                run = self.deploy()
+            self.assertEqual(run["error"]["code"], code)
+            self.assertEqual(run["failed_operation"], "copy WAR bytes")
+            self.assertIn(errno.errorcode[number], run["error"]["message"])
+            self.assertNotIn("secret-do-not-echo", run["error"]["message"])
+            self.assertNotIn("secret-do-not-echo", "\n".join(logs.output))
+            self.assertEqual(self.target.read_bytes(), b"previous WAR")
+            self.assertFalse(EnvironmentLock.busy(self.settings.path("lock")))
+
+    def test_error_still_releases_lock_when_failure_state_cannot_be_written(self):
+        state, source, lock = self.deployment.begin(self.payload, "disk-full-test")
+        with patch.object(self.deployment.history, "save", side_effect=OSError(errno.ENOSPC, "disk full")), \
+                self.assertLogs("app.modules.contrack_environments.war_deployment", level="ERROR") as logs:
+            self.deployment.execute(state, source, lock)
+        self.assertTrue(any("WAR_STORAGE_FULL" in entry for entry in logs.output))
+        self.assertFalse(EnvironmentLock.busy(self.settings.path("lock")))
+        self.assertEqual(self.target.read_bytes(), b"previous WAR")
+
+    def test_storage_probe_cleans_its_files_and_keeps_existing_war_and_conf_unchanged(self):
+        before = {path: path.read_bytes() for path in self.server.rglob("*") if path.is_file()}
+        script = Path(__file__).resolve().parents[2] / "deploy/contrack-environments/check-war-storage.py"
+        output = io.StringIO()
+        with patch("app.modules.contrack_environments.config.load_settings", return_value=self.settings), \
+                patch.object(os, "getuid", return_value=1000, create=True), \
+                patch.object(os, "getgid", return_value=1000, create=True), \
+                patch.object(os, "statvfs", return_value=SimpleNamespace(f_favail=100, f_flag=0), create=True), \
+                patch("shutil.disk_usage", return_value=SimpleNamespace(free=1024 * 1024)), \
+                redirect_stdout(output), self.assertRaises(SystemExit) as stopped:
+            runpy.run_path(str(script), run_name="__main__")
+        self.assertEqual(stopped.exception.code, 0)
+        self.assertIn("PASS: create / chmod / write / fsync / rename", output.getvalue())
+        self.assertEqual(before, {path: path.read_bytes() for path in self.server.rglob("*") if path.is_file()})
 
     def test_failed_atomic_replace_restores_previous_published_state(self):
         self.deploy()

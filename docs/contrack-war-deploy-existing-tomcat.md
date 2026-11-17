@@ -156,3 +156,27 @@ ls -1 "$CT_ENV_ROOT/runs"
 Hai checksum phải bằng nhau sau deploy thành công. Nếu không thấy dropdown WAR, kiểm tra đủ manifest/artifact, cấu hình `operation_mode`, frontend/backend code mới và quyền role. Nếu thấy Prepare Environment thay vì Deploy WAR, backend đang đọc YAML cũ hoặc chưa được recreate với override WAR mới.
 
 Nếu catalog lỗi (ví dụ manifest chưa đúng), giao diện hiển thị lỗi catalog riêng và tự tải lại khoảng mỗi 3 giây. Sau khi sửa file, danh sách WAR và nút deploy tự phục hồi; cũng có thể bấm Refresh. Khi catalog chưa tải được, giao diện hiện CONFIGURATION UNAVAILABLE thay vì suy ra NOT PREPARED. Lỗi tải lịch sử không làm mất catalog hợp lệ.
+
+## 7. Chẩn đoán WAR copy thất bại
+
+Thông báo cũ `WAR_DEPLOY_FAILED` không xác định được chính xác nguyên nhân. Code mới ghi `failed_operation` (tạo file tạm, chmod, copy bytes, fsync, rename hoặc lưu state), mã errno và mã lỗi riêng vào run/error log. Không in exception arguments vì có thể chứa dữ liệu bí mật. Nếu storage hết chỗ đến mức không ghi được state, thông báo đã lọc được ghi vào log backend.
+
+Từ thư mục source trên Linux host, sau khi cập nhật file diagnostic, chạy kiểm tra **trong chính backend container**:
+
+```bash
+docker compose exec -T backend python - \
+  < deploy/contrack-environments/check-war-storage.py
+```
+
+Không cần rebuild image chỉ để chạy file kiểm tra qua stdin. Script in UID/GID, owner/mode thư mục và WAR, số byte/inode trống, cờ filesystem read-only; sau đó thử tạo/chmod/ghi/fsync/rename và xóa các file tạm do chính nó tạo. Không đổi WAR, conf hay quyền thư mục có sẵn. Nếu tất cả phép thử PASS, xem lỗi chi tiết của run (đặc biệt bước replace runtime WAR) vì probe không ghi đè WAR hiện có.
+
+| Mã lỗi | Hướng kiểm tra |
+|---|---|
+| `WAR_PERMISSION_DENIED` / EACCES / EPERM | UID/GID của backend, quyền ghi và traverse thư mục, ACL, immutable flag, NFS root squash hoặc cơ chế bảo vệ filesystem trên host |
+| `WAR_STORAGE_FULL` / ENOSPC | Byte trống và inode của filesystem chứa runtime, không chỉ dung lượng bên trong image |
+| `WAR_QUOTA_EXCEEDED` / EDQUOT | Quota user/filesystem |
+| `WAR_READ_ONLY` / EROFS | Bind mount/backend và trạng thái read-only trên host |
+| `WAR_DESTINATION_BUSY` / EBUSY | File WAR có bị bind-mount riêng hoặc mount đặc biệt khác không |
+| `WAR_PATH_NOT_FOUND` / ENOENT | File nguồn, thư mục đích hoặc file tạm có bị tác vụ khác di chuyển/xóa không |
+
+Chỉ điều chỉnh quyền sau khi xác định user/mount thực tế; không áp dụng `chmod -R 777` cho toàn bộ Tomcat. Run có `war_copied: true` nghĩa file đã thay thành công nhưng bước ghi trạng thái sau đó lỗi; kiểm tra checksum trước khi deploy lại.
