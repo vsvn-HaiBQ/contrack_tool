@@ -1,5 +1,9 @@
 # Quản lý ConTrack Environments
 
+Hướng dẫn demo từng bước theo cấu trúc `contrack_tool` cùng cấp `Contrack-Recreate`: [Demo và cấu hình server](contrack-environments-demo.md).
+
+**Tomcat đã có cấu hình, chỉ copy WAR và giữ DB/repository hiện tại:** dùng [Deploy WAR vào Tomcat có sẵn](contrack-war-deploy-existing-tomcat.md), đặt `operation_mode: deploy_war`. Mode này dùng WAR catalog trực tiếp, có nút Deploy WAR và trạng thái DEPLOYED; không tạo working DB, không thay conf hay restart/check health Tomcat. Mặc định `operation_mode: prepare_environment` giữ luồng đầy đủ được mô tả dưới đây.
+
 ## Kiến trúc và phạm vi
 
 Menu **ConTrack Environments**, URL `/contrack-environments`, là chức năng độc lập với **Versions**, Build Source, Fix EOL và các tích hợp hiện có. Vue gọi module FastAPI `app/modules/contrack_environments`. Module dùng catalog YAML, PostgreSQL CLI và một Tomcat `CATALINA_BASE` riêng trên Linux. Không thay đổi framework, schema DB của tool hay Node local server.

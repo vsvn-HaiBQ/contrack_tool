@@ -8,6 +8,8 @@ const current = ref<Environment | null>(null);
 const runs = ref<EnvironmentRun[]>([]);
 const selectedRun = ref<EnvironmentRun | null>(null);
 const bundleId = ref("");
+const warId = ref("");
+const warPreview = ref("");
 const databaseId = ref("");
 const repositoryId = ref("");
 const error = ref("");
@@ -27,9 +29,12 @@ let detailRequest = 0;
 let selectionRevision = 0;
 
 const bundle = computed(() => catalog.value?.versions.find(item => item.bundleId === bundleId.value));
+const warOnly = computed(() => catalog.value?.operation_mode === "deploy_war");
 const databases = computed(() => catalog.value?.databases.filter(item => item.schema === bundle.value?.databaseSchema) ?? []);
 const locked = computed(() => submitting.value || validating.value || busy.value);
-const valid = computed(() => catalog.value?.enabled && bundle.value?.status === "available" &&
+const valid = computed(() => warOnly.value
+  ? Boolean(catalog.value?.enabled && catalog.value?.wars?.some(item => item.id === warId.value && item.status === "available"))
+  : catalog.value?.enabled && bundle.value?.status === "available" &&
   databases.value.some(item => item.id === databaseId.value) &&
   catalog.value.repositories.some(item => item.id === repositoryId.value));
 const activeRun = computed(() => runs.value.find(item => ["QUEUED", "PREPARING"].includes(item.status)));
@@ -39,6 +44,7 @@ watch(bundleId, () => {
   repositoryId.value = bundle.value?.defaultRepositoryId ?? "";
 });
 watch([bundleId, databaseId, repositoryId], () => { preview.value = null; actionError.value = ""; });
+watch(warId, () => { warPreview.value = ""; actionError.value = ""; });
 
 function selection(): Selection {
   return { bundle_id: bundleId.value, database_profile_id: databaseId.value, repository_profile_id: repositoryId.value };
@@ -46,7 +52,7 @@ function selection(): Selection {
 function message(value: unknown) { return value instanceof Error ? value.message : "Request failed"; }
 function date(value?: string) { return value ? new Date(value).toLocaleString() : "—"; }
 function statusClass(status: string) {
-  if (["READY", "RUNNING", "SUCCESS"].includes(status)) return "bg-emerald-50 text-emerald-800";
+  if (["READY", "RUNNING", "SUCCESS", "DEPLOYED"].includes(status)) return "bg-emerald-50 text-emerald-800";
   if (["FAILED", "INTERRUPTED", "UNKNOWN"].includes(status)) return "bg-red-50 text-red-800";
   return "bg-blue-50 text-blue-800";
 }
@@ -75,6 +81,7 @@ async function refresh(includeCatalog = false) {
     total.value = history.total;
     if (latestCatalog) {
       catalog.value = latestCatalog;
+      if (!warId.value) warId.value = latestCatalog.wars?.find(item => item.status === "available")?.id ?? "";
       if (!bundleId.value) bundleId.value = latestCatalog.versions.find(item => item.status === "available")?.bundleId ?? "";
     }
     error.value = "";
@@ -93,8 +100,13 @@ async function validate() {
   if (!valid.value || locked.value) return;
   validating.value = true;
   actionError.value = "";
-  try { preview.value = (await environmentsApi.validate(selection())).recipe; }
-  catch (cause) { preview.value = null; actionError.value = message(cause); }
+  try {
+    if (warOnly.value) {
+      const result = await environmentsApi.validateWar(warId.value);
+      warPreview.value = `Ready to copy ${result.war_id} to ${result.destination}`;
+    } else preview.value = (await environmentsApi.validate(selection())).recipe;
+  }
+  catch (cause) { preview.value = null; warPreview.value = ""; actionError.value = message(cause); }
   finally { validating.value = false; }
 }
 
@@ -104,7 +116,7 @@ async function prepare() {
   ++selectionRevision; // Discard polling responses that started before this preparation.
   actionError.value = "";
   try {
-    const run = await environmentsApi.prepare(selection());
+    const run = warOnly.value ? await environmentsApi.deployWar(warId.value) : await environmentsApi.prepare(selection());
     selectedRun.value = run;
     busy.value = true;
     offset.value = 0;
@@ -132,7 +144,7 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
         <h1 class="text-2xl font-semibold">ConTrack Environments</h1>
-        <p class="mt-1 text-sm text-neutral-500">Select a version to prepare its application, database and repository on the Linux server.</p>
+        <p class="mt-1 text-sm text-neutral-500">{{ warOnly ? 'Deploy a catalog WAR to the existing Tomcat server.' : 'Select a version to prepare its application, database and repository on the Linux server.' }}</p>
       </div>
       <button class="rounded-lg border border-neutral-200 px-4 py-2 text-sm disabled:opacity-50" :disabled="loading || submitting" @click="refresh(true)">Refresh</button>
     </div>
@@ -140,59 +152,69 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
     <p v-if="loading" role="status" class="text-sm text-neutral-500">Loading environments…</p>
     <p v-if="error" role="alert" class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{{ error }}</p>
     <p v-if="catalog && !catalog.enabled" role="status" class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{{ catalog.message }}</p>
-    <p v-if="busy" role="status" class="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">Environment preparation is already in progress. You can follow its progress below.</p>
+    <p v-if="busy" role="status" class="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">{{ warOnly ? 'WAR deployment is already in progress. You can follow its progress below.' : 'Environment preparation is already in progress. You can follow its progress below.' }}</p>
 
     <section class="rounded-2xl border border-neutral-200 bg-white p-5">
       <div class="mb-4 flex items-center justify-between gap-3">
         <h2 class="text-lg font-semibold">Current environment</h2>
         <span class="rounded-full px-3 py-1 text-xs font-medium" :class="statusClass(current?.status ?? 'NOT PREPARED')">{{ current?.status ?? 'NOT PREPARED' }}</span>
       </div>
+      <p v-if="current?.operation_mode === 'deploy_war'" class="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">{{ current.status === 'DEPLOYED' ? `WAR copied to ${current.destination}.` : 'WAR deployment status is uncertain; check the run log and destination file.' }} Application reload/restart is controlled by the existing Tomcat setup. Application health and database schema were not checked.</p>
       <dl v-if="current" class="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
         <div><dt class="text-neutral-500">ConTrack version</dt><dd class="mt-1 font-medium">{{ current.display_name || 'Unknown' }}</dd></div>
         <div><dt class="text-neutral-500">WAR</dt><dd class="mt-1 break-all">{{ current.war || '—' }}</dd></div>
-        <div><dt class="text-neutral-500">Working database</dt><dd class="mt-1 break-all">{{ current.database || '—' }}</dd></div>
-        <div><dt class="text-neutral-500">Database baseline / schema</dt><dd class="mt-1">{{ current.database_baseline || '—' }} / {{ current.schema_version || '—' }}</dd></div>
-        <div><dt class="text-neutral-500">Repository</dt><dd class="mt-1">{{ current.repository || '—' }}</dd></div>
-        <div><dt class="text-neutral-500">Last successful health check</dt><dd class="mt-1">{{ date(current.checked_at) }}</dd></div>
+        <template v-if="current.operation_mode !== 'deploy_war'">
+          <div><dt class="text-neutral-500">Working database</dt><dd class="mt-1 break-all">{{ current.database || '—' }}</dd></div>
+          <div><dt class="text-neutral-500">Database baseline / schema</dt><dd class="mt-1">{{ current.database_baseline || '—' }} / {{ current.schema_version || '—' }}</dd></div>
+          <div><dt class="text-neutral-500">Repository</dt><dd class="mt-1">{{ current.repository || '—' }}</dd></div>
+          <div><dt class="text-neutral-500">Last successful health check</dt><dd class="mt-1">{{ date(current.checked_at) }}</dd></div>
+        </template>
       </dl>
       <p v-else class="text-sm text-neutral-500">No environment has been prepared yet.</p>
     </section>
 
     <section class="rounded-2xl border border-neutral-200 bg-white p-5">
-      <h2 class="mb-4 text-lg font-semibold">Prepare environment</h2>
+      <h2 class="mb-4 text-lg font-semibold">{{ warOnly ? 'Deploy WAR to existing Tomcat' : 'Prepare environment' }}</h2>
       <form class="space-y-4" @submit.prevent="prepare">
         <fieldset :disabled="locked || !catalog?.enabled" class="grid gap-4 disabled:opacity-60 md:grid-cols-3">
-          <label class="space-y-2 text-sm"><span class="font-medium">ConTrack Version</span>
+          <label v-if="warOnly" class="space-y-2 text-sm md:col-span-3"><span class="font-medium">ConTrack WAR</span>
+            <select v-model="warId" class="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5" required>
+              <option disabled value="">Select a WAR</option>
+              <option v-for="item in catalog?.wars ?? []" :key="item.id" :value="item.id" :disabled="item.status !== 'available'">{{ item.displayName }}{{ item.error ? ` (${item.error})` : '' }}</option>
+            </select>
+          </label>
+          <label v-if="!warOnly" class="space-y-2 text-sm"><span class="font-medium">ConTrack Version</span>
             <select v-model="bundleId" class="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5" required>
               <option disabled value="">Select a version</option>
               <option v-for="item in catalog?.versions ?? []" :key="item.bundleId" :value="item.bundleId" :disabled="item.status !== 'available'">{{ item.displayName }}{{ item.status !== 'available' ? ' (unavailable)' : '' }}</option>
             </select>
           </label>
-          <label class="space-y-2 text-sm"><span class="font-medium">Database Profile</span>
+          <label v-if="!warOnly" class="space-y-2 text-sm"><span class="font-medium">Database Profile</span>
             <select v-model="databaseId" class="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5" required>
               <option disabled value="">Select a database profile</option>
               <option v-for="item in databases" :key="item.id" :value="item.id">{{ item.profile }} — {{ item.id }}</option>
             </select>
           </label>
-          <label class="space-y-2 text-sm"><span class="font-medium">Repository</span>
+          <label v-if="!warOnly" class="space-y-2 text-sm"><span class="font-medium">Repository</span>
             <select v-model="repositoryId" class="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5" required>
               <option disabled value="">Select a repository</option>
               <option v-for="item in catalog?.repositories ?? []" :key="item.id" :value="item.id">{{ item.name }} ({{ item.type.toUpperCase() }})</option>
             </select>
           </label>
         </fieldset>
-        <p v-if="catalog?.enabled && !catalog.versions.length" class="text-sm text-neutral-500">The catalog is empty. Ask an administrator to add a version bundle and its artifacts.</p>
+        <p v-if="catalog?.enabled && !(warOnly ? catalog.wars?.length : catalog.versions.length)" class="text-sm text-neutral-500">{{ warOnly ? 'The WAR catalog is empty. Ask an administrator to add a WAR and its manifest.' : 'The catalog is empty. Ask an administrator to add a version bundle and its artifacts.' }}</p>
         <ul v-if="catalog?.versions.some(item => item.error)" class="space-y-1 text-sm text-amber-800">
           <template v-for="item in catalog.versions" :key="item.bundleId"><li v-if="item.error">{{ item.displayName }}: {{ item.error }}</li></template>
         </ul>
-        <p class="text-sm text-neutral-500">Each preparation creates a new working database from its baseline. A successful switch restarts the shared ConTrack server.</p>
+        <p class="text-sm text-neutral-500">{{ warOnly ? 'Copy the WAR into runtime/server/webapps/contrack.war. Existing Tomcat configuration, database, repository and exploded application files are retained. This action does not restart Tomcat or check application compatibility.' : 'Each preparation creates a new working database from its baseline. A successful switch restarts the shared ConTrack server.' }}</p>
         <p v-if="actionError" role="alert" class="rounded-lg bg-red-50 p-3 text-sm text-red-800">{{ actionError }}</p>
         <div v-if="preview" role="status" class="rounded-lg bg-neutral-50 p-3 text-sm text-neutral-700">
           Compatible: {{ preview.war }} + {{ preview.database_baseline }} + {{ preview.repository }} (schema {{ preview.schema_version }}).
         </div>
+        <p v-if="warPreview" role="status" class="rounded-lg bg-neutral-50 p-3 text-sm text-neutral-700">{{ warPreview }}</p>
         <div class="flex flex-wrap gap-3">
           <button type="button" class="rounded-lg border border-neutral-300 px-4 py-2.5 text-sm font-medium disabled:opacity-50" :disabled="!valid || locked" @click="validate">{{ validating ? 'Validating…' : 'Validate selection' }}</button>
-          <button type="submit" class="rounded-lg bg-[#3E6AE1] px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50" :disabled="!valid || locked">{{ submitting ? 'Preparing…' : 'Prepare Environment' }}</button>
+          <button type="submit" class="rounded-lg bg-[#3E6AE1] px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50" :disabled="!valid || locked">{{ submitting ? (warOnly ? 'Deploying…' : 'Preparing…') : (warOnly ? 'Deploy WAR' : 'Prepare Environment') }}</button>
         </div>
       </form>
     </section>
@@ -211,10 +233,11 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
 
     <section v-if="selectedRun" class="space-y-3 rounded-2xl border border-neutral-200 bg-white p-5" aria-live="polite">
       <div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-lg font-semibold">{{ selectedRun.display_name }}</h2><span class="rounded-full px-3 py-1 text-xs" :class="statusClass(selectedRun.status)">{{ selectedRun.status }}</span></div>
-      <p class="break-all text-xs text-neutral-500">Run {{ selectedRun.run_id }} · {{ selectedRun.working_database }}</p>
+      <p class="break-all text-xs text-neutral-500">Run {{ selectedRun.run_id }}<template v-if="selectedRun.working_database"> · {{ selectedRun.working_database }}</template></p>
+      <p v-if="selectedRun.operation_mode === 'deploy_war'" class="text-sm text-neutral-500">WAR deployment only. Application health and DB/repository compatibility are not checked.</p>
       <p v-if="selectedRun.error" role="alert" class="rounded-lg bg-red-50 p-3 text-sm text-red-800">{{ selectedRun.failed_step || 'Preparation' }}: {{ selectedRun.error.message }} ({{ selectedRun.error.code }})</p>
       <ol class="flex flex-wrap gap-2"><li v-for="(status, step) in selectedRun.steps" :key="step" class="rounded-lg px-3 py-2 text-xs" :class="statusClass(status)">{{ String(step).replaceAll('_', ' ') }}: {{ status }}</li></ol>
-      <details v-if="selectedRun.recipe" class="text-sm"><summary class="cursor-pointer font-medium">Resolved artifacts</summary><dl class="mt-2 grid gap-2 rounded-lg bg-neutral-50 p-3 sm:grid-cols-2"><div><dt class="text-neutral-500">WAR</dt><dd>{{ selectedRun.recipe.war }}</dd></div><div><dt class="text-neutral-500">Database baseline</dt><dd>{{ selectedRun.recipe.database_baseline }}</dd></div><div><dt class="text-neutral-500">Repository</dt><dd>{{ selectedRun.recipe.repository }}</dd></div><div><dt class="text-neutral-500">Schema</dt><dd>{{ selectedRun.recipe.schema_version }}</dd></div></dl></details>
+      <details v-if="selectedRun.recipe" class="text-sm"><summary class="cursor-pointer font-medium">Resolved artifacts</summary><dl class="mt-2 grid gap-2 rounded-lg bg-neutral-50 p-3 sm:grid-cols-2"><div><dt class="text-neutral-500">WAR</dt><dd>{{ selectedRun.recipe.war }}</dd></div><template v-if="selectedRun.operation_mode !== 'deploy_war'"><div><dt class="text-neutral-500">Database baseline</dt><dd>{{ selectedRun.recipe.database_baseline }}</dd></div><div><dt class="text-neutral-500">Repository</dt><dd>{{ selectedRun.recipe.repository }}</dd></div><div><dt class="text-neutral-500">Schema</dt><dd>{{ selectedRun.recipe.schema_version }}</dd></div></template><div v-else><dt class="text-neutral-500">Destination</dt><dd>{{ selectedRun.recipe.destination }}</dd></div></dl></details>
       <h3 class="text-sm font-medium">Run log</h3><pre class="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-neutral-900 p-4 text-xs leading-6 text-neutral-100">{{ selectedRun.log || 'Waiting for the first log entry…' }}</pre>
     </section>
   </main>

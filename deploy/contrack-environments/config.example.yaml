@@ -1,6 +1,7 @@
 # Copy outside the repository; set CONTRACK_ENV_CONFIG to its absolute path.
 # Enable only after supplying real catalogs, Tomcat conf templates and schema query.
 enabled: false
+operation_mode: prepare_environment
 root: /srv/contrack-env
 wars: catalog/wars
 databases: catalog/databases

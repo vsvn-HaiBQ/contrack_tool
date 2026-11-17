@@ -26,12 +26,16 @@ class EnvironmentPreparationService:
 
     def validate(self, request: PrepareRequest):
         self._enabled()
+        if self.settings.operation_mode != "prepare_environment":
+            raise EnvironmentError("This server uses Deploy WAR mode; full environment preparation is disabled", "OPERATION_MODE", 409)
         recipe = VersionCatalogService(self.settings).resolve(request)
         self.adapter.preflight(recipe)
         return {"valid": True, "recipe": recipe.public()}
 
     def begin(self, request: PrepareRequest, actor: str):
         self._enabled()
+        if self.settings.operation_mode != "prepare_environment":
+            raise EnvironmentError("This server uses Deploy WAR mode; full environment preparation is disabled", "OPERATION_MODE", 409)
         lock = EnvironmentLock(self.settings.path("lock")).acquire()
         try:
             # Immutable selections and input checks are resolved again under the switch lock.

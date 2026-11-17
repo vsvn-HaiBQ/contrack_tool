@@ -6,19 +6,23 @@ export type VersionBundle = {
 };
 export type Catalog = {
   enabled: boolean; busy: boolean; message?: string; versions: VersionBundle[];
+  operation_mode?: "prepare_environment" | "deploy_war";
+  wars?: Array<{ id: string; displayName: string; schema: string; status: string; error: string | null }>;
   databases: Array<{ id: string; schema: string; profile: string }>;
   repositories: Array<{ id: string; type: string; name: string }>;
 };
 export type Recipe = {
-  bundle: string; display_name: string; war: string; schema_version: string;
-  database_baseline: string; repository: string; repository_type: string; working_database?: string;
+  bundle?: string; display_name: string; war: string; schema_version?: string; destination?: string;
+  database_baseline?: string; repository?: string; repository_type?: string; working_database?: string;
 };
 export type Environment = Recipe & {
   database: string; run_id: string; status: string; checked_at?: string; updated_at?: string;
+  operation_mode?: string; destination?: string; application_status?: string;
 };
 export type EnvironmentRun = {
-  run_id: string; display_name: string; bundle_id: string; actor: string; status: string;
-  working_database: string; created_at: string; updated_at: string; failed_step: string | null;
+  run_id: string; display_name: string; bundle_id: string | null; actor: string; status: string;
+  working_database: string | null; created_at: string; updated_at: string; failed_step: string | null;
+  operation_mode?: string;
   error: { code: string; message: string } | null; steps: Record<string, string>;
   log?: string; recipe?: Recipe; request?: Record<string, unknown>;
 };
@@ -37,5 +41,11 @@ export const environmentsApi = {
   }),
   prepare: (selection: Selection) => http<EnvironmentRun>(`${base}/prepare`, {
     method: "POST", body: JSON.stringify(selection),
+  }),
+  validateWar: (warId: string) => http<{ valid: boolean; war_id: string; destination: string }>(`${base}/wars/validate`, {
+    method: "POST", body: JSON.stringify({ war_id: warId }),
+  }),
+  deployWar: (warId: string) => http<EnvironmentRun>(`${base}/wars/deploy`, {
+    method: "POST", body: JSON.stringify({ war_id: warId }),
   }),
 };

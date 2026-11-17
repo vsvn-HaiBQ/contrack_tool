@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
@@ -28,6 +29,7 @@ class EnvironmentSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    operation_mode: Literal["prepare_environment", "deploy_war"] = "prepare_environment"
     root: Path = Path("/srv/contrack-env")
     wars: str = "catalog/wars"
     databases: str = "catalog/databases"

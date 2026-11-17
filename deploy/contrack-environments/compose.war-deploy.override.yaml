@@ -1,0 +1,17 @@
+# WAR copy only. Uses the original backend Dockerfile; Java/PG CLI and template mounts are unnecessary.
+services:
+  backend:
+    environment:
+      CONTRACK_ENV_CONFIG: /etc/contrack/environment.yaml
+    volumes:
+      - type: bind
+        source: ${CT_ENV_ROOT:?Set CT_ENV_ROOT to the existing contrack-env directory}
+        target: /srv/contrack-env
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${CT_ENV_CONFIG:?Set CT_ENV_CONFIG to the deploy_war configuration file}
+        target: /etc/contrack/environment.yaml
+        read_only: true
+        bind:
+          create_host_path: false

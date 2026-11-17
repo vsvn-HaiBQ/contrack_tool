@@ -9,6 +9,7 @@ from .catalog import PrepareRequest, VersionCatalogService
 from .config import EnvironmentError, load_settings
 from .service import EnvironmentPreparationService
 from .state import EnvironmentLock
+from .war_deployment import DeployWarRequest, WarDeploymentService
 
 router = APIRouter(prefix="/contrack-environments", tags=["contrack-environments"],
                    dependencies=[Depends(require_menu_permission("contrack_environments"))])
@@ -33,9 +34,16 @@ def call(operation):
 @router.get("/catalog")
 def list_available_versions(service: EnvironmentPreparationService = Depends(get_service)):
     if not service.settings.enabled:
-        return {"enabled": False, "busy": False, "versions": [], "databases": [], "repositories": [],
+        return {"enabled": False, "operation_mode": service.settings.operation_mode,
+                "busy": False, "versions": [], "wars": [], "databases": [], "repositories": [],
                 "message": "An administrator must configure and enable the Linux environment manager."}
+    if service.settings.operation_mode == "deploy_war":
+        return call(lambda: {"enabled": True, "operation_mode": "deploy_war",
+                             "busy": EnvironmentLock.busy(service.settings.path("lock")),
+                             "wars": WarDeploymentService(service.settings).list_wars(),
+                             "versions": [], "databases": [], "repositories": []})
     return call(lambda: {"enabled": True, "busy": EnvironmentLock.busy(service.settings.path("lock")),
+                         "operation_mode": "prepare_environment",
                          **VersionCatalogService(service.settings).list_available_contrack_versions()})
 
 
@@ -71,4 +79,19 @@ def prepare_environment(payload: PrepareRequest, background_tasks: BackgroundTas
                         service: EnvironmentPreparationService = Depends(get_service)):
     state, recipe, lock = call(lambda: service.begin(payload, actor.username))
     background_tasks.add_task(service.execute, state.copy(), recipe, lock)
+    return state
+
+
+@router.post("/wars/validate")
+def validate_war(payload: DeployWarRequest, service: EnvironmentPreparationService = Depends(get_service)):
+    return call(lambda: WarDeploymentService(service.settings).validate(payload))
+
+
+@router.post("/wars/deploy", status_code=202)
+def deploy_war(payload: DeployWarRequest, background_tasks: BackgroundTasks,
+               actor: User = Depends(require_menu_permission("contrack_environments")),
+               service: EnvironmentPreparationService = Depends(get_service)):
+    deployment = WarDeploymentService(service.settings)
+    state, source, lock = call(lambda: deployment.begin(payload, actor.username))
+    background_tasks.add_task(deployment.execute, state.copy(), source, lock)
     return state

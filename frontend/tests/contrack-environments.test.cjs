@@ -121,3 +121,39 @@ test("disabled manager prevents requests and keeps an empty catalog usable", asy
   await state.prepare();
   assert.equal(calls.length, 0);
 });
+
+function warCatalog() {
+  return { enabled: true, operation_mode: "deploy_war", busy: false,
+    versions: [], databases: [], repositories: [],
+    wars: [{ id: "WAR-520", displayName: "ConTrack 5.2.0", status: "available", schema: "5.2.0", error: null }] };
+}
+
+test("existing Tomcat mode selects WAR without requiring database or repository profiles", async t => {
+  const { state } = mount(t, { catalog: async () => warCatalog() });
+  await flush();
+  assert.equal(state.warOnly.value, true);
+  assert.equal(state.warId.value, "WAR-520");
+  assert.equal(state.valid.value, true);
+  assert.equal(state.databaseId.value, "");
+  assert.equal(state.repositoryId.value, "");
+});
+
+test("existing Tomcat mode validates and deploys only the selected WAR and blocks duplicate clicks", async t => {
+  const calls = [];
+  let finish;
+  const { state } = mount(t, {
+    catalog: async () => warCatalog(),
+    validateWar: async warId => { calls.push(["validateWar", warId]); return { valid: true, war_id: warId, destination: "runtime/server/webapps/contrack.war" }; },
+    deployWar: warId => { calls.push(["deployWar", warId]); return new Promise(resolve => { finish = resolve; }); },
+    validate: () => assert.fail("Full environment validation must not run in WAR mode"),
+    prepare: () => assert.fail("Working DB preparation must not run in WAR mode"),
+  });
+  await flush();
+  await state.validate();
+  assert.match(state.warPreview.value, /WAR-520/);
+  const pending = state.prepare();
+  await state.prepare();
+  assert.deepEqual(calls, [["validateWar", "WAR-520"], ["deployWar", "WAR-520"]]);
+  finish({ run_id: "20261117T100000-aaaaaaaaaaaa", status: "DEPLOYED", operation_mode: "deploy_war", steps: {} });
+  await pending;
+});
