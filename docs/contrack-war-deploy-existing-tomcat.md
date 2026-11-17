@@ -106,6 +106,8 @@ Từ các lần sau, khi restart/recreate backend, tiếp tục dùng đúng hai
 
 ## 5. User thao tác
 
+Trước lần deploy đầu tiên qua tool, phần Current WAR deployment hiển thị **NO RECORDED DEPLOYMENT**. Điều này chỉ có nghĩa tool chưa có bản ghi `runtime/current/version.yaml`; không xác định Tomcat đang dừng/chưa được cấu hình. WAR đã copy thủ công trước đó không tự được gán version vì tool không suy đoán version từ tên file. Nếu thấy **Current environment / NOT PREPARED** cùng nút **Prepare Environment**, kiểm tra YAML thực tế được backend load: phải có `operation_mode: deploy_war`, sau đó cập nhật/recreate backend và refresh frontend.
+
 1. Refresh frontend và vào **ConTrack Environments** bằng tài khoản có quyền menu này.
 2. Màn hình hiển thị **Deploy WAR to existing Tomcat**, dropdown **ConTrack WAR**; không có bước chọn database/repository.
 3. Chọn WAR, bấm **Validate selection** để kiểm tra artifact và thư mục Tomcat đích.

@@ -30,6 +30,7 @@ let selectionRevision = 0;
 
 const bundle = computed(() => catalog.value?.versions.find(item => item.bundleId === bundleId.value));
 const warOnly = computed(() => catalog.value?.operation_mode === "deploy_war");
+const currentStatus = computed(() => current.value?.status ?? (warOnly.value ? "NO RECORDED DEPLOYMENT" : "NOT PREPARED"));
 const databases = computed(() => catalog.value?.databases.filter(item => item.schema === bundle.value?.databaseSchema) ?? []);
 const locked = computed(() => submitting.value || validating.value || busy.value);
 const valid = computed(() => warOnly.value
@@ -156,8 +157,8 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
 
     <section class="rounded-2xl border border-neutral-200 bg-white p-5">
       <div class="mb-4 flex items-center justify-between gap-3">
-        <h2 class="text-lg font-semibold">Current environment</h2>
-        <span class="rounded-full px-3 py-1 text-xs font-medium" :class="statusClass(current?.status ?? 'NOT PREPARED')">{{ current?.status ?? 'NOT PREPARED' }}</span>
+        <h2 class="text-lg font-semibold">{{ warOnly ? 'Current WAR deployment' : 'Current environment' }}</h2>
+        <span class="rounded-full px-3 py-1 text-xs font-medium" :class="statusClass(currentStatus)">{{ currentStatus }}</span>
       </div>
       <p v-if="current?.operation_mode === 'deploy_war'" class="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">{{ current.status === 'DEPLOYED' ? `WAR copied to ${current.destination}.` : 'WAR deployment status is uncertain; check the run log and destination file.' }} Application reload/restart is controlled by the existing Tomcat setup. Application health and database schema were not checked.</p>
       <dl v-if="current" class="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
@@ -170,7 +171,7 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
           <div><dt class="text-neutral-500">Last successful health check</dt><dd class="mt-1">{{ date(current.checked_at) }}</dd></div>
         </template>
       </dl>
-      <p v-else class="text-sm text-neutral-500">No environment has been prepared yet.</p>
+      <p v-else class="text-sm text-neutral-500">{{ warOnly ? 'No WAR deployment has been recorded by this tool yet. Your existing Tomcat may already be running. Select a catalog WAR below and use Deploy WAR to record a deployment.' : 'No environment has been prepared yet.' }}</p>
     </section>
 
     <section class="rounded-2xl border border-neutral-200 bg-white p-5">

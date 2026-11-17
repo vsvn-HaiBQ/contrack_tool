@@ -1,4 +1,6 @@
 # Copy outside the repository; set CONTRACK_ENV_CONFIG to its absolute path.
+# This sample is for full environment preparation. For an existing configured Tomcat,
+# use config.existing-tomcat.example.yaml (operation_mode: deploy_war) instead.
 # Enable only after supplying real catalogs, Tomcat conf templates and schema query.
 enabled: false
 operation_mode: prepare_environment
