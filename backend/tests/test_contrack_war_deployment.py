@@ -55,6 +55,40 @@ class WarDeploymentTests(EnvironmentTestCase):
         self.assertNotIn("health", current)
         self.assertFalse(EnvironmentLock.busy(self.settings.path("lock")))
 
+    def test_app_war_in_flat_version_catalog_is_selected_and_deployed_as_app_war(self):
+        manifest = read_yaml(self.root / "catalog/wars/5.2.0/release/manifest.yaml")
+        manifest["war_id"] = "WAR-520-APP"
+        manifest["artifact"]["file"] = "app.war"
+        folder = self.root / "catalog/wars/5.2.0"
+        write_yaml(folder / "manifest.yaml", manifest)
+        (folder / "app.war").write_bytes(b"correct app WAR")
+        (folder / "contrack.war").write_bytes(b"wrong WAR must not be selected")
+        self.payload = DeployWarRequest(war_id="WAR-520-APP")
+        preview = self.deployment.validate(self.payload)
+        self.assertEqual(preview["source_file"], "app.war")
+        self.assertEqual(preview["destination"], "runtime/server/webapps/app.war")
+        run = self.deploy()
+        self.assertEqual(run["status"], "DEPLOYED")
+        self.assertEqual((self.target.parent / "app.war").read_bytes(), b"correct app WAR")
+        self.assertEqual(self.target.read_bytes(), b"previous WAR")
+        self.assertEqual((folder / "app.war").read_bytes(), b"correct app WAR")
+        self.assertEqual(run["recipe"]["destination"], "runtime/server/webapps/app.war")
+        self.assertIn("Copying app.war to runtime/server/webapps/app.war", run["log"])
+        item = next(item for item in self.deployment.list_wars() if item["id"] == "WAR-520-APP")
+        self.assertEqual(item["filename"], "app.war")
+        self.assertEqual(item["destination"], preview["destination"])
+
+    def test_artifact_subdirectory_does_not_create_subdirectories_in_webapps(self):
+        path = self.root / "catalog/wars/5.2.0/release/manifest.yaml"
+        manifest = read_yaml(path)
+        manifest["artifact"]["file"] = "packages/app.war"
+        write_yaml(path, manifest)
+        (path.parent / "packages").mkdir()
+        (path.parent / "packages/app.war").write_bytes(b"nested catalog app")
+        self.assertEqual(self.deploy()["status"], "DEPLOYED")
+        self.assertEqual((self.target.parent / "app.war").read_bytes(), b"nested catalog app")
+        self.assertFalse((self.target.parent / "packages").exists())
+
     def test_war_only_catalog_does_not_require_or_parse_database_repository_or_bundle_manifests(self):
         (self.root / "catalog/bundles/520-release.yaml").write_text("invalid: bundle")
         (self.root / "catalog/databases/5.2.0/standard-v1/manifest.yaml").write_text("invalid: DB")
@@ -133,6 +167,20 @@ class WarDeploymentTests(EnvironmentTestCase):
         self.assertIn("PASS: create / chmod / write / fsync / rename", output.getvalue())
         self.assertEqual(before, {path: path.read_bytes() for path in self.server.rglob("*") if path.is_file()})
 
+    def test_storage_probe_explains_wrong_config_or_missing_mount_without_creating_directories(self):
+        script = Path(__file__).resolve().parents[2] / "deploy/contrack-environments/check-war-storage.py"
+        cases = [(self.settings.model_copy(update={"enabled": False}), "has not loaded enabled Deploy WAR"),
+                 (self.settings.model_copy(update={"root": self.root / "not-mounted"}), "webapps directory is missing")]
+        for settings, expected in cases:
+            output = io.StringIO()
+            with self.subTest(expected=expected), \
+                    patch("app.modules.contrack_environments.config.load_settings", return_value=settings), \
+                    redirect_stdout(output), self.assertRaises(SystemExit) as stopped:
+                runpy.run_path(str(script), run_name="__main__")
+            self.assertEqual(stopped.exception.code, 2)
+            self.assertIn(expected, output.getvalue())
+        self.assertFalse((self.root / "not-mounted").exists())
+
     def test_failed_atomic_replace_restores_previous_published_state(self):
         self.deploy()
         previous = self.deployment.runtime.get_current_environment()
@@ -153,6 +201,38 @@ class WarDeploymentTests(EnvironmentTestCase):
         self.assertEqual(run["status"], "FAILED")
         self.assertEqual(run["error"]["code"], "CHECKSUM_MISMATCH")
         self.assertEqual(self.target.read_bytes(), b"previous WAR")
+
+    def test_pasted_duplicate_state_reports_file_and_line_before_creating_a_deployment(self):
+        path = self.settings.path("current") / "version.yaml"
+        path.parent.mkdir(parents=True)
+        original = ('bundle: "CT-5.2.0-HF8383"\nwar: "WAR-5.2.0-HF8383-001"\n'
+                    'database: "DB-520-LARGE-V1"\nrepository: "SVN-LARGE-V1"bundle: "CT-5.2.0-HF8383"\n')
+        path.write_text(original, encoding="utf-8")
+        for action in (lambda: self.deployment.validate(self.payload),
+                       lambda: self.deployment.begin(self.payload, "test")):
+            with self.assertRaises(EnvironmentError) as caught:
+                action()
+            self.assertEqual(caught.exception.code, "INVALID_STATE_YAML")
+            self.assertIn(str(path), str(caught.exception))
+            self.assertIn("line 4", str(caught.exception))
+            self.assertNotIn("SVN-LARGE-V1", str(caught.exception))
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+        self.assertEqual(self.target.read_bytes(), b"previous WAR")
+        self.assertFalse(self.settings.path("runs").exists())
+        self.assertFalse(EnvironmentLock.busy(self.settings.path("lock")))
+
+    def test_corrupt_referenced_run_state_is_identified_without_touching_war(self):
+        run = self.deploy()
+        current = self.deployment.runtime.get_current_environment()
+        self.deployment.runtime.save({**current, "status": "RUNNING"})
+        path = self.deployment.history.directory(run["run_id"]) / "state.yaml"
+        path.write_text('status: "unterminated\n', encoding="utf-8")
+        previous = self.target.read_bytes()
+        with self.assertRaises(EnvironmentError) as caught:
+            self.deployment.validate(self.payload)
+        self.assertEqual(caught.exception.code, "INVALID_STATE_YAML")
+        self.assertIn(str(path), str(caught.exception))
+        self.assertEqual(self.target.read_bytes(), previous)
 
     def test_invalid_existing_server_and_arbitrary_path_inputs_are_rejected(self):
         self.assert_error("INVALID_ID", lambda: self.deployment.validate(DeployWarRequest(war_id="../outside")))

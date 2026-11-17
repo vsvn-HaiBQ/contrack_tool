@@ -68,7 +68,8 @@ print("config:", os.environ.get("CONTRACK_ENV_CONFIG"))
 print("enabled:", settings.enabled)
 print("mode:", getattr(settings, "operation_mode", "UNSUPPORTED"))
 print("root:", settings.root)
-print("WAR destination:", settings.path("server") / "webapps/contrack.war")
+print("WAR destination directory:", settings.path("server") / "webapps")
+print("WAR filename: preserved from catalog manifest artifact.file")
 if not settings.enabled or getattr(settings, "operation_mode", None) != "deploy_war":
     raise SystemExit("ERROR: Backend has not loaded deploy_war configuration.")
 if settings.root.resolve() != expected:

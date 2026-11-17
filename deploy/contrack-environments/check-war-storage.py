@@ -5,6 +5,7 @@ Creates, syncs, renames and removes its own small temporary files. Never edits a
 import errno
 import os
 import shutil
+import socket
 import stat
 import sys
 import uuid
@@ -13,10 +14,24 @@ from app.modules.contrack_environments.config import contained, load_settings
 
 settings = load_settings()
 webapps = contained(settings.path("server"), "webapps")
+print("container:", socket.gethostname())
+print("config file:", os.environ.get("CONTRACK_ENV_CONFIG", "NOT SET"))
+print("root override:", os.environ.get("CONTRACK_ENV_ROOT", "NOT SET"))
+print("enabled:", settings.enabled)
+print("mode:", getattr(settings, "operation_mode", "UNSUPPORTED"))
 print("root:", settings.root)
 print("webapps:", webapps)
+if not settings.enabled or getattr(settings, "operation_mode", None) != "deploy_war":
+    print("FAIL: This container has not loaded enabled Deploy WAR configuration. Recreate the intended backend with start-war-deploy.sh before checking storage.")
+    sys.exit(2)
+if not webapps.is_dir():
+    print("FAIL: Configured webapps directory is missing inside this container. Check its effective root and Docker bind mount; no directory was created.")
+    sys.exit(2)
 print("UID/GID:", os.getuid(), os.getgid())
-for path in (settings.root, settings.path("server"), webapps, webapps / "contrack.war"):
+war_files = sorted(path for path in webapps.iterdir() if path.suffix.lower() == ".war")[:20]
+if not war_files:
+    print("existing WAR files: none")
+for path in (settings.root, settings.path("server"), webapps, *war_files):
     try:
         info = path.lstat()
         print("path:", path, "mode:", stat.filemode(info.st_mode), "owner:", f"{info.st_uid}:{info.st_gid}")

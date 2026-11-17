@@ -70,7 +70,7 @@ class WarDeploymentService:
         catalog = self.catalog()
         war = catalog._available(catalog.wars, payload.war_id, "WAR")
         source = catalog.artifact_path(war, war.war_id)
-        if source.suffix.lower() != ".war":
+        if source.suffix.lower() != ".war" or Path(war.artifact.file).suffix.lower() != ".war":
             raise EnvironmentError("WAR artifact must be a .war file", "INVALID_ARTIFACT")
         base = self.settings.path("server")
         conf = contained(base, "conf")
@@ -78,7 +78,7 @@ class WarDeploymentService:
         if not (conf / "server.xml").is_file() or not webapps.is_dir():
             raise EnvironmentError("Existing Tomcat needs conf/server.xml and a webapps directory in runtime/server",
                                    "EXISTING_TOMCAT_REQUIRED")
-        target = webapps / "contrack.war"
+        target = webapps / Path(war.artifact.file).name
         # Require a literal destination, not a symlink into another application or directory.
         if target.is_symlink() or (target.exists() and not target.is_file()):
             raise EnvironmentError("Tomcat WAR destination must be a regular file", "INVALID_PATH")
@@ -99,27 +99,34 @@ class WarDeploymentService:
             except EnvironmentError as exc:
                 error = str(exc)
             items.append({"id": war.war_id, "displayName": self.display_name(war),
+                          "filename": Path(war.artifact.file).name,
+                          "destination": f"{self.settings.server}/webapps/{Path(war.artifact.file).name}",
                           "schema": war.compatibility.database_schema,
                           "status": "invalid" if error else "available", "error": error})
         return items
 
     def validate(self, payload):
-        war, _, _ = self._resolve(payload)
+        war, _, target = self._resolve(payload)
+        self.runtime.get_current_environment()
         return {"valid": True, "operation_mode": "deploy_war", "war_id": war.war_id,
-                "display_name": self.display_name(war), "destination": f"{self.settings.server}/webapps/contrack.war"}
+                "display_name": self.display_name(war), "source_file": war.artifact.file,
+                "destination": f"{self.settings.server}/webapps/{target.name}"}
 
     def begin(self, payload, actor):
         self._enabled()
         lock = EnvironmentLock(self.settings.path("lock")).acquire()
         try:
-            war, source, _ = self._resolve(payload)
+            war, source, target = self._resolve(payload)
+            # Validate existing bookkeeping before copying a potentially large WAR.
+            self.runtime.get_current_environment()
             run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S-") + uuid.uuid4().hex[:12]
             directory = self.history.directory(run_id)
             directory.mkdir(parents=True, mode=0o700)
             recipe = {
                 "operation_mode": "deploy_war", "war": war.war_id, "display_name": self.display_name(war),
                 "schema_version": war.compatibility.database_schema, "war_sha256": digest(source),
-                "destination": f"{self.settings.server}/webapps/contrack.war",
+                "source_file": war.artifact.file,
+                "destination": f"{self.settings.server}/webapps/{target.name}",
                 "configuration": "existing", "database_action": "unchanged", "repository_action": "unchanged",
             }
             state = {"run_id": run_id, "operation_mode": "deploy_war", "bundle_id": None,
@@ -149,14 +156,15 @@ class WarDeploymentService:
             self.history.save(state)
             recipe = read_yaml(directory / "recipe.yaml")
             _, current_source, target = self._resolve(DeployWarRequest(war_id=state["war_id"]))
-            if source != current_source or digest(source) != recipe["war_sha256"]:
-                raise EnvironmentError("Catalog WAR changed after selection; start a new deployment", "CHECKSUM_MISMATCH")
+            if source != current_source or digest(source) != recipe["war_sha256"] or \
+                    f"{self.settings.server}/webapps/{target.name}" != recipe["destination"]:
+                raise EnvironmentError("Catalog WAR or destination changed after selection; start a new deployment", "CHECKSUM_MISMATCH")
             state["steps"][step] = "SUCCESS"
             self.history.save(state)
             step = "war_copy"
             state["steps"][step] = "RUNNING"
             self.history.save(state)
-            self.history.log(run_id, step, "Copying WAR to existing Tomcat webapps")
+            self.history.log(run_id, step, f"Copying {recipe['source_file']} to {recipe['destination']}")
             # A non-.war temporary file prevents Tomcat from picking up a partially copied artifact.
             staged = contained(target.parent, f".contrack-{uuid.uuid4().hex}.tmp")
             operation = "open catalog WAR"
@@ -177,8 +185,9 @@ class WarDeploymentService:
             if target.is_symlink():
                 raise EnvironmentError("Tomcat WAR destination changed during deployment", "INVALID_PATH")
             # A process crash at the rename boundary must not leave an old RUNNING state published.
-            operation = "save switching state"
+            operation = "read current deployment state"
             previous = self.runtime.get_current_environment()
+            operation = "save switching state"
             self.runtime.save({**(previous or {}), "operation_mode": "deploy_war", "status": "SWITCHING",
                                "attempt_run_id": run_id, "application_status": "NOT_CHECKED"})
             switching = True
@@ -192,7 +201,7 @@ class WarDeploymentService:
             self.runtime.save({"operation_mode": "deploy_war", "war": state["war_id"],
                                "display_name": state["display_name"], "run_id": run_id,
                                "status": "DEPLOYED", "application_status": "NOT_CHECKED",
-                               "destination": recipe["destination"], "copied_at": now()})
+                               "source_file": recipe["source_file"], "destination": recipe["destination"], "copied_at": now()})
             self.history.log(run_id, step, "WAR copied. Application reload/restart is controlled by the existing Tomcat setup; application health was not checked.")
         except Exception as exc:
             error = exc if isinstance(exc, EnvironmentError) else storage_error(exc, operation, copied)

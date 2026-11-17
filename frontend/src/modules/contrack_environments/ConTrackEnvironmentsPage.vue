@@ -32,6 +32,7 @@ let selectionRevision = 0;
 
 const bundle = computed(() => catalog.value?.versions.find(item => item.bundleId === bundleId.value));
 const warOnly = computed(() => catalog.value?.operation_mode === "deploy_war");
+const selectedWar = computed(() => catalog.value?.wars?.find(item => item.id === warId.value));
 const currentStatus = computed(() => current.value?.status ?? (!catalog.value
   ? (loading.value ? "LOADING" : "CONFIGURATION UNAVAILABLE")
   : (warOnly.value ? "NO RECORDED DEPLOYMENT" : "NOT PREPARED")));
@@ -215,7 +216,7 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
           <label v-if="warOnly" class="space-y-2 text-sm md:col-span-3"><span class="font-medium">ConTrack WAR</span>
             <select v-model="warId" class="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5" required>
               <option disabled value="">Select a WAR</option>
-              <option v-for="item in catalog?.wars ?? []" :key="item.id" :value="item.id" :disabled="item.status !== 'available'">{{ item.displayName }}{{ item.error ? ` (${item.error})` : '' }}</option>
+              <option v-for="item in catalog?.wars ?? []" :key="item.id" :value="item.id" :disabled="item.status !== 'available'">{{ item.displayName }}{{ item.filename ? ` — ${item.filename}` : '' }}{{ item.error ? ` (${item.error})` : '' }}</option>
             </select>
           </label>
           <label v-if="!warOnly" class="space-y-2 text-sm"><span class="font-medium">ConTrack Version</span>
@@ -241,7 +242,7 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
         <ul v-if="catalog?.versions.some(item => item.error)" class="space-y-1 text-sm text-amber-800">
           <template v-for="item in catalog.versions" :key="item.bundleId"><li v-if="item.error">{{ item.displayName }}: {{ item.error }}</li></template>
         </ul>
-        <p class="text-sm text-neutral-500">{{ warOnly ? 'Copy the WAR into runtime/server/webapps/contrack.war. Existing Tomcat configuration, database, repository and exploded application files are retained. This action does not restart Tomcat or check application compatibility.' : 'Each preparation creates a new working database from its baseline. A successful switch restarts the shared ConTrack server.' }}</p>
+        <p class="text-sm text-neutral-500">{{ warOnly ? `Copy the catalog WAR to ${selectedWar?.destination ?? 'the existing Tomcat webapps directory'}, preserving the filename declared in its manifest. Existing Tomcat configuration, database, repository and other application files are retained. This action does not restart Tomcat or check application compatibility.` : 'Each preparation creates a new working database from its baseline. A successful switch restarts the shared ConTrack server.' }}</p>
         <p v-if="actionError" role="alert" class="rounded-lg bg-red-50 p-3 text-sm text-red-800">{{ actionError }}</p>
         <div v-if="preview" role="status" class="rounded-lg bg-neutral-50 p-3 text-sm text-neutral-700">
           Compatible: {{ preview.war }} + {{ preview.database_baseline }} + {{ preview.repository }} (schema {{ preview.schema_version }}).

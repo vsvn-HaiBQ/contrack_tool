@@ -138,6 +138,21 @@ test("existing Tomcat mode selects WAR without requiring database or repository 
   assert.equal(state.repositoryId.value, "");
 });
 
+test("WAR preview and selected catalog entry preserve the app.war destination", async t => {
+  const data = warCatalog();
+  data.wars[0].filename = "app.war";
+  data.wars[0].destination = "runtime/server/webapps/app.war";
+  const { state } = mount(t, {
+    catalog: async () => data,
+    validateWar: async warId => ({ valid: true, war_id: warId, destination: "runtime/server/webapps/app.war" }),
+  });
+  await flush();
+  assert.equal(state.selectedWar.value.filename, "app.war");
+  assert.equal(state.selectedWar.value.destination, "runtime/server/webapps/app.war");
+  await state.validate();
+  assert.match(state.warPreview.value, /webapps\/app\.war/);
+});
+
 test("existing Tomcat mode validates and deploys only the selected WAR and blocks duplicate clicks", async t => {
   const calls = [];
   let finish;

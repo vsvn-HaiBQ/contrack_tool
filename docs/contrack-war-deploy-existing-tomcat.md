@@ -2,7 +2,7 @@
 
 Áp dụng cho server của bạn: Tomcat đã có cấu hình tại `/home/vsvndev/Contrack-Recreate/contrack-env/runtime/server`; yêu cầu là chọn WAR từ catalog rồi copy vào `webapps`, dùng DB/repository đang cấu hình.
 
-Chế độ `deploy_war` chỉ thay file `webapps/contrack.war`, giữ `conf`, `bin`, `lib`, DB/repository và các ứng dụng khác. Không tạo working DB, không cần schema query, PostgreSQL CLI, Tomcat template hoặc bản Tomcat mới. Hoạt động được khi Tomcat chạy sẵn trên host, vì backend container chỉ ghi WAR qua bind mount. Tool không tự restart Tomcat và không xóa exploded application; cơ chế reload hiện có của Tomcat quyết định khi nào WAR được nạp.
+Chế độ `deploy_war` copy đúng `artifact.file` trong WAR manifest và giữ tên file khi đưa vào `webapps` (ví dụ `app.war` → `webapps/app.war`). Giữ `conf`, `bin`, `lib`, DB/repository và các ứng dụng khác. Không tạo working DB, không cần schema query, PostgreSQL CLI, Tomcat template hoặc bản Tomcat mới. Hoạt động được khi Tomcat chạy sẵn trên host, vì backend container chỉ ghi WAR qua bind mount. Tool không tự restart Tomcat và không xóa exploded application; cơ chế reload hiện có của Tomcat quyết định khi nào WAR được nạp.
 
 ## Cách khởi động đề nghị khi UI vẫn disabled
 
@@ -41,10 +41,10 @@ Các bước dưới đây dành cho cấu hình thủ công, tương đương l
     └── contrack-env/
         ├── catalog/wars/5.2.0/hf-8383-001/
         │   ├── manifest.yaml
-        │   └── contrack.war
+        │   └── app.war
         ├── runtime/server/
         │   ├── conf/server.xml            # cấu hình đang có, tool giữ nguyên
-        │   ├── webapps/contrack.war       # file đích
+        │   ├── webapps/app.war            # giữ tên file khai báo trong manifest
         │   └── ...                       # các file Tomcat hiện có
         └── runs/                         # lịch sử do tool tạo
 ```
@@ -76,7 +76,7 @@ server: runtime/server
 Override WAR mount thư mục host vào **cùng đường dẫn** trong backend container và đặt `CONTRACK_ENV_ROOT` bằng `CT_ENV_ROOT`. Biến môi trường này ưu tiên hơn `root` trong YAML, tránh lệch root khi shell/config cũ còn chứa `/srv/contrack-env`. Đích file thực tế là:
 
 ```text
-/home/vsvndev/Contrack-Recreate/contrack-env/runtime/server/webapps/contrack.war
+/home/vsvndev/Contrack-Recreate/contrack-env/runtime/server/webapps/app.war
 ```
 
 Nếu YAML cũ chứa `pg_host`, `tomcat_home`, `config_templates` và các giá trị chuẩn bị môi trường khác, có thể bỏ các field đó khi dùng config tối thiểu trên. DB metadata và Redis của chính tool vẫn dùng cấu hình Compose gốc.
@@ -100,13 +100,13 @@ display_version: 5.2.0
 build_type: hotfix
 build_id: hf-8383-001
 artifact:
-  file: contrack.war
+  file: app.war
 compatibility:
   database_schema: 5.2.0
 status: available
 ```
 
-Đặt WAR thật tại `catalog/wars/5.2.0/hf-8383-001/contrack.war`. File có thể có tên khác nếu `artifact.file` khớp, nhưng đích deploy hiện là `webapps/contrack.war`. Nếu ứng dụng thực tế dùng context/tên WAR khác, cần cấu hình/điều chỉnh đích trước khi sử dụng.
+Đặt WAR thật tại `catalog/wars/5.2.0/hf-8383-001/app.war`. Với cấu trúc hiện tại `catalog/wars/5.2.0/app.war`, đặt manifest ngay tại `catalog/wars/5.2.0/manifest.yaml` và khai báo `artifact.file: app.war`; cấu trúc phẳng này cũng được hỗ trợ. Nguồn được lấy theo manifest, đích giữ basename: `packages/app.war` cũng copy thành `webapps/app.war`. Preview, recipe, runtime state và log ghi đúng tên/đích này. Các file WAR tên khác đã deploy trước đó được giữ nguyên; quản trị viên quản lý chúng riêng.
 
 Thông tin schema trong manifest mô tả yêu cầu của WAR; chế độ này **không kiểm tra hay chuyển đổi DB đang dùng**. Quản trị viên chọn WAR phù hợp cấu hình DB hiện tại. Không cần baseline, repository manifest hoặc bundle trong chế độ này; reader chỉ đọc `catalog/wars`.
 
@@ -135,6 +135,8 @@ Từ các lần sau, khi restart/recreate backend, tiếp tục dùng đúng hai
 
 Trước lần deploy đầu tiên qua tool, phần Current WAR deployment hiển thị **NO RECORDED DEPLOYMENT**. Điều này chỉ có nghĩa tool chưa có bản ghi `runtime/current/version.yaml`; không xác định Tomcat đang dừng/chưa được cấu hình. WAR đã copy thủ công trước đó không tự được gán version vì tool không suy đoán version từ tên file. Nếu thấy **Current environment / NOT PREPARED** cùng nút **Prepare Environment**, kiểm tra YAML thực tế được backend load: phải có `operation_mode: deploy_war`, sau đó cập nhật/recreate backend và refresh frontend.
 
+`runtime/current/version.yaml` là file **tool tự sinh**, không cần điền trước bằng manifest/bundle mẫu. YAML lỗi (ví dụ dán lặp thành `repository: "..."bundle: "..."` trên cùng dòng) được báo với đường dẫn và dòng/cột, đồng thời chặn trước khi copy WAR. Với file trạng thái mẫu đã tạo thủ công và chưa có deployment thực tế, giữ bản sao bằng cách đổi tên file thành `version.yaml.invalid.<timestamp>.bak`, rồi deploy qua UI để tool ghi lại trạng thái đúng. Đây là metadata tool; không đổi/xóa `runtime/server/conf` hoặc database để xử lý lỗi YAML này.
+
 1. Refresh frontend và vào **ConTrack Environments** bằng tài khoản có quyền menu này.
 2. Màn hình hiển thị **Deploy WAR to existing Tomcat**, dropdown **ConTrack WAR**; không có bước chọn database/repository.
 3. Chọn WAR, bấm **Validate selection** để kiểm tra artifact và thư mục Tomcat đích.
@@ -147,9 +149,9 @@ Trước lần deploy đầu tiên qua tool, phần Current WAR deployment hiể
 ## 6. Kiểm tra trên host
 
 ```bash
-ls -l "$CT_ENV_ROOT/runtime/server/webapps/contrack.war"
-sha256sum "$CT_ENV_ROOT/catalog/wars/5.2.0/hf-8383-001/contrack.war"
-sha256sum "$CT_ENV_ROOT/runtime/server/webapps/contrack.war"
+ls -l "$CT_ENV_ROOT/runtime/server/webapps/app.war"
+sha256sum "$CT_ENV_ROOT/catalog/wars/5.2.0/hf-8383-001/app.war"
+sha256sum "$CT_ENV_ROOT/runtime/server/webapps/app.war"
 ls -1 "$CT_ENV_ROOT/runs"
 ```
 
@@ -169,6 +171,8 @@ docker compose exec -T backend python - \
 ```
 
 Không cần rebuild image chỉ để chạy file kiểm tra qua stdin. Script in UID/GID, owner/mode thư mục và WAR, số byte/inode trống, cờ filesystem read-only; sau đó thử tạo/chmod/ghi/fsync/rename và xóa các file tạm do chính nó tạo. Không đổi WAR, conf hay quyền thư mục có sẵn. Nếu tất cả phép thử PASS, xem lỗi chi tiết của run (đặc biệt bước replace runtime WAR) vì probe không ghi đè WAR hiện có.
+
+Nếu công cụ kiểm tra in root `/srv/contrack-env` trong khi launcher trước đó VERIFIED root `/home/vsvndev/Contrack-Recreate/contrack-env`, hãy so sánh `container`, `config file`, `root override`, `enabled`, `mode` được in ở đầu. Container được kiểm tra có thể đã bị recreate bằng Compose gốc (thiếu override), hoặc lệnh đang nhắm project khác. Chạy lại launcher từ đúng source project, rồi chạy diagnostic trong cùng thư mục. Không tạo thêm cây `/srv/contrack-env` để che lỗi mount; script sẽ dừng rõ ràng khi chưa load Deploy WAR hoặc thiếu webapps.
 
 | Mã lỗi | Hướng kiểm tra |
 |---|---|

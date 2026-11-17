@@ -7,12 +7,12 @@ export type VersionBundle = {
 export type Catalog = {
   enabled: boolean; busy: boolean; message?: string; versions: VersionBundle[];
   operation_mode?: "prepare_environment" | "deploy_war";
-  wars?: Array<{ id: string; displayName: string; schema: string; status: string; error: string | null }>;
+  wars?: Array<{ id: string; displayName: string; schema: string; status: string; error: string | null; filename?: string; destination?: string }>;
   databases: Array<{ id: string; schema: string; profile: string }>;
   repositories: Array<{ id: string; type: string; name: string }>;
 };
 export type Recipe = {
-  bundle?: string; display_name: string; war: string; schema_version?: string; destination?: string;
+  bundle?: string; display_name: string; war: string; schema_version?: string; source_file?: string; destination?: string;
   database_baseline?: string; repository?: string; repository_type?: string; working_database?: string;
 };
 export type Environment = Recipe & {

@@ -52,9 +52,17 @@ def write_yaml(path: Path, value: dict) -> None:
 def read_yaml(path: Path) -> dict | None:
     if not path.is_file():
         return None
-    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        location = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+        raise EnvironmentError(f"Invalid state YAML: {path}{location}. Repair the file or retain a backup before resetting tool-generated state.",
+                               "INVALID_STATE_YAML", 500) from exc
+    except UnicodeDecodeError as exc:
+        raise EnvironmentError(f"Invalid state file encoding: {path}; expected UTF-8", "INVALID_STATE", 500) from exc
     if not isinstance(value, dict):
-        raise EnvironmentError("Invalid persisted environment state", "INVALID_STATE", 500)
+        raise EnvironmentError(f"Invalid persisted environment state: {path}; expected a YAML mapping", "INVALID_STATE", 500)
     return value
 
 
