@@ -3,10 +3,10 @@ import os
 from unittest.mock import patch
 
 from test_contrack_environments import EnvironmentTestCase
-from app.modules.contrack_environments.catalog import PrepareRequest
+from app.modules.contrack_environments.catalog import PrepareRequest, VersionCatalogService
 from app.modules.contrack_environments.service import EnvironmentPreparationService
 from app.modules.contrack_environments.state import EnvironmentLock, read_yaml, write_yaml
-from app.modules.contrack_environments.config import load_settings
+from app.modules.contrack_environments.config import EnvironmentError, load_settings
 from app.modules.contrack_environments.war_deployment import DeployWarRequest, WarDeploymentService
 
 
@@ -56,6 +56,27 @@ class WarDeploymentTests(EnvironmentTestCase):
         (self.root / "catalog/repositories/svn/standard-v1/manifest.yaml").write_text("invalid: repository")
         self.assertEqual(len(self.deployment.list_wars()), 3)
         self.assertEqual(self.deploy()["status"], "DEPLOYED")
+
+    def test_invalid_manifest_reports_field_without_echoing_its_value(self):
+        path = self.root / "catalog/wars/5.2.0/release/manifest.yaml"
+        manifest = read_yaml(path)
+        manifest["build_id"] = 123
+        manifest["password"] = "secret-do-not-echo"
+        write_yaml(path, manifest)
+        with self.assertRaises(EnvironmentError) as caught:
+            VersionCatalogService(self.settings, wars_only=True)
+        message = str(caught.exception)
+        self.assertIn("build_id: must be a string", message)
+        self.assertIn("password: unsupported field", message)
+        self.assertNotIn("secret-do-not-echo", message)
+
+    def test_invalid_yaml_reports_line_and_column_without_source_text(self):
+        path = self.root / "catalog/wars/5.2.0/release/manifest.yaml"
+        path.write_text('war_id: "unterminated-secret\n', encoding="utf-8")
+        with self.assertRaises(EnvironmentError) as caught:
+            VersionCatalogService(self.settings, wars_only=True)
+        self.assertIn("Invalid YAML at line", str(caught.exception))
+        self.assertNotIn("unterminated-secret", str(caught.exception))
 
     def test_failed_copy_preserves_previous_war_and_releases_lock(self):
         previous = self.target.read_bytes()

@@ -7,7 +7,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .config import EnvironmentError, EnvironmentSettings, contained
 
@@ -132,19 +132,42 @@ class VersionCatalogService:
             return items
         candidates = sorted(root.glob("*.yaml")) if bundles else sorted(root.rglob("manifest.yaml"))
         for source in candidates:
+            reason = "Could not parse manifest"
             try:
                 if not source.resolve().is_relative_to(root) or source.stat().st_size > 128 * 1024:
-                    raise ValueError("Invalid manifest location/size")
+                    raise EnvironmentError("Manifest must stay inside the catalog and be no larger than 128 KiB", "INVALID_MANIFEST")
                 item = model.model_validate(yaml.safe_load(source.read_text(encoding="utf-8")))
                 identifier = valid_id(getattr(item, key))
                 if identifier in items or identifier in self.paths:
-                    raise ValueError("Duplicate catalog ID")
+                    raise EnvironmentError("Duplicate catalog ID; each manifest needs a unique ID", "INVALID_MANIFEST")
                 if hasattr(item, "artifact"):
                     contained(source.parent, item.artifact.file)
                 items[identifier] = item
                 self.paths[identifier] = source.parent.resolve()
             except Exception as exc:
-                raise EnvironmentError(f"Invalid {kind} manifest: {source.relative_to(root).as_posix()}",
+                if isinstance(exc, ValidationError):
+                    details = exc.errors(include_url=False, include_input=False, include_context=False)
+                    # Field names + error kinds only: never echo manifest values, including unexpected secrets.
+                    messages = {
+                        "missing": "required field is missing",
+                        "extra_forbidden": "unsupported field; remove it",
+                        "string_type": "must be a string; wrap the value in quotes",
+                        "model_type": "must be a YAML mapping with named fields",
+                        "string_pattern_mismatch": "invalid format",
+                    }
+                    reason = "; ".join(
+                        f"{'.'.join(str(part) for part in error['loc']) or 'manifest'}: "
+                        f"{messages.get(error['type'], 'invalid value')}"
+                        for error in details[:8]
+                    )
+                elif isinstance(exc, yaml.YAMLError):
+                    mark = getattr(exc, "problem_mark", None)
+                    reason = f"Invalid YAML at line {mark.line + 1}, column {mark.column + 1}" if mark else "Invalid YAML syntax"
+                elif isinstance(exc, EnvironmentError):
+                    reason = str(exc)
+                elif isinstance(exc, OSError):
+                    reason = "Manifest could not be read; check file permissions"
+                raise EnvironmentError(f"Invalid {kind} manifest: {source.relative_to(root).as_posix()} — {reason}",
                                        "INVALID_MANIFEST") from exc
         return items
 
