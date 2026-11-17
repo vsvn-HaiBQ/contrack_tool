@@ -154,3 +154,5 @@ ls -1 "$CT_ENV_ROOT/runs"
 ```
 
 Hai checksum phải bằng nhau sau deploy thành công. Nếu không thấy dropdown WAR, kiểm tra đủ manifest/artifact, cấu hình `operation_mode`, frontend/backend code mới và quyền role. Nếu thấy Prepare Environment thay vì Deploy WAR, backend đang đọc YAML cũ hoặc chưa được recreate với override WAR mới.
+
+Nếu catalog lỗi (ví dụ manifest chưa đúng), giao diện hiển thị lỗi catalog riêng và tự tải lại khoảng mỗi 3 giây. Sau khi sửa file, danh sách WAR và nút deploy tự phục hồi; cũng có thể bấm Refresh. Khi catalog chưa tải được, giao diện hiện CONFIGURATION UNAVAILABLE thay vì suy ra NOT PREPARED. Lỗi tải lịch sử không làm mất catalog hợp lệ.

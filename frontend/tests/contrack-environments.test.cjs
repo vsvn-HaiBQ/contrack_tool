@@ -157,3 +157,85 @@ test("existing Tomcat mode validates and deploys only the selected WAR and block
   finish({ run_id: "20261117T100000-aaaaaaaaaaaa", status: "DEPLOYED", operation_mode: "deploy_war", steps: {} });
   await pending;
 });
+
+test("catalog errors remain visible when the next background refresh succeeds for current and history", async t => {
+  const { state } = mount(t, { catalog: async () => { throw new Error("Invalid wars manifest: 5.2.0/manifest.yaml"); } });
+  await flush();
+  await state.refresh();
+  assert.match(state.catalogError.value, /Invalid wars manifest/);
+  assert.equal(state.valid.value, false);
+});
+
+test("background refresh retries failed catalog and enables WAR deployment after the manifest is fixed", async t => {
+  let fixed = false;
+  let catalogCalls = 0;
+  const { state } = mount(t, { catalog: async () => {
+    ++catalogCalls;
+    if (!fixed) throw new Error("Invalid wars manifest");
+    return warCatalog();
+  } });
+  await flush();
+  assert.equal(state.catalog.value, null);
+  fixed = true;
+  await state.refresh();
+  await flush();
+  assert.ok(catalogCalls >= 2);
+  assert.equal(state.warOnly.value, true);
+  assert.equal(state.valid.value, true);
+  assert.equal(state.warId.value, "WAR-520");
+  assert.equal(state.catalogError.value, "");
+});
+
+test("history request failure does not discard a valid catalog and disable WAR selection", async t => {
+  const { state } = mount(t, {
+    catalog: async () => warCatalog(),
+    runs: async () => { throw new Error("Run history unavailable"); },
+  });
+  await flush();
+  assert.equal(state.warOnly.value, true);
+  assert.equal(state.valid.value, true);
+  assert.match(state.error.value, /Run history unavailable/);
+});
+
+test("a later catalog error blocks stale WAR actions until a successful retry", async t => {
+  let broken = false;
+  const { state } = mount(t, { catalog: async () => {
+    if (broken) throw new Error("Manifest changed and is invalid");
+    return warCatalog();
+  } });
+  await flush();
+  assert.equal(state.valid.value, true);
+  broken = true;
+  await state.refresh(true);
+  assert.equal(state.valid.value, false);
+  assert.match(state.catalogError.value, /Manifest changed/);
+  broken = false;
+  await state.refresh();
+  assert.equal(state.valid.value, true);
+  assert.equal(state.catalogError.value, "");
+});
+
+test("manual Refresh queues a catalog reload when a background request is already in flight", async t => {
+  let slow = false;
+  let finishCurrent;
+  let catalogCalls = 0;
+  const { state } = mount(t, {
+    catalog: async () => { ++catalogCalls; return warCatalog(); },
+    current: () => {
+      if (slow) {
+        slow = false;
+        return new Promise(resolve => { finishCurrent = resolve; });
+      }
+      return Promise.resolve({ environment: null, busy: false });
+    },
+  });
+  await flush();
+  slow = true;
+  const pending = state.refresh();
+  await state.refresh(true);
+  finishCurrent({ environment: null, busy: false });
+  await pending;
+  await flush();
+  assert.equal(catalogCalls, 2);
+  assert.equal(state.valid.value, true);
+});

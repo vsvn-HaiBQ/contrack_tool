@@ -13,6 +13,7 @@ const warPreview = ref("");
 const databaseId = ref("");
 const repositoryId = ref("");
 const error = ref("");
+const catalogError = ref("");
 const actionError = ref("");
 const loading = ref(true);
 const submitting = ref(false);
@@ -25,19 +26,22 @@ const historyLoading = ref(false);
 let timer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 let refreshInProgress = false;
+let catalogRefreshPending = false;
 let detailRequest = 0;
 let selectionRevision = 0;
 
 const bundle = computed(() => catalog.value?.versions.find(item => item.bundleId === bundleId.value));
 const warOnly = computed(() => catalog.value?.operation_mode === "deploy_war");
-const currentStatus = computed(() => current.value?.status ?? (warOnly.value ? "NO RECORDED DEPLOYMENT" : "NOT PREPARED"));
+const currentStatus = computed(() => current.value?.status ?? (!catalog.value
+  ? (loading.value ? "LOADING" : "CONFIGURATION UNAVAILABLE")
+  : (warOnly.value ? "NO RECORDED DEPLOYMENT" : "NOT PREPARED")));
 const databases = computed(() => catalog.value?.databases.filter(item => item.schema === bundle.value?.databaseSchema) ?? []);
 const locked = computed(() => submitting.value || validating.value || busy.value);
-const valid = computed(() => warOnly.value
+const valid = computed(() => !catalogError.value && (warOnly.value
   ? Boolean(catalog.value?.enabled && catalog.value?.wars?.some(item => item.id === warId.value && item.status === "available"))
   : catalog.value?.enabled && bundle.value?.status === "available" &&
   databases.value.some(item => item.id === databaseId.value) &&
-  catalog.value.repositories.some(item => item.id === repositoryId.value));
+  catalog.value.repositories.some(item => item.id === repositoryId.value)));
 const activeRun = computed(() => runs.value.find(item => ["QUEUED", "PREPARING"].includes(item.status)));
 
 watch(bundleId, () => {
@@ -67,29 +71,53 @@ async function viewRun(id: string) {
 }
 
 async function refresh(includeCatalog = false) {
-  if (refreshInProgress || disposed) return;
+  if (disposed) return;
+  if (refreshInProgress) {
+    if (includeCatalog) catalogRefreshPending = true;
+    return;
+  }
   refreshInProgress = true;
   const revision = selectionRevision;
+  const loadCatalog = includeCatalog || !catalog.value || Boolean(catalogError.value);
   try {
-    const [state, history, latestCatalog] = await Promise.all([
+    const [stateResult, historyResult, catalogResult] = await Promise.allSettled([
       environmentsApi.current(), environmentsApi.runs(offset.value),
-      includeCatalog ? environmentsApi.catalog() : Promise.resolve(null),
+      loadCatalog ? environmentsApi.catalog() : Promise.resolve(null),
     ]);
     if (disposed || revision !== selectionRevision) return;
-    current.value = state.environment;
-    busy.value = state.busy;
-    runs.value = history.items;
-    total.value = history.total;
-    if (latestCatalog) {
-      catalog.value = latestCatalog;
-      if (!warId.value) warId.value = latestCatalog.wars?.find(item => item.status === "available")?.id ?? "";
-      if (!bundleId.value) bundleId.value = latestCatalog.versions.find(item => item.status === "available")?.bundleId ?? "";
+    const errors: string[] = [];
+    if (stateResult.status === "fulfilled") {
+      current.value = stateResult.value.environment;
+      busy.value = stateResult.value.busy;
+    } else errors.push(message(stateResult.reason));
+    if (historyResult.status === "fulfilled") {
+      runs.value = historyResult.value.items;
+      total.value = historyResult.value.total;
+    } else errors.push(message(historyResult.reason));
+    if (loadCatalog) {
+      if (catalogResult.status === "fulfilled" && catalogResult.value) {
+        const latestCatalog = catalogResult.value;
+        catalog.value = latestCatalog;
+        catalogError.value = "";
+        busy.value = stateResult.status === "fulfilled" ? (busy.value || latestCatalog.busy) : latestCatalog.busy;
+        if (!warId.value) warId.value = latestCatalog.wars?.find(item => item.status === "available")?.id ?? "";
+        if (!bundleId.value) bundleId.value = latestCatalog.versions.find(item => item.status === "available")?.bundleId ?? "";
+      } else if (catalogResult.status === "rejected") {
+        catalogError.value = message(catalogResult.reason);
+      }
     }
-    error.value = "";
+    error.value = errors.join(" · ");
     const id = selectedRun.value?.run_id ?? activeRun.value?.run_id;
     if (id) await viewRun(id);
   } catch (cause) { if (!disposed) error.value = message(cause); }
-  finally { refreshInProgress = false; loading.value = false; }
+  finally {
+    refreshInProgress = false;
+    loading.value = false;
+    if (catalogRefreshPending && !disposed) {
+      catalogRefreshPending = false;
+      void refresh(true);
+    }
+  }
 }
 
 async function poll() {
@@ -145,19 +173,24 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
         <h1 class="text-2xl font-semibold">ConTrack Environments</h1>
-        <p class="mt-1 text-sm text-neutral-500">{{ warOnly ? 'Deploy a catalog WAR to the existing Tomcat server.' : 'Select a version to prepare its application, database and repository on the Linux server.' }}</p>
+        <p class="mt-1 text-sm text-neutral-500">{{ !catalog ? 'Loading deployment configuration and version catalog.' : (warOnly ? 'Deploy a catalog WAR to the existing Tomcat server.' : 'Select a version to prepare its application, database and repository on the Linux server.') }}</p>
       </div>
       <button class="rounded-lg border border-neutral-200 px-4 py-2 text-sm disabled:opacity-50" :disabled="loading || submitting" @click="refresh(true)">Refresh</button>
     </div>
 
     <p v-if="loading" role="status" class="text-sm text-neutral-500">Loading environments…</p>
     <p v-if="error" role="alert" class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{{ error }}</p>
+    <div v-if="catalogError" role="alert" class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+      <p class="font-medium">Version catalog could not be loaded</p>
+      <p class="mt-1">{{ catalogError }}</p>
+      <p class="mt-1">Correct the catalog error on the server. This page retries automatically; you can also click Refresh.</p>
+    </div>
     <p v-if="catalog && !catalog.enabled" role="status" class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{{ catalog.message }}</p>
     <p v-if="busy" role="status" class="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">{{ warOnly ? 'WAR deployment is already in progress. You can follow its progress below.' : 'Environment preparation is already in progress. You can follow its progress below.' }}</p>
 
     <section class="rounded-2xl border border-neutral-200 bg-white p-5">
       <div class="mb-4 flex items-center justify-between gap-3">
-        <h2 class="text-lg font-semibold">{{ warOnly ? 'Current WAR deployment' : 'Current environment' }}</h2>
+        <h2 class="text-lg font-semibold">{{ !catalog ? 'Current deployment' : (warOnly ? 'Current WAR deployment' : 'Current environment') }}</h2>
         <span class="rounded-full px-3 py-1 text-xs font-medium" :class="statusClass(currentStatus)">{{ currentStatus }}</span>
       </div>
       <p v-if="current?.operation_mode === 'deploy_war'" class="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">{{ current.status === 'DEPLOYED' ? `WAR copied to ${current.destination}.` : 'WAR deployment status is uncertain; check the run log and destination file.' }} Application reload/restart is controlled by the existing Tomcat setup. Application health and database schema were not checked.</p>
@@ -171,13 +204,14 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
           <div><dt class="text-neutral-500">Last successful health check</dt><dd class="mt-1">{{ date(current.checked_at) }}</dd></div>
         </template>
       </dl>
+      <p v-else-if="!catalog" class="text-sm text-neutral-500">{{ loading ? 'Loading deployment configuration…' : 'Deployment configuration could not be loaded. Check the catalog error above.' }}</p>
       <p v-else class="text-sm text-neutral-500">{{ warOnly ? 'No WAR deployment has been recorded by this tool yet. Your existing Tomcat may already be running. Select a catalog WAR below and use Deploy WAR to record a deployment.' : 'No environment has been prepared yet.' }}</p>
     </section>
 
-    <section class="rounded-2xl border border-neutral-200 bg-white p-5">
+    <section v-if="catalog" class="rounded-2xl border border-neutral-200 bg-white p-5">
       <h2 class="mb-4 text-lg font-semibold">{{ warOnly ? 'Deploy WAR to existing Tomcat' : 'Prepare environment' }}</h2>
       <form class="space-y-4" @submit.prevent="prepare">
-        <fieldset :disabled="locked || !catalog?.enabled" class="grid gap-4 disabled:opacity-60 md:grid-cols-3">
+        <fieldset :disabled="locked || !catalog.enabled || Boolean(catalogError)" class="grid gap-4 disabled:opacity-60 md:grid-cols-3">
           <label v-if="warOnly" class="space-y-2 text-sm md:col-span-3"><span class="font-medium">ConTrack WAR</span>
             <select v-model="warId" class="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5" required>
               <option disabled value="">Select a WAR</option>
