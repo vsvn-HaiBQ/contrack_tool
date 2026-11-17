@@ -3,10 +3,11 @@ services:
   backend:
     environment:
       CONTRACK_ENV_CONFIG: /etc/contrack/environment.yaml
+      CONTRACK_ENV_ROOT: ${CT_ENV_ROOT:?Set CT_ENV_ROOT to the existing contrack-env directory}
     volumes:
       - type: bind
         source: ${CT_ENV_ROOT:?Set CT_ENV_ROOT to the existing contrack-env directory}
-        target: /srv/contrack-env
+        target: ${CT_ENV_ROOT:?Set CT_ENV_ROOT to the existing contrack-env directory}
         bind:
           create_host_path: false
       - type: bind

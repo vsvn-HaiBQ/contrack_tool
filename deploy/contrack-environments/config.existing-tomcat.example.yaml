@@ -1,6 +1,6 @@
 # Existing Tomcat: copy WAR only, retain server/conf and current DB/repository connections.
-# Container path after mounting CT_ENV_ROOT; when running directly on the host use the host root instead.
+# The WAR Compose override sets root from CT_ENV_ROOT and mounts that same absolute path.
+# For a backend running directly on the host, add root: /absolute/path/to/contrack-env.
 enabled: true
 operation_mode: deploy_war
-root: /srv/contrack-env
 server: runtime/server

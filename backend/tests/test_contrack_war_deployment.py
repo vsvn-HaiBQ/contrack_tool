@@ -1,10 +1,12 @@
 from pathlib import Path
+import os
 from unittest.mock import patch
 
 from test_contrack_environments import EnvironmentTestCase
 from app.modules.contrack_environments.catalog import PrepareRequest
 from app.modules.contrack_environments.service import EnvironmentPreparationService
-from app.modules.contrack_environments.state import EnvironmentLock, read_yaml
+from app.modules.contrack_environments.state import EnvironmentLock, read_yaml, write_yaml
+from app.modules.contrack_environments.config import load_settings
 from app.modules.contrack_environments.war_deployment import DeployWarRequest, WarDeploymentService
 
 
@@ -98,6 +100,19 @@ class WarDeploymentTests(EnvironmentTestCase):
         self.assertEqual(self.target.read_bytes(), b"previous WAR")
         self.assertFalse(self.settings.path("runs").exists())
         self.assertFalse(self.settings.path("lock").exists())
+
+    def test_bound_root_overrides_stale_yaml_root_for_actual_war_deployment(self):
+        config = self.root / "environment.yaml"
+        write_yaml(config, {"enabled": True, "operation_mode": "deploy_war", "root": str(self.root / "wrong-root")})
+        with patch.dict(os.environ, {"CONTRACK_ENV_CONFIG": str(config), "CONTRACK_ENV_ROOT": str(self.root)}):
+            settings = load_settings()
+        self.assertEqual(settings.root, self.root)
+        service = WarDeploymentService(settings)
+        state, source, lock = service.begin(self.payload, "root-test")
+        service.execute(state, source, lock)
+        self.assertEqual(service.history.get(state["run_id"])["status"], "DEPLOYED")
+        self.assertEqual(self.target.read_bytes(), source.read_bytes())
+        self.assertFalse((self.root / "wrong-root").exists())
 
     def test_switch_lock_is_shared_with_full_environment_preparation(self):
         state, source, lock = self.deployment.begin(self.payload, "user-a")

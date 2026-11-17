@@ -4,6 +4,33 @@
 
 Chế độ `deploy_war` chỉ thay file `webapps/contrack.war`, giữ `conf`, `bin`, `lib`, DB/repository và các ứng dụng khác. Không tạo working DB, không cần schema query, PostgreSQL CLI, Tomcat template hoặc bản Tomcat mới. Hoạt động được khi Tomcat chạy sẵn trên host, vì backend container chỉ ghi WAR qua bind mount. Tool không tự restart Tomcat và không xóa exploded application; cơ chế reload hiện có của Tomcat quyết định khi nào WAR được nạp.
 
+## Cách khởi động đề nghị khi UI vẫn disabled
+
+Cập nhật source trên Linux server, sau đó chạy một lần:
+
+```bash
+cd /home/vsvndev/contrack_tool
+CT_ENV_ROOT=/home/vsvndev/Contrack-Recreate/contrack-env \
+  bash deploy/contrack-environments/start-war-deploy.sh
+```
+
+Launcher kiểm tra Tomcat có sẵn, tạo file **riêng** `Contrack-Recreate/config/war-deploy.generated.yaml` với `enabled: true` và `operation_mode: deploy_war`, build/recreate backend/frontend bằng override đúng, rồi đọc lại cấu hình **trong container vừa tạo**. File `config/environment.yaml` hiện tại và cấu hình Tomcat được giữ nguyên. Launcher chỉ ghi đè file generated nếu có header xác nhận do chính launcher tạo.
+
+Root được truyền qua `CT_ENV_ROOT` cho cả bind mount source, target và biến `CONTRACK_ENV_ROOT` của backend. Vì vậy host và container dùng cùng đường dẫn `/home/vsvndev/Contrack-Recreate/contrack-env`; root trong YAML được biến này ghi đè.
+
+Chỉ xem setup thành công khi cuối lệnh có:
+
+```text
+enabled: True
+mode: deploy_war
+root: /home/vsvndev/Contrack-Recreate/contrack-env
+VERIFIED: enabled=True, mode=deploy_war, root and Tomcat mount are correct.
+```
+
+Sau đó Ctrl+F5. Form phải là **ConTrack WAR / Deploy WAR**. Launcher không copy WAR; user thực hiện deploy qua UI. Nếu launcher đã VERIFIED nhưng UI còn cảnh báo cũ, kiểm tra URL frontend có trỏ đúng server/project vừa recreate hay không. Dùng lại launcher khi cần cập nhật/recreate deployment này để không mất override.
+
+Các bước dưới đây dành cho cấu hình thủ công, tương đương launcher nhưng dùng `environment.yaml` do admin quản lý.
+
 ## 1. Thư mục cần có
 
 ```text
@@ -42,11 +69,11 @@ nano "$CT_ENV_CONFIG"
 ```yaml
 enabled: true
 operation_mode: deploy_war
-root: /srv/contrack-env
+root: /home/vsvndev/Contrack-Recreate/contrack-env
 server: runtime/server
 ```
 
-Đường dẫn `/srv/contrack-env` là root bên trong **backend container**. Nó được mount tới `/home/vsvndev/Contrack-Recreate/contrack-env` trên host. Do đó đích file thực tế đúng là:
+Override WAR mount thư mục host vào **cùng đường dẫn** trong backend container và đặt `CONTRACK_ENV_ROOT` bằng `CT_ENV_ROOT`. Biến môi trường này ưu tiên hơn `root` trong YAML, tránh lệch root khi shell/config cũ còn chứa `/srv/contrack-env`. Đích file thực tế là:
 
 ```text
 /home/vsvndev/Contrack-Recreate/contrack-env/runtime/server/webapps/contrack.war
@@ -54,7 +81,7 @@ server: runtime/server
 
 Nếu YAML cũ chứa `pg_host`, `tomcat_home`, `config_templates` và các giá trị chuẩn bị môi trường khác, có thể bỏ các field đó khi dùng config tối thiểu trên. DB metadata và Redis của chính tool vẫn dùng cấu hình Compose gốc.
 
-Nếu chạy backend trực tiếp trên host thay vì Docker, đặt `root: /home/vsvndev/Contrack-Recreate/contrack-env` và truyền `CONTRACK_ENV_CONFIG` vào process backend; không dùng `/srv/contrack-env` khi không có mount tương ứng.
+Nếu chạy backend trực tiếp trên host thay vì Docker, đặt `root: /home/vsvndev/Contrack-Recreate/contrack-env` và truyền `CONTRACK_ENV_CONFIG` vào process backend.
 
 ## 3. Thêm WAR vào catalog
 
