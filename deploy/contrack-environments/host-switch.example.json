@@ -1,0 +1,23 @@
+{
+  "root": "/home/vsvndev/Contrack-Recreate/contrack-env",
+  "war_filename": "app.war",
+  "postgres": {
+    "container": "REPLACE_WITH_POSTGRES_CONTAINER_NAME",
+    "user": "contrack"
+  },
+  "jdbc": {
+    "file": "runtime/server/conf/Catalina/localhost/app.xml",
+    "format": "xml_resource",
+    "resource_name": "jdbc/ConTrack"
+  },
+  "schema_version_query": "REPLACE_WITH_REAL_SELECT_RETURNING_ONE_SCHEMA_VERSION",
+  "command_cwd": "runtime/server/bin",
+  "start_command": ["/bin/bash", "./start.sh"],
+  "stop_command": ["/bin/bash", "./shutdown.sh"],
+  "server_host": "127.0.0.1",
+  "server_port": 8080,
+  "health_url": "http://127.0.0.1:8080/app/",
+  "command_timeout": 1800,
+  "stop_timeout": 60,
+  "health_timeout": 180
+}

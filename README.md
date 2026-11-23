@@ -211,4 +211,5 @@ chmod +x create-version.sh
 - When the database is empty, the login screen switches to initial admin setup instead of relying on a hard-coded seeded account.
 - The settings screen includes integration status and per-service test connection actions so environment issues can be checked before using sync, logtime, or PR flows.
 - The schema and docs remain in `docs/` and `sql/`.
+- For switching an existing Linux Tomcat between a catalog WAR and a fresh PostgreSQL database from a baseline, see [ConTrack version switching](docs/contrack-version-switch.md). WAR-only deployment remains available as a separate mode.
 - The app is organized by feature module so integration code, routers, and UI flows stay isolated by domain.

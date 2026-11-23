@@ -1,0 +1,10 @@
+enabled: true
+operation_mode: switch_version
+# Root is supplied by CT_ENV_ROOT in the Compose override.
+switch_version:
+  ssh_host: REPLACE_WITH_LINUX_HOST_IP
+  ssh_port: 22
+  ssh_user: vsvndev
+  private_key: /run/contrack-switch/id_ed25519
+  known_hosts: /run/contrack-switch/known_hosts
+  timeout: 7200

@@ -128,6 +128,78 @@ function warCatalog() {
     wars: [{ id: "WAR-520", displayName: "ConTrack 5.2.0", status: "available", schema: "5.2.0", error: null }] };
 }
 
+function switchCatalog() {
+  return { ...warCatalog(), operation_mode: "switch_version", configuration_error: null,
+    wars: [
+      { id: "WAR-520", displayName: "5.2.0", schema: "5.2.0", status: "available" },
+      { id: "WAR-521", displayName: "5.2.1", schema: "5.2.1", status: "available" },
+    ],
+    databases: [
+      { id: "DB-520", schema: "5.2.0", profile: "standard" },
+      { id: "DB-521", schema: "5.2.1", profile: "standard" },
+    ] };
+}
+
+test("host switch selects a compatible baseline without requiring a version bundle or repository", async t => {
+  const { state } = mount(t, { catalog: async () => switchCatalog() });
+  await flush();
+  assert.equal(state.switchMode.value, true);
+  assert.equal(state.warId.value, "WAR-520");
+  assert.equal(state.databaseId.value, "DB-520");
+  assert.equal(state.repositoryId.value, "");
+  assert.equal(state.valid.value, true);
+  state.warId.value = "WAR-521";
+  await flush();
+  assert.equal(state.databaseId.value, "DB-521");
+  assert.deepEqual(state.databases.value.map(item => item.id), ["DB-521"]);
+});
+
+test("host switch validates and submits only selected IDs and prevents duplicate requests", async t => {
+  const calls = [];
+  let finish;
+  const { state } = mount(t, {
+    catalog: async () => switchCatalog(),
+    validateSwitch: async (...ids) => { calls.push(["validateSwitch", ...ids]); return { recipe: { war: ids[0], database_baseline: ids[1] } }; },
+    switchVersion: (...ids) => { calls.push(["switchVersion", ...ids]); return new Promise(resolve => { finish = resolve; }); },
+    prepare: () => assert.fail("Full preparation must not run"),
+    deployWar: () => assert.fail("Copy-only must not run"),
+  });
+  await flush();
+  await state.validate();
+  assert.equal(state.preview.value.database_baseline, "DB-520");
+  const pending = state.prepare();
+  await state.prepare();
+  assert.deepEqual(calls, [["validateSwitch", "WAR-520", "DB-520"], ["switchVersion", "WAR-520", "DB-520"]]);
+  finish({ run_id: "20261123T100000-aaaaaaaaaaaa", status: "QUEUED", operation_mode: "switch_version", steps: {} });
+  await pending;
+});
+
+test("missing baseline or host SSH configuration blocks a host switch", async t => {
+  const data = switchCatalog();
+  data.databases = [];
+  const { state } = mount(t, { catalog: async () => data });
+  await flush();
+  assert.equal(state.valid.value, false);
+  data.databases = [{ id: "DB-520", schema: "5.2.0", profile: "standard" }];
+  data.configuration_error = "Mount SSH key and verified known_hosts";
+  await state.refresh(true);
+  state.databaseId.value = "DB-520";
+  await flush();
+  assert.equal(state.valid.value, false);
+});
+
+test("changing a host switch baseline invalidates the validation preview", async t => {
+  const { state } = mount(t, { catalog: async () => switchCatalog(),
+    validateSwitch: async () => ({ recipe: { war: "WAR-520", database_baseline: "DB-520" } }) });
+  await flush();
+  await state.validate();
+  assert.ok(state.preview.value);
+  state.databaseId.value = "DB-521";
+  await flush();
+  assert.equal(state.preview.value, null);
+  assert.equal(state.valid.value, false);
+});
+
 test("existing Tomcat mode selects WAR without requiring database or repository profiles", async t => {
   const { state } = mount(t, { catalog: async () => warCatalog() });
   await flush();

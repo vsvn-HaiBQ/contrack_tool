@@ -69,11 +69,17 @@ def read_yaml(path: Path) -> dict | None:
 class EnvironmentLock:
     """OS-held lock: released on process exit, including crashes. Never unlink the inode."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, check_host: bool = True):
         self.path = path
         self.file = None
+        self.check_host = check_host
+
+    def _host_busy(self):
+        return self.check_host and self._busy(self.path.with_name(self.path.name + ".host"), check_host=False)
 
     def acquire(self):
+        if self._host_busy():
+            raise EnvironmentError("A host version switch is still running.", "ENVIRONMENT_BUSY", 409)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         handle = self.path.open("a+b")
         try:
@@ -91,6 +97,10 @@ class EnvironmentLock:
             handle.close()
             raise EnvironmentError("Environment preparation is already in progress.", "ENVIRONMENT_BUSY", 409) from exc
         self.file = handle
+        # Recheck after taking the orchestration lock: the SSH worker may outlive its connection.
+        if self._host_busy():
+            self.release()
+            raise EnvironmentError("A host version switch is still running.", "ENVIRONMENT_BUSY", 409)
         return self
 
     def release(self):
@@ -107,9 +117,13 @@ class EnvironmentLock:
 
     @classmethod
     def busy(cls, path: Path) -> bool:
+        return cls._busy(path)
+
+    @classmethod
+    def _busy(cls, path: Path, *, check_host=True) -> bool:
         if not path.exists():
-            return False
-        lock = cls(path)
+            return check_host and cls._busy(path.with_name(path.name + ".host"), check_host=False)
+        lock = cls(path, check_host=check_host)
         try:
             lock.acquire()
             return False

@@ -25,11 +25,23 @@ def contained(root: Path, relative: str) -> Path:
     return result
 
 
+class HostSwitchSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ssh_host: str = ""
+    ssh_user: str = ""
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+    private_key: str = "/run/contrack-switch/id_ed25519"
+    known_hosts: str = "/run/contrack-switch/known_hosts"
+    timeout: int = Field(default=7200, ge=60, le=14400)
+
+
 class EnvironmentSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    operation_mode: Literal["prepare_environment", "deploy_war"] = "prepare_environment"
+    operation_mode: Literal["prepare_environment", "deploy_war", "switch_version"] = "prepare_environment"
+    switch_version: HostSwitchSettings = Field(default_factory=HostSwitchSettings)
     root: Path = Path("/srv/contrack-env")
     wars: str = "catalog/wars"
     databases: str = "catalog/databases"

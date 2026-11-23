@@ -112,7 +112,7 @@ class ResolvedRecipe:
 
 
 class VersionCatalogService:
-    def __init__(self, settings: EnvironmentSettings, *, wars_only: bool = False):
+    def __init__(self, settings: EnvironmentSettings, *, wars_only: bool = False, war_database_only: bool = False):
         self.settings = settings
         self.paths: dict[str, Path] = {}
         self.wars = self._read("wars", WarArtifact, "war_id")
@@ -122,6 +122,10 @@ class VersionCatalogService:
             self.bundles = {}
             return
         self.databases = self._read("databases", DatabaseBaseline, "database_id")
+        if war_database_only:
+            self.repositories = {}
+            self.bundles = {}
+            return
         self.repositories = self._read("repositories", RepositoryProfile, "repository_id")
         self.bundles = self._read("bundles", ConTrackVersionBundle, "bundle_id", bundles=True)
 

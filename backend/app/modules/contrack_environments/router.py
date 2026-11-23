@@ -10,6 +10,7 @@ from .config import EnvironmentError, load_settings
 from .service import EnvironmentPreparationService
 from .state import EnvironmentLock
 from .war_deployment import DeployWarRequest, WarDeploymentService
+from .version_switch import SwitchVersionRequest, VersionSwitchService
 
 router = APIRouter(prefix="/contrack-environments", tags=["contrack-environments"],
                    dependencies=[Depends(require_menu_permission("contrack_environments"))])
@@ -37,6 +38,10 @@ def list_available_versions(service: EnvironmentPreparationService = Depends(get
         return {"enabled": False, "operation_mode": service.settings.operation_mode,
                 "busy": False, "versions": [], "wars": [], "databases": [], "repositories": [],
                 "message": "An administrator must configure and enable the Linux environment manager."}
+    if service.settings.operation_mode == "switch_version":
+        return call(lambda: {"enabled": True, "operation_mode": "switch_version",
+                             "busy": EnvironmentLock.busy(service.settings.path("lock")),
+                             **VersionSwitchService(service.settings).catalog()})
     if service.settings.operation_mode == "deploy_war":
         return call(lambda: {"enabled": True, "operation_mode": "deploy_war",
                              "busy": EnvironmentLock.busy(service.settings.path("lock")),
@@ -94,4 +99,19 @@ def deploy_war(payload: DeployWarRequest, background_tasks: BackgroundTasks,
     deployment = WarDeploymentService(service.settings)
     state, source, lock = call(lambda: deployment.begin(payload, actor.username))
     background_tasks.add_task(deployment.execute, state.copy(), source, lock)
+    return state
+
+
+@router.post("/switch/validate")
+def validate_switch(payload: SwitchVersionRequest, service: EnvironmentPreparationService = Depends(get_service)):
+    return call(lambda: VersionSwitchService(service.settings).validate(payload))
+
+
+@router.post("/switch", status_code=202)
+def switch_version(payload: SwitchVersionRequest, background_tasks: BackgroundTasks,
+                   actor: User = Depends(require_menu_permission("contrack_environments")),
+                   service: EnvironmentPreparationService = Depends(get_service)):
+    switch = VersionSwitchService(service.settings)
+    state, lock = call(lambda: switch.begin(payload, actor.username))
+    background_tasks.add_task(switch.execute, state.copy(), lock)
     return state

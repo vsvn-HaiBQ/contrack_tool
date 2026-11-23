@@ -1,0 +1,29 @@
+# Use with docker-compose.yml. Never mount the Docker socket into the backend.
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/contrack-environments/Dockerfile.switch-version
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      CONTRACK_ENV_CONFIG: /etc/contrack/environment.yaml
+      CONTRACK_ENV_ROOT: ${CT_ENV_ROOT:?Set the existing contrack-env root}
+    volumes:
+      - type: bind
+        source: ${CT_ENV_ROOT:?Set the existing contrack-env root}
+        target: ${CT_ENV_ROOT:?Set the existing contrack-env root}
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${CT_ENV_CONFIG:?Set the switch-version backend YAML}
+        target: /etc/contrack/environment.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${CT_SWITCH_SSH_DIR:?Set the directory containing id_ed25519 and known_hosts}
+        target: /run/contrack-switch
+        read_only: true
+        bind:
+          create_host_path: false

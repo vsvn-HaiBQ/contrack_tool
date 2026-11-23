@@ -1,5 +1,7 @@
 # Deploy WAR vào Tomcat có sẵn trên server
 
+Muốn test nhiều version với DB riêng trên PostgreSQL Docker đang có: xem [Các bước demo switch WAR và DB](contrack-db-switch-demo.md). Phần DB/JDBC/start-stop trong hướng dẫn đó hiện là thao tác quản trị thủ công; UI này vẫn chỉ Deploy WAR.
+
 Áp dụng cho server của bạn: Tomcat đã có cấu hình tại `/home/vsvndev/Contrack-Recreate/contrack-env/runtime/server`; yêu cầu là chọn WAR từ catalog rồi copy vào `webapps`, dùng DB/repository đang cấu hình.
 
 Chế độ `deploy_war` copy đúng `artifact.file` trong WAR manifest và giữ tên file khi đưa vào `webapps` (ví dụ `app.war` → `webapps/app.war`). Giữ `conf`, `bin`, `lib`, DB/repository và các ứng dụng khác. Không tạo working DB, không cần schema query, PostgreSQL CLI, Tomcat template hoặc bản Tomcat mới. Hoạt động được khi Tomcat chạy sẵn trên host, vì backend container chỉ ghi WAR qua bind mount. Tool không tự restart Tomcat và không xóa exploded application; cơ chế reload hiện có của Tomcat quyết định khi nào WAR được nạp.

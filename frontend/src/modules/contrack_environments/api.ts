@@ -6,8 +6,9 @@ export type VersionBundle = {
 };
 export type Catalog = {
   enabled: boolean; busy: boolean; message?: string; versions: VersionBundle[];
-  operation_mode?: "prepare_environment" | "deploy_war";
-  wars?: Array<{ id: string; displayName: string; schema: string; status: string; error: string | null; filename?: string; destination?: string }>;
+  operation_mode?: "prepare_environment" | "deploy_war" | "switch_version";
+  configuration_error?: string | null;
+  wars?: Array<{ id: string; displayName: string; schema: string; status: string; error?: string | null; filename?: string; destination?: string }>;
   databases: Array<{ id: string; schema: string; profile: string }>;
   repositories: Array<{ id: string; type: string; name: string }>;
 };
@@ -23,6 +24,7 @@ export type EnvironmentRun = {
   run_id: string; display_name: string; bundle_id: string | null; actor: string; status: string;
   working_database: string | null; created_at: string; updated_at: string; failed_step: string | null;
   operation_mode?: string;
+  rollback_status?: "SUCCESS" | "FAILED";
   error: { code: string; message: string } | null; steps: Record<string, string>;
   log?: string; recipe?: Recipe; request?: Record<string, unknown>;
 };
@@ -47,5 +49,11 @@ export const environmentsApi = {
   }),
   deployWar: (warId: string) => http<EnvironmentRun>(`${base}/wars/deploy`, {
     method: "POST", body: JSON.stringify({ war_id: warId }),
+  }),
+  validateSwitch: (warId: string, databaseId: string) => http<{ valid: boolean; recipe: Recipe }>(`${base}/switch/validate`, {
+    method: "POST", body: JSON.stringify({ war_id: warId, database_profile_id: databaseId }),
+  }),
+  switchVersion: (warId: string, databaseId: string) => http<EnvironmentRun>(`${base}/switch`, {
+    method: "POST", body: JSON.stringify({ war_id: warId, database_profile_id: databaseId }),
   }),
 };
