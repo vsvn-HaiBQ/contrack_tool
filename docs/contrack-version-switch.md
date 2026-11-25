@@ -107,8 +107,9 @@ nano /home/vsvndev/Contrack-Recreate/config/host-switch.json
 | `schema_version_query` | Tùy chọn: SELECT schema thật; bỏ hoặc để `""` để chỉ đối chiếu manifest |
 | `start_command` | Mặc định `['/bin/bash', './startup.sh']` trong JSON phải dùng dấu nháy kép |
 | `stop_command` | Mặc định `['/bin/bash', './shutdown.sh']` |
-| `server_port` | Server hiện tại: `8282`, đã đối chiếu HTTP Connector trong server.xml |
-| `health_url` | `http://127.0.0.1:8282/app/`; URL trả 2xx khi ứng dụng hoạt động, ưu tiên endpoint có truy cập DB |
+| `server_port` | Server hiện tại: `8282`, HTTPS Connector trong server.xml |
+| `health_url` | `https://localhost:8282/app/`; chứng chỉ Tomcat hiện tại có SAN `DNS:localhost`; URL trả 2xx, ưu tiên endpoint có truy cập DB |
+| `health_ca_file` | Tùy chọn: đường dẫn tuyệt đối tới PEM certificate/CA trên Linux host. Bỏ hoặc để `""` để dùng trust store mặc định. Vẫn kiểm tra hostname và thời hạn chứng chỉ; chỉ dùng với HTTPS |
 
 Runner chạy lệnh trong `runtime/server/bin`. Server hiện tại dùng `startup.sh` và `shutdown.sh`. Nếu tên script khác, sửa đúng tên trong JSON. Script start phải chạy nền Tomcat và trả về. `jdbc.file` trong mẫu chỉ là ví dụ: thư mục `conf/Catalina/localhost` trống không đồng nghĩa ứng dụng đang dùng `app.xml`; phải tìm cấu hình DB thật thay vì tạo file giả để vượt kiểm tra.
 
@@ -230,11 +231,49 @@ Mỗi lần bấm Switch Version đều restore một DB mới. Chưa có lựa 
 
 Health yêu cầu HTTP 2xx, process/cổng Tomcat hoạt động và PostgreSQL có ít nhất một client connection khác đến đúng DB mới. Nếu ứng dụng chỉ mở kết nối DB khi thao tác, chọn endpoint health có truy cập DB hoặc truy cập chức năng trong thời gian health check. URL đăng nhập trả 200 một mình chưa đủ để báo READY.
 
+### HTTPS với chứng chỉ tự ký của Tomcat hiện tại
+
+Server hiện tại dùng HTTPS trên 8282, chứng chỉ tự ký có SAN `DNS:localhost`. Vì vậy dùng `https://localhost:8282/app/`; IP `127.0.0.1` không khớp SAN. `server_host` kiểm tra TCP vẫn có thể là `127.0.0.1`. `curl -k` trả 200 chưa chứng minh Python runner xác minh được chứng chỉ.
+
+Sau khi cập nhật `backend/app/modules/contrack_environments/host_runner.py` trên Linux host, có thể cấu hình chứng chỉ riêng cho health check, không phải thay trust store toàn hệ thống. Với Tomcat local đang chạy, lưu chứng chỉ công khai và đối chiếu với chứng chỉ của Tomcat:
+
+```bash
+cd /home/vsvndev/Contrack-Recreate/config
+openssl s_client -connect 127.0.0.1:8282 -servername localhost </dev/null 2>/dev/null |
+  openssl x509 -outform PEM -out tomcat-localhost.crt
+openssl x509 -in tomcat-localhost.crt -noout -subject -issuer -dates -ext subjectAltName -fingerprint -sha256
+```
+
+Trong `host-switch.json`, đặt các trường sau (giữ các trường cấu hình khác):
+
+```json
+"server_host": "127.0.0.1",
+"server_port": 8282,
+"health_url": "https://localhost:8282/app/",
+"health_ca_file": "/home/vsvndev/Contrack-Recreate/config/tomcat-localhost.crt"
+```
+
+Chỉ rõ `health_ca_file` làm Python dùng PEM đó làm nguồn chứng chỉ tin cậy cho các request health, bao gồm redirect. Không tắt kiểm tra TLS/hostname. File thiếu, không phải PEM certificate hợp lệ, dùng đường dẫn tương đối hoặc dùng CA file với HTTP sẽ bị từ chối ở cấu hình. Khi đổi chứng chỉ Tomcat, cập nhật file tin cậy tương ứng sau khi xác minh.
+
+Lệnh chẩn đoán local sau chỉ thực hiện một probe HTTP/process/cổng. Không start/stop, không sửa WAR/JDBC/runtime state và không tạo/restore DB; dùng được cả khi current là UNKNOWN:
+
+```bash
+cd /home/vsvndev/contrack_tool
+python3 backend/app/modules/contrack_environments/host_runner.py \
+  --config /home/vsvndev/Contrack-Recreate/config/host-switch.json diagnose-health
+```
+
+Mong đợi `ok: true`, `custom_ca: true`, HTTP 200, process/cổng true. `database_status: not_requested` nghĩa là lệnh chẩn đoán này không kiểm tra kết nối DB ứng viên. Exit code 1 đi kèm các trạng thái chẩn đoán khi chưa healthy. Đây là lệnh local, SSH forced command vẫn chỉ nhận `check`/`run`.
+
+Nếu health timeout, log của cả candidate và rollback ghi các trạng thái an toàn: `TLS_CERTIFICATE_INVALID` (trust/hostname/thời hạn), `TLS_ERROR`, `CONNECTION_REFUSED`, `HTTP_ERROR` kèm mã HTTP, process/cổng và `database_status`. Không ghi nội dung response, URL có query token, exception text hoặc JDBC credentials. Chỉ sửa runner/JSON/chứng chỉ trên host không cần rebuild Docker.
+
+Nếu rollback đã FAILED, current UNKNOWN được giữ nguyên dù `diagnose-health` thành công. Xác nhận WAR/JDBC/parallel apps đã khôi phục đúng backup và kiểm tra ứng dụng/DB thực tế trước khi quản trị viên khôi phục state; lệnh này không tự đánh dấu READY hoặc cho phép switch tiếp. Không dùng `recover-stop` cho run đã deploy WAR.
+
 ## 7. Khi lỗi và cách khôi phục
 
 ### Lỗi dừng Tomcat do nhầm port 8080/8282
 
-Server hiện tại khai báo shutdown port `8005`, HTTP Connector `8282`. Nếu `host-switch.json` vẫn đặt `server_port: 8080`, Tomcat có thể đã dừng nhưng tool tiếp tục chờ một dịch vụ khác trên 8080 đóng, dẫn đến `TOMCAT_STOP_FAILED` và rollback timeout. Sửa cả `server_port` thành `8282` và `health_url` thành `http://127.0.0.1:8282/app/`. Không tăng timeout hoặc dừng process giữ cổng 8080 khi chưa xác định đó là ứng dụng nào.
+Server hiện tại khai báo shutdown port `8005`, HTTPS Connector `8282`. Nếu `host-switch.json` vẫn đặt `server_port: 8080`, Tomcat có thể đã dừng nhưng tool tiếp tục chờ một dịch vụ khác trên 8080 đóng, dẫn đến `TOMCAT_STOP_FAILED` và rollback timeout. Sửa cả `server_port` thành `8282` và `health_url` thành `https://localhost:8282/app/`, cấu hình chứng chỉ tin cậy như phần HTTPS ở trên. Không tăng timeout hoặc dừng process giữ cổng 8080 khi chưa xác định đó là ứng dụng nào.
 
 Runner mới đối chiếu port HTTP(S) tĩnh trong server.xml (có tính portOffset, bỏ qua AJP) trước khi tạo DB. Nếu port dùng biến `${...}`, runner không đoán giá trị runtime. Log stop timeout mới phân biệt `process_running` và `configured_port_open`.
 

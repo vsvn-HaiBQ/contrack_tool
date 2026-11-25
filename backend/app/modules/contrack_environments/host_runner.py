@@ -16,10 +16,12 @@ import re
 import shlex
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import time
 from urllib.parse import urlsplit
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 import uuid
 import xml.etree.ElementTree as ET
@@ -29,12 +31,13 @@ DB_NAME = re.compile(r"ct_[a-z0-9_]{1,59}")
 
 
 class RunnerError(Exception):
-    def __init__(self, code, *, line=None, column=None, field=None, stop_status=None):
+    def __init__(self, code, *, line=None, column=None, field=None, stop_status=None, health_status=None):
         self.code = code
         self.line = line
         self.column = column
         self.field = field
         self.stop_status = stop_status
+        self.health_status = health_status
         super().__init__(code)
 
 
@@ -43,6 +46,26 @@ def stop_diagnostic(exc):
     if isinstance(status, dict) and type(status.get("process_running")) is bool and type(status.get("port_open")) is bool:
         return f" (process_running={status['process_running']}, configured_port_open={status['port_open']})"
     return ""
+
+
+def health_diagnostic(exc):
+    status = getattr(exc, "health_status", None)
+    if not isinstance(status, dict):
+        return ""
+    # Never log exception text, response bodies, redirect URLs or connection credentials.
+    safe = {key: status[key] for key in ("healthy", "process_running", "configured_port_open")
+            if type(status.get(key)) is bool}
+    if type(status.get("http_status")) is int and 100 <= status["http_status"] <= 599:
+        safe["http_status"] = status["http_status"]
+    for key, allowed in {
+        "http_error": {"TLS_CERTIFICATE_INVALID", "TLS_ERROR", "CONNECTION_REFUSED", "TIMEOUT",
+                       "NAME_RESOLUTION_FAILED", "HTTP_ERROR", "NETWORK_ERROR", "INVALID_RESPONSE"},
+        "process_error": {"TOMCAT_STATUS_FAILED"},
+        "database_status": {"not_requested", "waiting_for_readiness", "connected", "no_client_connection", "query_failed"},
+    }.items():
+        if isinstance(status.get(key), str) and status[key] in allowed:
+            safe[key] = status[key]
+    return " " + json.dumps(safe, sort_keys=True) if safe else ""
 
 
 def load_host_config(path):
@@ -290,6 +313,17 @@ class HostRunner:
             if health.scheme not in ("http", "https") or not health.hostname or health.username or health.password:
                 raise ValueError()
             self.health_url = config["health_url"]
+            field = "health_ca_file"
+            self.health_context = None
+            ca_file = config.get("health_ca_file")
+            if ca_file not in (None, ""):
+                if not isinstance(ca_file, str):
+                    raise ValueError()
+                ca_path = Path(ca_file)
+                if health.scheme != "https" or not ca_path.is_absolute() or not ca_path.is_file():
+                    raise ValueError()
+                # Trust this explicitly configured certificate/CA while retaining hostname verification.
+                self.health_context = ssl.create_default_context(cafile=str(ca_path))
             self.server_host = config.get("server_host", "127.0.0.1")
             field = "server_port"
             self.server_port = int(config.get("server_port", 8080))
@@ -377,20 +411,60 @@ class HostRunner:
             ports.append(port + offset)
         return sorted(set(ports)) or None
 
+    def health_probe(self, database=None):
+        """One read-only readiness probe, with bounded diagnostics that contain no secrets."""
+        status = {"healthy": False, "http_status": None, "http_error": None,
+                  "process_running": None, "process_error": None,
+                  "configured_port_open": self.port_open(),
+                  "database_status": "not_requested" if database is None else "waiting_for_readiness"}
+        try:
+            status["process_running"] = self.running()
+        except (OSError, RunnerError, subprocess.SubprocessError):
+            status["process_error"] = "TOMCAT_STATUS_FAILED"
+        try:
+            options = {"context": self.health_context} if self.health_context is not None else {}
+            with urlopen(self.health_url, timeout=5, **options) as response:
+                status["http_status"] = response.status
+        except HTTPError as exc:
+            status["http_status"] = exc.code
+            status["http_error"] = "HTTP_ERROR"
+            exc.close()
+        except (OSError, ValueError) as exc:
+            reason = exc.reason if isinstance(exc, URLError) else exc
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                status["http_error"] = "TLS_CERTIFICATE_INVALID"
+            elif isinstance(reason, ssl.SSLError):
+                status["http_error"] = "TLS_ERROR"
+            elif isinstance(reason, ConnectionRefusedError):
+                status["http_error"] = "CONNECTION_REFUSED"
+            elif isinstance(reason, TimeoutError):
+                status["http_error"] = "TIMEOUT"
+            elif isinstance(reason, socket.gaierror):
+                status["http_error"] = "NAME_RESOLUTION_FAILED"
+            else:
+                status["http_error"] = "INVALID_RESPONSE" if isinstance(exc, ValueError) else "NETWORK_ERROR"
+        http_status = status["http_status"]
+        ready = (status["http_error"] is None and isinstance(http_status, int) and 200 <= http_status < 300
+                 and status["process_running"] is True and status["configured_port_open"])
+        if ready and database is not None:
+            try:
+                count = int(self.sql(database,
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'"))
+                status["database_status"] = "connected" if count > 0 else "no_client_connection"
+            except (OSError, ValueError, RunnerError, subprocess.SubprocessError):
+                status["database_status"] = "query_failed"
+            ready = status["database_status"] == "connected"
+        status["healthy"] = bool(ready)
+        return status
+
     def health(self, database=None):
         deadline = time.monotonic() + self.config.get("health_timeout", 120)
         while True:
-            try:
-                with urlopen(self.health_url, timeout=5) as response:
-                    healthy = 200 <= response.status < 300
-                if healthy and self.running() and self.port_open():
-                    if database is None or int(self.sql(database,
-                            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'")) > 0:
-                        return
-            except (OSError, ValueError, RunnerError, subprocess.SubprocessError):
-                pass
+            status = self.health_probe(database)
+            if status["healthy"]:
+                return
             if time.monotonic() >= deadline:
-                raise RunnerError("APPLICATION_HEALTH_FAILED")
+                raise RunnerError("APPLICATION_HEALTH_FAILED", health_status=status)
             time.sleep(2)
 
     def parallel_apps(self):
@@ -648,7 +722,7 @@ class HostRunner:
         except Exception as exc:
             code = exc.code if isinstance(exc, RunnerError) else "HOST_OPERATION_FAILED"
             state["steps"][step] = "FAILED"
-            detail = stop_diagnostic(exc)
+            detail = stop_diagnostic(exc) + health_diagnostic(exc)
             state.update(status="FAILED", failed_step=step, deployment_started=files_changed, error={"code": code,
                          "message": f"Host switch failed at {step}{detail}. Inspect host configuration and this run's backups."}, completed_at=stamp())
             log(step, f"FAILED {code} [{type(exc).__name__}]{detail}; candidate database retained")
@@ -691,7 +765,7 @@ class HostRunner:
                     state["rollback_status"] = "FAILED"
                     save_json(current / "version.yaml", {"status": "UNKNOWN", "operation_mode": "switch_version", "attempt_run_id": state["run_id"]})
                     rollback_code = rollback_exc.code if isinstance(rollback_exc, RunnerError) else "HOST_OPERATION_FAILED"
-                    log("rollback", f"FAILED {rollback_code}{stop_diagnostic(rollback_exc)}; inspect Tomcat and restore backups manually before retrying")
+                    log("rollback", f"FAILED {rollback_code}{stop_diagnostic(rollback_exc)}{health_diagnostic(rollback_exc)}; inspect Tomcat and restore backups manually before retrying")
             persist()
 
     @staticmethod
@@ -713,7 +787,7 @@ class HostRunner:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("action", choices=("check", "run", "serve", "recover-stop"))
+    parser.add_argument("action", choices=("check", "run", "serve", "recover-stop", "diagnose-health"))
     parser.add_argument("run_id", nargs="?")
     args = parser.parse_args()
     try:
@@ -730,6 +804,10 @@ def main():
         runner = HostRunner(config)
         if action == "check":
             result = runner.check()
+        elif action == "diagnose-health":
+            status = runner.health_probe()
+            result = {"ok": status["healthy"], "health": status,
+                      "custom_ca": runner.health_context is not None}
         elif action == "recover-stop":
             result = runner.recover_stop()
         else:

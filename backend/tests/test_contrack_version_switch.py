@@ -1,19 +1,21 @@
 import json
 import io
 import os
+import ssl
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from test_contrack_environments import EnvironmentTestCase
 from app.modules.contrack_environments.config import EnvironmentError
-from app.modules.contrack_environments.host_runner import HostRunner, RunnerError, change_jdbc, file_lock, load_host_config
+from app.modules.contrack_environments.host_runner import HostRunner, RunnerError, change_jdbc, file_lock, health_diagnostic, load_host_config
 from app.modules.contrack_environments.state import EnvironmentLock, read_yaml, write_yaml
 from app.modules.contrack_environments.version_switch import SSHHostRunner, SwitchVersionRequest, VersionSwitchService
 
@@ -326,7 +328,7 @@ class VersionSwitchTests(EnvironmentTestCase):
 
     def test_restricted_ssh_command_rejects_shell_and_arbitrary_operations(self):
         from app.modules.contrack_environments.host_runner import main
-        for command in ("bash", "run 20261123T100000-aaaaaaaaaaaa; touch /tmp/bad", "check extra", "recover-stop", ""):
+        for command in ("bash", "run 20261123T100000-aaaaaaaaaaaa; touch /tmp/bad", "check extra", "recover-stop", "diagnose-health", ""):
             with self.subTest(command=command), patch("sys.argv", ["runner", "--config", "unused", "serve"]), \
                  patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": command}):
                 output = io.StringIO()
@@ -515,6 +517,130 @@ class VersionSwitchTests(EnvironmentTestCase):
             with self.assertRaises(RunnerError) as caught:
                 HostRunner.health(self.host, "ct_new")
         self.assertEqual(caught.exception.code, "APPLICATION_HEALTH_FAILED")
+        self.assertEqual(caught.exception.health_status["database_status"], "no_client_connection")
+
+    def test_custom_health_ca_is_loaded_and_passed_to_https_without_disabling_verification(self):
+        ca_file = self.root / "tomcat.crt"
+        ca_file.write_text("test certificate loaded by mocked certificate loader")
+        context = ssl.create_default_context()
+        config = {**self.config, "health_url": "https://localhost:8282/app/", "health_ca_file": str(ca_file)}
+        with patch("app.modules.contrack_environments.host_runner.ssl.create_default_context", return_value=context) as loader:
+            host = SimulatedHost(config)
+        loader.assert_called_once_with(cafile=str(ca_file))
+        response = MagicMock()
+        response.__enter__.return_value.status = 200
+        with patch("app.modules.contrack_environments.host_runner.urlopen", return_value=response) as request:
+            self.assertTrue(host.health_probe()["healthy"])
+        request.assert_called_once_with(config["health_url"], timeout=5, context=context)
+        self.assertTrue(context.check_hostname)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertIsNone(self.host.health_context)
+
+    def test_invalid_custom_ca_cannot_silently_fall_back_to_unverified_https(self):
+        invalid = self.root / "invalid.crt"
+        invalid.write_text("SECRET_VALUE is not a certificate")
+        for ca_file in (str(self.root / "missing.crt"), str(invalid), "relative.crt", False):
+            with self.subTest(ca_file=ca_file), self.assertRaises(RunnerError) as caught:
+                SimulatedHost({**self.config, "health_url": "https://localhost/app/", "health_ca_file": ca_file})
+            self.assertEqual(caught.exception.field, "health_ca_file")
+            self.assertNotIn("SECRET_VALUE", str(caught.exception))
+
+    def test_health_tls_error_is_reported_without_leaking_exception_or_url_credentials(self):
+        self.host.config["health_timeout"] = 0
+        self.host.health_url = "https://localhost/app/?token=SECRET_VALUE"
+        error = URLError(ssl.SSLCertVerificationError(1, "SECRET_VALUE self-signed certificate"))
+        with patch("app.modules.contrack_environments.host_runner.urlopen", side_effect=error):
+            with self.assertRaises(RunnerError) as caught:
+                HostRunner.health(self.host)
+        status = caught.exception.health_status
+        self.assertEqual(status["http_error"], "TLS_CERTIFICATE_INVALID")
+        self.assertTrue(status["process_running"])
+        self.assertTrue(status["configured_port_open"])
+        self.assertEqual(status["database_status"], "not_requested")
+        self.assertNotIn("SECRET_VALUE", json.dumps(status) + health_diagnostic(caught.exception))
+
+    def test_http_error_code_is_retained_without_response_body_or_headers(self):
+        error = HTTPError("https://localhost/?token=SECRET_VALUE", 404, "SECRET_VALUE", {}, io.BytesIO(b"SECRET_VALUE"))
+        with patch("app.modules.contrack_environments.host_runner.urlopen", side_effect=error):
+            status = self.host.health_probe()
+        self.assertEqual(status["http_status"], 404)
+        self.assertEqual(status["http_error"], "HTTP_ERROR")
+        self.assertFalse(status["healthy"])
+        self.assertNotIn("SECRET_VALUE", json.dumps(status))
+
+    def test_connection_refusal_is_distinct_from_tls_and_http_errors(self):
+        with patch("app.modules.contrack_environments.host_runner.urlopen", side_effect=URLError(ConnectionRefusedError())):
+            status = self.host.health_probe()
+        self.assertEqual(status["http_error"], "CONNECTION_REFUSED")
+
+    def test_http_200_with_missing_tomcat_process_still_fails_without_querying_database(self):
+        response = MagicMock()
+        response.__enter__.return_value.status = 200
+        with patch.object(self.host, "running", return_value=False), patch.object(self.host, "sql") as sql, \
+                patch("app.modules.contrack_environments.host_runner.urlopen", return_value=response):
+            status = self.host.health_probe("ct_new")
+        self.assertFalse(status["healthy"])
+        self.assertFalse(status["process_running"])
+        self.assertEqual(status["database_status"], "waiting_for_readiness")
+        sql.assert_not_called()
+
+    def test_target_db_connection_and_all_readiness_conditions_pass_health(self):
+        response = MagicMock()
+        response.__enter__.return_value.status = 200
+        with patch.object(self.host, "sql", return_value="1") as sql, \
+                patch("app.modules.contrack_environments.host_runner.urlopen", return_value=response):
+            status = self.host.health_probe("ct_new")
+        self.assertTrue(status["healthy"])
+        self.assertEqual(status["database_status"], "connected")
+        self.assertEqual(sql.call_args.args[0], "ct_new")
+
+    def test_health_retries_transient_tls_errors_and_uses_verified_default_context(self):
+        response = MagicMock()
+        response.__enter__.return_value.status = 200
+        error = URLError(ssl.SSLCertVerificationError(1, "untrusted certificate"))
+        with patch("app.modules.contrack_environments.host_runner.urlopen", side_effect=[error, response]) as request, \
+                patch("app.modules.contrack_environments.host_runner.time.sleep") as sleep:
+            HostRunner.health(self.host)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_args.kwargs, {"timeout": 5})
+        sleep.assert_called_once_with(2)
+
+    def test_candidate_and_rollback_health_failures_log_diagnostics_and_keep_unknown_state(self):
+        status = {"healthy": False, "http_error": "TLS_CERTIFICATE_INVALID", "process_running": True,
+                  "configured_port_open": True, "database_status": "not_requested"}
+        with patch.object(self.host, "health", side_effect=RunnerError("APPLICATION_HEALTH_FAILED", health_status=status)):
+            run = self.switch()
+        self.assertEqual(run["failed_step"], "health_check")
+        self.assertEqual(run["rollback_status"], "FAILED")
+        self.assertEqual(self.service.runtime.get_current_environment()["status"], "UNKNOWN")
+        self.assertIn("TLS_CERTIFICATE_INVALID", run["error"]["message"])
+        self.assertEqual(run["log"].count("TLS_CERTIFICATE_INVALID"), 2)
+        self.assertEqual(self.jdbc.read_text(), self.original_jdbc)
+        self.assertTrue((self.server / "webapps/app/old.txt").is_file())
+
+    def test_local_diagnose_health_does_not_switch_files_create_database_or_clear_unknown_state(self):
+        from app.modules.contrack_environments.host_runner import main
+        self.service.runtime.save({"status": "UNKNOWN", "attempt_run_id": "20261125T100000-aaaaaaaaaaaa"})
+        before = (self.settings.path("current") / "version.yaml").read_bytes()
+        response = MagicMock()
+        response.__enter__.return_value.status = 200
+        output = io.StringIO()
+        with patch("sys.argv", ["runner", "--config", "unused", "diagnose-health"]), \
+                patch("app.modules.contrack_environments.host_runner.load_host_config", return_value=self.config), \
+                patch("app.modules.contrack_environments.host_runner.HostRunner", return_value=self.host), \
+                patch("app.modules.contrack_environments.host_runner.urlopen", return_value=response), redirect_stdout(output):
+            self.assertEqual(main(), 0)
+        result = json.loads(output.getvalue())
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["health"]["database_status"], "not_requested")
+        self.assertEqual(self.host.calls, [])
+        self.assertEqual(self.jdbc.read_text(), self.original_jdbc)
+        self.assertEqual((self.settings.path("current") / "version.yaml").read_bytes(), before)
+
+    def test_health_diagnostic_ignores_arbitrary_untrusted_values(self):
+        status = {"http_error": "SECRET_VALUE", "database_status": "SECRET_VALUE", "process_running": "SECRET_VALUE",
+                  "http_status": "SECRET_VALUE", "url": "SECRET_VALUE", "healthy": False}
+        self.assertEqual(json.loads(health_diagnostic(RunnerError("TEST", health_status=status))), {"healthy": False})
 
     def test_switch_api_round_trip_permission_and_rejects_browser_supplied_commands(self):
         from app.modules.contrack_environments.router import get_service, router
