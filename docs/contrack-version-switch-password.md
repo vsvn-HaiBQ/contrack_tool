@@ -95,7 +95,7 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
 Đối chiếu hai fingerprint trước khi kết nối. Nếu SSH port khác, sửa cả YAML và `ssh-keyscan -p`. Known hosts phải khớp địa chỉ mà backend kết nối.
 
-File `host-switch.json` và quyền chạy Docker/start-stop Tomcat vẫn phải được chuẩn bị theo [bước 2–3 của hướng dẫn chính](contrack-version-switch.md). Đường dẫn JDBC/schema query trong mẫu chỉ là placeholder, cần thay bằng giá trị thật. Runner gọi `start.sh`/`shutdown.sh` từ `runtime/server/bin`.
+File `host-switch.json` và quyền chạy Docker/start-stop Tomcat vẫn phải được chuẩn bị theo [bước 2–3 của hướng dẫn chính](contrack-version-switch.md). Đường dẫn JDBC trong mẫu cần thay bằng giá trị thật. `schema_version_query` là tùy chọn: bỏ trường này, đặt `""` hoặc `null` để ghi bước query là SKIPPED và chỉ đối chiếu schema theo manifest. Nếu có query thì phải là SELECT thật; không giữ placeholder. Runner gọi `start.sh`/`shutdown.sh` từ `runtime/server/bin`.
 
 SSH server cần cho phép password authentication cho user `vsvndev`. Chế độ này dùng một mật khẩu, không tự xử lý OTP/MFA hoặc đổi password khi đăng nhập. Password login gọi trực tiếp script Python từ `runner_path` với `host_config`; không dùng forced command trong `authorized_keys`. Quyền của tài khoản Linux vẫn là quyền đăng nhập bình thường của user đó.
 
@@ -153,6 +153,6 @@ python3 backend/app/modules/contrack_environments/host_runner.py \
   --config /home/vsvndev/Contrack-Recreate/config/host-switch.json check
 ```
 
-Nếu thiếu file, copy mẫu bằng `cp -n deploy/contrack-environments/host-switch.example.json /home/vsvndev/Contrack-Recreate/config/host-switch.json`, rồi điền đúng container PostgreSQL, JDBC file/resource, schema query và port/health URL. Không thay `host_config` thành đường dẫn `environment.yaml`.
+Nếu thiếu file, copy mẫu bằng `cp -n deploy/contrack-environments/host-switch.example.json /home/vsvndev/Contrack-Recreate/config/host-switch.json`, rồi điền đúng container PostgreSQL, JDBC file/resource và port/health URL. Query schema có thể bỏ qua như trên. Không thay `host_config` thành đường dẫn `environment.yaml`.
 
 Kiểm thử local xác nhận cách truyền password qua FD, đóng FD khi lỗi/timeout, che secret và giữ key mode cũ. Chưa kiểm thử đăng nhập SSH hoặc Docker build thật trên server Linux từ workspace Windows.

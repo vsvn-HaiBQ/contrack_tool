@@ -240,9 +240,16 @@ class HostRunner:
             self.pg = config["postgres"]
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", self.pg["container"]) or not self.pg["user"]:
                 raise ValueError()
-            query = config["schema_version_query"].strip().rstrip(";")
-            if not query.lower().startswith("select ") or ";" in query:
+            query = config.get("schema_version_query")
+            if query is None:
+                query = ""
+            if not isinstance(query, str):
                 raise ValueError()
+            query = query.strip()
+            if query:
+                query = query.rstrip(";")
+                if not query.lower().startswith("select ") or ";" in query:
+                    raise ValueError()
             self.schema_query = query
             health = urlsplit(config["health_url"])
             if health.scheme not in ("http", "https") or not health.hostname or health.username or health.password:
@@ -328,6 +335,7 @@ class HostRunner:
         if not self.running() and self.port_open():
             raise RunnerError("TOMCAT_STATUS_MISMATCH")
         return {"ok": True, **self.layout, "war_filename": self.filename,
+                "schema_verification": "query" if self.schema_query else "manifest_only",
                 "uid": os.getuid() if hasattr(os, "getuid") else 0,
                 "gid": os.getgid() if hasattr(os, "getgid") else 0}
 
@@ -394,6 +402,9 @@ class HostRunner:
 
             def validate():
                 self.check()
+                mode = "query" if self.schema_query else "manifest_only"
+                if recipe.get("schema_verification", mode) != mode:
+                    raise RunnerError("HOST_CONFIGURATION_CHANGED")
                 war = inside(inside(self.root, self.layout["wars"]),
                              Path(recipe["war_file"]).relative_to(self.layout["wars"]).as_posix())
                 baseline = inside(inside(self.root, self.layout["databases"]),
@@ -419,7 +430,14 @@ class HostRunner:
                 if actual != recipe["schema_version"]:
                     raise RunnerError("SCHEMA_MISMATCH")
 
-            perform("database_schema", schema)
+            if self.schema_query:
+                perform("database_schema", schema)
+                state["schema_verified"] = True
+            else:
+                state["steps"]["database_schema"] = "SKIPPED"
+                state["schema_verified"] = False
+                persist()
+                log("database_schema", "SKIPPED: schema_version_query is not configured; compatibility is based on catalog manifests.")
 
             def stage():
                 backup.mkdir(mode=0o700)
@@ -479,8 +497,10 @@ class HostRunner:
                 save_json(current / "version.yaml", {"operation_mode": "switch_version", "status": "RUNNING",
                     "display_name": recipe["display_name"], "war": recipe["war"], "database": database,
                     "database_baseline": recipe["database_baseline"], "schema_version": recipe["schema_version"],
+                    "schema_verified": state["schema_verified"],
                     "repository": "existing", "run_id": state["run_id"], "checked_at": stamp(),
-                    "health": {"http": True, "process": True, "port": True, "database_connection": True}})
+                    "health": {"http": True, "process": True, "port": True, "database_connection": True,
+                               "schema_verified": state["schema_verified"]}})
 
             perform("runtime_state", publish)
             state.update(status="READY", completed_at=stamp())

@@ -15,10 +15,12 @@ export type Catalog = {
 export type Recipe = {
   bundle?: string; display_name: string; war: string; schema_version?: string; source_file?: string; destination?: string;
   database_baseline?: string; repository?: string; repository_type?: string; working_database?: string;
+  schema_verification?: "query" | "manifest_only";
 };
 export type Environment = Recipe & {
   database: string; run_id: string; status: string; checked_at?: string; updated_at?: string;
   operation_mode?: string; destination?: string; application_status?: string;
+  schema_verified?: boolean;
 };
 export type EnvironmentRun = {
   run_id: string; display_name: string; bundle_id: string | null; actor: string; status: string;

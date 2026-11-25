@@ -127,6 +127,7 @@ class VersionSwitchTests(EnvironmentTestCase):
         self.assertEqual(self.host.databases["existing_db"], "5.2.0")
         self.assertTrue((self.service.history.directory(run["run_id"]) / "backup/exploded/old.txt").is_file())
         self.assertEqual(self.service.runtime.get_current_environment()["database"], run["working_database"])
+        self.assertTrue(self.service.runtime.get_current_environment()["schema_verified"])
         self.assertFalse(EnvironmentLock.busy(self.settings.path("lock")))
         self.assertNotIn("SECRET", run["log"])
         self.assertNotIn("SECRET", json.dumps(run["recipe"]))
@@ -137,6 +138,50 @@ class VersionSwitchTests(EnvironmentTestCase):
         self.assertNotEqual(first["working_database"], second["working_database"])
         self.assertIn(first["working_database"], self.host.databases)
         self.assertEqual(second["status"], "READY")
+
+    def test_missing_empty_or_null_schema_query_skips_sql_verification_without_claiming_it_passed(self):
+        for variant in ("missing", "", None):
+            with self.subTest(variant=variant):
+                self.config.pop("schema_version_query", None)
+                if variant != "missing":
+                    self.config["schema_version_query"] = variant
+                self.host = SimulatedHost(self.config)
+                self.service = VersionSwitchService(self.settings, LocalBridge(self.host))
+                preview = self.service.validate(self.payload)
+                self.assertEqual(preview["recipe"]["schema_verification"], "manifest_only")
+                with patch.object(self.host, "sql", wraps=self.host.sql) as sql:
+                    run = self.switch()
+                self.assertEqual(run["status"], "READY", run["log"])
+                self.assertEqual(run["steps"]["database_schema"], "SKIPPED")
+                self.assertFalse(run["schema_verified"])
+                self.assertEqual(run["recipe"]["schema_verification"], "manifest_only")
+                self.assertFalse(any("ct_schema" in call.args[1] for call in sql.call_args_list))
+                current = self.service.runtime.get_current_environment()
+                self.assertFalse(current["schema_verified"])
+                self.assertFalse(current["health"]["schema_verified"])
+                self.assertIn("SKIPPED", run["log"])
+
+    def test_manifest_schema_mismatch_is_still_rejected_when_query_is_disabled(self):
+        self.config.pop("schema_version_query")
+        host = SimulatedHost(self.config)
+        service = VersionSwitchService(self.settings, LocalBridge(host))
+        with self.assertRaises(EnvironmentError) as caught:
+            service.begin(SwitchVersionRequest(war_id="WAR-520-release", database_profile_id="DB-510"), "demo")
+        self.assertEqual(caught.exception.code, "SCHEMA_MISMATCH")
+        self.assertEqual(host.calls, [])
+
+    def test_nonempty_invalid_query_remains_an_error_instead_of_silently_disabling_check(self):
+        for query in ("REPLACE_WITH_REAL_SELECT_RETURNING_ONE_SCHEMA_VERSION", ";", False):
+            with self.subTest(query=query), self.assertRaises(RunnerError):
+                SimulatedHost({**self.config, "schema_version_query": query})
+
+    def test_schema_verification_mode_change_after_queue_fails_before_database_creation(self):
+        state, lock = self.service.begin(self.payload, "demo")
+        self.host.schema_query = ""
+        self.service.execute(state, lock)
+        run = self.service.history.get(state["run_id"])
+        self.assertEqual(run["error"]["code"], "HOST_CONFIGURATION_CHANGED")
+        self.assertNotIn("createdb", self.host.calls)
 
     def test_restore_or_schema_failure_does_not_stop_tomcat_or_change_current_files(self):
         for failure in ("pg_restore", "schema"):

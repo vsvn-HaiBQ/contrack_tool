@@ -65,6 +65,7 @@ function selection(): Selection {
 function message(value: unknown) { return value instanceof Error ? value.message : "Request failed"; }
 function date(value?: string) { return value ? new Date(value).toLocaleString() : "—"; }
 function statusClass(status: string) {
+  if (status === "SKIPPED") return "bg-neutral-100 text-neutral-600";
   if (["READY", "RUNNING", "SUCCESS", "DEPLOYED"].includes(status)) return "bg-emerald-50 text-emerald-800";
   if (["FAILED", "INTERRUPTED", "UNKNOWN"].includes(status)) return "bg-red-50 text-red-800";
   return "bg-blue-50 text-blue-800";
@@ -206,6 +207,7 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
         <span class="rounded-full px-3 py-1 text-xs font-medium" :class="statusClass(currentStatus)">{{ currentStatus }}</span>
       </div>
       <p v-if="current?.operation_mode === 'deploy_war'" class="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">{{ current.status === 'DEPLOYED' ? `WAR copied to ${current.destination}.` : 'WAR deployment status is uncertain; check the run log and destination file.' }} Application reload/restart is controlled by the existing Tomcat setup. Application health and database schema were not checked.</p>
+      <p v-if="current?.operation_mode === 'switch_version' && current.schema_verified === false" class="mb-4 rounded-lg bg-neutral-50 p-3 text-sm text-neutral-700">Database compatibility is based on catalog manifests. The schema-version query was skipped because it was not configured.</p>
       <dl v-if="current" class="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
         <div><dt class="text-neutral-500">ConTrack version</dt><dd class="mt-1 font-medium">{{ current.display_name || 'Unknown' }}</dd></div>
         <div><dt class="text-neutral-500">WAR</dt><dd class="mt-1 break-all">{{ current.war || '—' }}</dd></div>
@@ -258,7 +260,8 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
         <p class="text-sm text-neutral-500">{{ switchMode ? 'Restore the selected baseline into a new working database, stop the shared Tomcat, update its JDBC URL and WAR, then start and check the application. Existing databases and repository settings are retained. Tomcat will be briefly unavailable during the switch.' : warOnly ? `Copy the catalog WAR to ${selectedWar?.destination ?? 'the existing Tomcat webapps directory'}, preserving the filename declared in its manifest. Existing Tomcat configuration, database, repository and other application files are retained. This action does not restart Tomcat or check application compatibility.` : 'Each preparation creates a new working database from its baseline. A successful switch restarts the shared ConTrack server.' }}</p>
         <p v-if="actionError" role="alert" class="rounded-lg bg-red-50 p-3 text-sm text-red-800">{{ actionError }}</p>
         <div v-if="preview" role="status" class="rounded-lg bg-neutral-50 p-3 text-sm text-neutral-700">
-          Compatible: {{ preview.war }} + {{ preview.database_baseline }} + {{ preview.repository || 'existing repository' }} (schema {{ preview.schema_version }}).
+          {{ switchMode ? 'Manifest schema match:' : 'Compatible:' }} {{ preview.war }} + {{ preview.database_baseline }} + {{ preview.repository || 'existing repository' }} (schema {{ preview.schema_version }}).
+          <p v-if="preview.schema_verification === 'manifest_only'" class="mt-1">The schema-version query will be skipped. Database compatibility will rely on the catalog manifests.</p>
         </div>
         <p v-if="warPreview" role="status" class="rounded-lg bg-neutral-50 p-3 text-sm text-neutral-700">{{ warPreview }}</p>
         <div class="flex flex-wrap gap-3">
@@ -284,6 +287,7 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
       <div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-lg font-semibold">{{ selectedRun.display_name }}</h2><span class="rounded-full px-3 py-1 text-xs" :class="statusClass(selectedRun.status)">{{ selectedRun.status }}</span></div>
       <p class="break-all text-xs text-neutral-500">Run {{ selectedRun.run_id }}<template v-if="selectedRun.working_database"> · {{ selectedRun.working_database }}</template></p>
       <p v-if="selectedRun.operation_mode === 'deploy_war'" class="text-sm text-neutral-500">WAR deployment only. Application health and DB/repository compatibility are not checked.</p>
+      <p v-if="selectedRun.operation_mode === 'switch_version' && selectedRun.steps.database_schema === 'SKIPPED'" class="text-sm text-neutral-500">Database schema query: SKIPPED (not configured). Manifest schema compatibility was checked.</p>
       <p v-if="selectedRun.error" role="alert" class="rounded-lg bg-red-50 p-3 text-sm text-red-800">{{ selectedRun.failed_step || 'Preparation' }}: {{ selectedRun.error.message }} ({{ selectedRun.error.code }})</p>
       <p v-if="selectedRun.rollback_status" role="status" class="rounded-lg bg-neutral-50 p-3 text-sm">Restore previous deployment: {{ selectedRun.rollback_status }}. The candidate database is retained for inspection.</p>
       <ol class="flex flex-wrap gap-2"><li v-for="(status, step) in selectedRun.steps" :key="step" class="rounded-lg px-3 py-2 text-xs" :class="statusClass(status)">{{ String(step).replaceAll('_', ' ') }}: {{ status }}</li></ol>

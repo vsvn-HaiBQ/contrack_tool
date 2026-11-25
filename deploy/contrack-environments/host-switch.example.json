@@ -10,7 +10,7 @@
     "format": "xml_resource",
     "resource_name": "jdbc/ConTrack"
   },
-  "schema_version_query": "REPLACE_WITH_REAL_SELECT_RETURNING_ONE_SCHEMA_VERSION",
+  "schema_version_query": "",
   "command_cwd": "runtime/server/bin",
   "start_command": ["/bin/bash", "./start.sh"],
   "stop_command": ["/bin/bash", "./shutdown.sh"],

@@ -34,10 +34,11 @@ settings = load_settings()
 if not settings.enabled or settings.operation_mode != "switch_version":
     raise SystemExit("Backend must load enabled switch_version configuration.")
 service = VersionSwitchService(settings)
-service._check_host()
+host = service._check_host()
 catalog = service.catalog()
 print("VERIFIED: switch_version enabled; host runner, JDBC selector, PostgreSQL and shared root checked.")
 print("SSH authentication:", settings.switch_version.auth_method)
+print("Database schema verification:", host["schema_verification"])
 print("WARs:", len(catalog["wars"]), "database baselines:", len(catalog["databases"]))
 PYTHON
 printf '\nReload with Ctrl+F5, choose ConTrack WAR and Database Profile, then Validate selection / Switch Version.\n'

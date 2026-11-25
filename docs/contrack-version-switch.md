@@ -2,7 +2,7 @@
 
 Luồng `switch_version` dành cho mô hình hiện tại: tool chạy bằng Docker, PostgreSQL chạy bằng Docker trên cùng host, Tomcat có sẵn trong `/home/vsvndev/Contrack-Recreate/contrack-env/runtime/server`.
 
-User chọn **ConTrack WAR** và **Database Profile** trên giao diện, nhấn **Validate selection**, sau đó **Switch Version**. Tool tạo DB làm việc mới, restore baseline, kiểm tra schema thật, stop Tomcat, đổi URL JDBC, thay WAR, start Tomcat và kiểm tra HTTP cùng kết nối đến DB mới. Không cần bundle/repository manifest cho luồng này. Repository và các DB cũ được giữ lại.
+User chọn **ConTrack WAR** và **Database Profile** trên giao diện, nhấn **Validate selection**, sau đó **Switch Version**. Tool tạo DB làm việc mới, restore baseline, kiểm tra schema thật nếu có cấu hình query, stop Tomcat, đổi URL JDBC, thay WAR, start Tomcat và kiểm tra HTTP cùng kết nối đến DB mới. Không cần bundle/repository manifest cho luồng này. Repository và các DB cũ được giữ lại.
 
 Đây là chức năng riêng. `deploy_war` vẫn copy WAR như trước. Không đổi sang `prepare_environment` để dùng luồng này.
 
@@ -77,7 +77,9 @@ JDBC phải nằm trong file cấu hình bên ngoài WAR mà ứng dụng thật
 
 Runner giữ nguyên host/port/options JDBC, username/password và các cấu hình khác; chỉ đổi tên DB trong URL. Không hỗ trợ URL JDBC nhiều host, URL rút gọn hoặc properties nhiều dòng. File JDBC phải nằm dưới root `contrack-env`, không trùng WAR, catalog hoặc file state.
 
-**Cần một SELECT thật trả về đúng một giá trị schema**, ví dụ từ bảng metadata mà ConTrack đang dùng. Source tool không chứa schema ConTrack nên không có sẵn tên bảng/cột này. Không dùng `SELECT '5.2.1'` để giả lập kiểm tra.
+**`schema_version_query` là tùy chọn trong host-switch.json.** Có thể bỏ trường này, đặt `""` hoặc `null`. Khi đó tool vẫn kiểm tra schema khai báo trong manifest WAR/baseline, restore DB, kiểm tra HTTP/process/port và kết nối DB mới; bước `database_schema` ghi **SKIPPED**, `schema_verified: false`. Giao diện nói rõ schema chưa được truy vấn từ DB. Chỉ riêng bước query bị bỏ qua; schema manifest khác nhau vẫn bị từ chối.
+
+Nếu bật query, cung cấp SELECT thật trả về đúng một giá trị schema, ví dụ từ bảng metadata ConTrack đang dùng. Source tool không chứa schema ConTrack nên không có sẵn tên bảng/cột này. Không dùng `SELECT '5.2.1'` để giả lập kiểm tra. Chuỗi placeholder `REPLACE_WITH_...` vẫn là lỗi cấu hình; xóa nó hoặc để chuỗi rỗng nếu muốn tắt query.
 
 ## 3. Tạo cấu hình host runner
 
@@ -101,7 +103,7 @@ nano /home/vsvndev/Contrack-Recreate/config/host-switch.json
 | `postgres.user` | Role có quyền tạo DB/restore các đối tượng trong baseline |
 | `jdbc.file` | Đường dẫn tương đối của JDBC file thật dưới root |
 | `jdbc.resource_name` | Tên Resource thật trong XML |
-| `schema_version_query` | SELECT schema thật, một giá trị, không có mật khẩu |
+| `schema_version_query` | Tùy chọn: SELECT schema thật; bỏ hoặc để `""` để chỉ đối chiếu manifest |
 | `start_command` | Mặc định `['/bin/bash', './start.sh']` trong JSON phải dùng dấu nháy kép |
 | `stop_command` | Mặc định `['/bin/bash', './shutdown.sh']` |
 | `server_port` | Cổng HTTP Tomcat thật |
@@ -132,7 +134,7 @@ python3 backend/app/modules/contrack_environments/host_runner.py \
   --config /home/vsvndev/Contrack-Recreate/config/host-switch.json check
 ```
 
-Kết quả phải có `"ok": true`. Nếu báo `TOMCAT_STATUS_MISMATCH`, cổng đang mở nhưng runner chưa nhận diện đúng process; sửa cấu hình status trước. `JDBC_*` là lỗi file/selector/URL JDBC. `HOST_CONFIGURATION_INVALID` thường do còn placeholder, thiếu file hoặc query schema chưa điền.
+Kết quả phải có `"ok": true`. `schema_verification` là `query` khi bật SQL hoặc `manifest_only` khi bỏ qua query. Nếu báo `TOMCAT_STATUS_MISMATCH`, cổng đang mở nhưng runner chưa nhận diện đúng process; sửa cấu hình status trước. `JDBC_*` là lỗi file/selector/URL JDBC. `HOST_CONFIGURATION_INVALID` thường do còn placeholder, thiếu file hoặc query được điền nhưng không hợp lệ.
 
 ## 4. Cấu hình SSH key chỉ được gọi runner
 
@@ -215,7 +217,7 @@ Không chạy lại `start-war-deploy.sh` hoặc `docker compose up` chỉ với
 3. Chọn WAR 5.2.0. Danh sách **Database Profile** chỉ hiển thị baseline có schema tương ứng.
 4. Chọn `standard — DB-520-STANDARD-V1`, nhấn **Validate selection**. Bước này không tạo DB.
 5. Nhấn **Switch Version** một lần. Theo dõi Run history / View run.
-6. Chờ các bước `database_create`, `database_restore`, `database_schema`, `stage`, `server_stop`, `war_deploy`, `server_start`, `health_check`, `runtime_state` thành công và run **READY**.
+6. Chờ các bước `database_create`, `database_restore`, `stage`, `server_stop`, `war_deploy`, `server_start`, `health_check`, `runtime_state` thành công và run **READY**. `database_schema` là SUCCESS nếu bật query, SKIPPED nếu không cấu hình query.
 7. Current environment hiển thị tên DB mới dạng `ct_520_...`. Truy cập ứng dụng và kiểm tra chức năng cần dùng.
 8. Chọn WAR 5.2.1 + baseline 5.2.1, thao tác tương tự. Tool tạo DB mới; DB lần trước còn nguyên.
 

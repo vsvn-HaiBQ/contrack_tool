@@ -203,6 +203,10 @@ class VersionSwitchService:
                     for key in ("wars", "databases", "server", "runs", "current", "lock")}}
         if any(actual.get(key) != value for key, value in expected.items()):
             raise EnvironmentError("Backend and host runner must use the same root and managed paths.", "HOST_ROOT_MISMATCH")
+        mode = actual.get("schema_verification", "query")  # Older runners always required a query.
+        if mode not in ("query", "manifest_only"):
+            raise EnvironmentError("Host runner returned an invalid schema verification mode.", "HOST_CONFIGURATION_INVALID")
+        actual["schema_verification"] = mode
         return actual
 
     def validate(self, payload):
@@ -210,6 +214,7 @@ class VersionSwitchService:
         actual = self._check_host()
         if Path(recipe["war_file"]).name != actual.get("war_filename"):
             raise EnvironmentError("Selected WAR filename must match war_filename in the host runner configuration.", "WAR_FILENAME_MISMATCH")
+        recipe["schema_verification"] = actual["schema_verification"]
         return {"valid": True, "recipe": recipe}
 
     def _host_access(self, actual, directory):
@@ -240,10 +245,12 @@ class VersionSwitchService:
             actual = self._check_host()
             if Path(recipe["war_file"]).name != actual.get("war_filename"):
                 raise EnvironmentError("Selected WAR filename must match war_filename in the host runner configuration.", "WAR_FILENAME_MISMATCH")
+            recipe["schema_verification"] = actual["schema_verification"]
             run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S-") + uuid.uuid4().hex[:12]
             directory = self.history.directory(run_id)
             directory.mkdir(parents=True, mode=0o700)
             state = {"run_id": run_id, "operation_mode": "switch_version", "actor": actor,
+                     "schema_verification": recipe["schema_verification"],
                      "display_name": recipe["display_name"], "status": "QUEUED", "steps": {},
                      "working_database": working_database_name(recipe["schema_version"], run_id),
                      "created_at": now(), "failed_step": None, "error": None}
