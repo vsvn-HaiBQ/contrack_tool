@@ -15,8 +15,8 @@
   "start_command": ["/bin/bash", "./startup.sh"],
   "stop_command": ["/bin/bash", "./shutdown.sh"],
   "server_host": "127.0.0.1",
-  "server_port": 8080,
-  "health_url": "http://127.0.0.1:8080/app/",
+  "server_port": 8282,
+  "health_url": "http://127.0.0.1:8282/app/",
   "command_timeout": 1800,
   "stop_timeout": 60,
   "health_timeout": 180

@@ -145,6 +145,7 @@ class SSHHostRunner:
                 "PARALLEL_CONTEXT_DESCRIPTOR": "A versioned Context descriptor exists for this application. Review conf/Catalina/localhost before switching.",
                 "PARALLEL_DEPLOYMENTS_CHANGED": "Parallel deployment files changed after validation. Inspect webapps and start a new switch.",
                 "PARALLEL_DEPLOYMENT_UNSAFE": "Inspect the parallel application paths before switching.",
+                "TOMCAT_SERVER_XML_INVALID": "Fix XML syntax in the existing Tomcat conf/server.xml.",
             }
             hint = hints.get(code, "Check host configuration and the run history.")
             field_hints = {
@@ -165,7 +166,7 @@ class SSHHostRunner:
                 "postgres.user": "Set a nonempty PostgreSQL role name.",
                 "schema_version_query": "Remove the placeholder or set an empty string to skip; otherwise supply a read-only SELECT.",
                 "health_url": "Use an http/https application URL without embedded credentials.",
-                "server_port": "server_port must be a port number between 1 and 65535.",
+                "server_port": "Use the actual HTTP(S) Connector port from Tomcat conf/server.xml, including portOffset, between 1 and 65535. Update health_url to the intended application endpoint.",
             }
             field = value.get("field")
             if code in ("HOST_CONFIGURATION_INVALID", "INVALID_PATH") and isinstance(field, str) and field in field_hints:

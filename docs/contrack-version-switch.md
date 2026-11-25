@@ -107,8 +107,8 @@ nano /home/vsvndev/Contrack-Recreate/config/host-switch.json
 | `schema_version_query` | Tùy chọn: SELECT schema thật; bỏ hoặc để `""` để chỉ đối chiếu manifest |
 | `start_command` | Mặc định `['/bin/bash', './startup.sh']` trong JSON phải dùng dấu nháy kép |
 | `stop_command` | Mặc định `['/bin/bash', './shutdown.sh']` |
-| `server_port` | Cổng HTTP Tomcat thật |
-| `health_url` | URL trả 2xx khi ứng dụng hoạt động, ưu tiên endpoint có truy cập DB |
+| `server_port` | Server hiện tại: `8282`, đã đối chiếu HTTP Connector trong server.xml |
+| `health_url` | `http://127.0.0.1:8282/app/`; URL trả 2xx khi ứng dụng hoạt động, ưu tiên endpoint có truy cập DB |
 
 Runner chạy lệnh trong `runtime/server/bin`. Server hiện tại dùng `startup.sh` và `shutdown.sh`. Nếu tên script khác, sửa đúng tên trong JSON. Script start phải chạy nền Tomcat và trả về. `jdbc.file` trong mẫu chỉ là ví dụ: thư mục `conf/Catalina/localhost` trống không đồng nghĩa ứng dụng đang dùng `app.xml`; phải tìm cấu hình DB thật thay vì tạo file giả để vượt kiểm tra.
 
@@ -231,6 +231,29 @@ Mỗi lần bấm Switch Version đều restore một DB mới. Chưa có lựa 
 Health yêu cầu HTTP 2xx, process/cổng Tomcat hoạt động và PostgreSQL có ít nhất một client connection khác đến đúng DB mới. Nếu ứng dụng chỉ mở kết nối DB khi thao tác, chọn endpoint health có truy cập DB hoặc truy cập chức năng trong thời gian health check. URL đăng nhập trả 200 một mình chưa đủ để báo READY.
 
 ## 7. Khi lỗi và cách khôi phục
+
+### Lỗi dừng Tomcat do nhầm port 8080/8282
+
+Server hiện tại khai báo shutdown port `8005`, HTTP Connector `8282`. Nếu `host-switch.json` vẫn đặt `server_port: 8080`, Tomcat có thể đã dừng nhưng tool tiếp tục chờ một dịch vụ khác trên 8080 đóng, dẫn đến `TOMCAT_STOP_FAILED` và rollback timeout. Sửa cả `server_port` thành `8282` và `health_url` thành `http://127.0.0.1:8282/app/`. Không tăng timeout hoặc dừng process giữ cổng 8080 khi chưa xác định đó là ứng dụng nào.
+
+Runner mới đối chiếu port HTTP(S) tĩnh trong server.xml (có tính portOffset, bỏ qua AJP) trước khi tạo DB. Nếu port dùng biến `${...}`, runner không đoán giá trị runtime. Log stop timeout mới phân biệt `process_running` và `configured_port_open`.
+
+Nếu run đã FAILED ở `server_stop`, chưa có bước `war_deploy`, thì WAR/JDBC/webapps chưa được tool đổi; DB ứng viên được giữ lại. Current environment có thể UNKNOWN vì bước rollback chưa xác nhận được process/port. Sau khi cập nhật file runner trên host và sửa port trong JSON, chạy trực tiếp trên host bằng user vsvndev:
+
+```bash
+cd /home/vsvndev/contrack_tool
+python3 backend/app/modules/contrack_environments/host_runner.py \
+  --config /home/vsvndev/Contrack-Recreate/config/host-switch.json check
+
+python3 backend/app/modules/contrack_environments/host_runner.py \
+  --config /home/vsvndev/Contrack-Recreate/config/host-switch.json recover-stop
+```
+
+`recover-stop` là lệnh quản trị local, backend API/SSH forced command không nhận action này. Nó giữ cả khóa host và khóa điều phối, yêu cầu Tomcat đã dừng/cổng đúng đã đóng, current UNKNOWN trỏ tới run FAILED ở server_stop, chưa deploy WAR, JDBC còn giống backup và WAR staged khớp checksum. Khi hợp lệ, chỉ rename file state UNKNOWN thành `version.failed-stop-*.yaml.bak`; không sửa WAR/JDBC, không drop DB, không đánh dấu READY và không xóa lịch sử. Nếu file đã được đổi hoặc lỗi xảy ra sau deploy, recovery bị từ chối để kiểm tra thủ công. Sau khi báo `ok: true`, Refresh giao diện và chạy Switch Version lại.
+
+Riêng sửa JSON không cần rebuild image. Để dùng lệnh recovery mới, cần cập nhật source `host_runner.py` trên Linux; chạy trực tiếp script không cần build Docker. Các thay đổi backend trong image cần build khi triển khai bản tool mới.
+
+### Các trường hợp khác
 
 * Restore hoặc schema sai: giữ Tomcat/WAR/JDBC hiện tại, giữ DB ứng viên để điều tra.
 * Lỗi sau khi stop/đổi file: runner cố stop ứng viên, khôi phục WAR, JDBC và thư mục exploded cũ; start lại bản cũ nếu trước đó nó đang chạy. Run vẫn FAILED, kèm `rollback_status: SUCCESS` hoặc `FAILED`.

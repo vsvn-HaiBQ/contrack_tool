@@ -326,7 +326,7 @@ class VersionSwitchTests(EnvironmentTestCase):
 
     def test_restricted_ssh_command_rejects_shell_and_arbitrary_operations(self):
         from app.modules.contrack_environments.host_runner import main
-        for command in ("bash", "run 20261123T100000-aaaaaaaaaaaa; touch /tmp/bad", "check extra", ""):
+        for command in ("bash", "run 20261123T100000-aaaaaaaaaaaa; touch /tmp/bad", "check extra", "recover-stop", ""):
             with self.subTest(command=command), patch("sys.argv", ["runner", "--config", "unused", "serve"]), \
                  patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": command}):
                 output = io.StringIO()
@@ -431,6 +431,80 @@ class VersionSwitchTests(EnvironmentTestCase):
         self.assertEqual((self.server / "webapps/app.war").read_bytes(), b"old WAR")
         self.assertEqual(self.jdbc.read_text(), self.original_jdbc)
         self.assertEqual(self.service.runtime.get_current_environment()["status"], "UNKNOWN")
+        self.assertFalse(run["deployment_started"])
+
+    def test_wrong_http_port_is_rejected_before_postgres_or_stop_commands(self):
+        (self.server / "conf/server.xml").write_text('<Server port="8005"><Service><Connector port="8282" protocol="org.apache.coyote.http11.Http11NioProtocol"/><Connector port="8009" protocol="AJP/1.3"/></Service></Server>')
+        with patch.object(self.host, "sql", wraps=self.host.sql) as sql, self.assertRaises(RunnerError) as caught:
+            self.host.check()
+        self.assertEqual(caught.exception.code, "HOST_CONFIGURATION_INVALID")
+        self.assertEqual(caught.exception.field, "server_port")
+        sql.assert_not_called()
+        self.assertEqual(self.host.calls, [])
+        self.host.server_port = 8282
+        self.assertEqual(self.host.check()["http_connector_ports"], [8282])
+
+    def test_http_connector_port_offset_and_dynamic_ports(self):
+        xml = self.server / "conf/server.xml"
+        xml.write_text('<Server portOffset="100"><Service><Connector port="8182" protocol="HTTP/1.1"/></Service></Server>')
+        self.assertEqual(self.host.http_connector_ports(), [8282])
+        xml.write_text('<Server><Service><Connector port="${http.port}" protocol="HTTP/1.1"/></Service></Server>')
+        self.assertIsNone(self.host.http_connector_ports())
+        self.assertTrue(self.host.check()["ok"])
+
+    def test_stop_timeout_reports_a_stopped_process_with_a_busy_foreign_port(self):
+        with patch.object(self.host, "port_open", return_value=True), self.assertRaises(RunnerError) as caught:
+            self.host.stop()
+        self.assertEqual(caught.exception.code, "TOMCAT_STOP_FAILED")
+        self.assertEqual(caught.exception.stop_status, {"process_running": False, "port_open": True})
+        self.assertEqual(self.host.calls, ["stop"])
+
+    def test_safe_stop_recovery_archives_only_state_and_allows_retry(self):
+        self.host.failure = "stop"
+        run = self.switch()
+        self.host.failure = None
+        self.host.active = False
+        result = self.host.recover_stop()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["run_id"], run["run_id"])
+        self.assertIsNone(self.service.runtime.get_current_environment())
+        self.assertEqual(read_yaml(self.root / result["state_backup"])["status"], "UNKNOWN")
+        self.assertEqual(self.jdbc.read_text(), self.original_jdbc)
+        self.assertEqual((self.server / "webapps/app.war").read_bytes(), b"old WAR")
+        self.assertEqual(self.service.history.get(run["run_id"])["status"], "FAILED")
+        self.assertIn(run["working_database"], self.host.databases)
+        self.assertEqual(self.host.recover_stop()["recovery"], "not_required")
+        self.assertEqual(self.switch()["status"], "READY")
+
+    def test_stop_recovery_refuses_a_running_tomcat_or_changed_jdbc(self):
+        self.host.failure = "stop"
+        self.switch()
+        with self.assertRaises(RunnerError) as caught:
+            self.host.recover_stop()
+        self.assertEqual(caught.exception.code, "RECOVERY_TOMCAT_NOT_STOPPED")
+        self.host.failure = None
+        self.host.active = False
+        self.jdbc.write_text(self.original_jdbc + "\n<!--external edit-->")
+        with self.assertRaises(RunnerError) as caught:
+            self.host.recover_stop()
+        self.assertEqual(caught.exception.code, "RECOVERY_JDBC_CHANGED")
+        self.assertEqual(self.service.runtime.get_current_environment()["status"], "UNKNOWN")
+
+    def test_stop_recovery_refuses_a_failure_after_war_deploy(self):
+        self.host.failure = "health"
+        run = self.switch()
+        self.host.active = False
+        self.service.runtime.save({"status": "UNKNOWN", "attempt_run_id": run["run_id"]})
+        with self.assertRaises(RunnerError) as caught:
+            self.host.recover_stop()
+        self.assertEqual(caught.exception.code, "RECOVERY_NOT_ALLOWED")
+        self.assertEqual(self.service.runtime.get_current_environment()["status"], "UNKNOWN")
+
+    def test_stop_recovery_respects_existing_host_lock(self):
+        main = self.settings.path("lock")
+        with file_lock(main.with_name(main.name + ".host")), self.assertRaises(RunnerError) as caught:
+            self.host.recover_stop()
+        self.assertEqual(caught.exception.code, "ENVIRONMENT_BUSY")
 
     def test_http_success_without_target_database_connections_cannot_pass_health(self):
         self.host.config["health_timeout"] = 0

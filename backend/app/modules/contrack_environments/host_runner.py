@@ -29,12 +29,20 @@ DB_NAME = re.compile(r"ct_[a-z0-9_]{1,59}")
 
 
 class RunnerError(Exception):
-    def __init__(self, code, *, line=None, column=None, field=None):
+    def __init__(self, code, *, line=None, column=None, field=None, stop_status=None):
         self.code = code
         self.line = line
         self.column = column
         self.field = field
+        self.stop_status = stop_status
         super().__init__(code)
+
+
+def stop_diagnostic(exc):
+    status = getattr(exc, "stop_status", None)
+    if isinstance(status, dict) and type(status.get("process_running")) is bool and type(status.get("port_open")) is bool:
+        return f" (process_running={status['process_running']}, configured_port_open={status['port_open']})"
+    return ""
 
 
 def load_host_config(path):
@@ -338,10 +346,36 @@ class HostRunner:
         if self.running():
             self.command(self.config["stop_command"], timeout=120)
         deadline = time.monotonic() + self.config.get("stop_timeout", 60)
-        while self.running() or self.port_open():
+        while True:
+            process_running, port_open = self.running(), self.port_open()
+            if not process_running and not port_open:
+                return
             if time.monotonic() >= deadline:
-                raise RunnerError("TOMCAT_STOP_FAILED")
+                raise RunnerError("TOMCAT_STOP_FAILED", stop_status={"process_running": process_running, "port_open": port_open})
             time.sleep(1)
+
+    def http_connector_ports(self):
+        """Resolve static HTTP(S) connector ports. Leave dynamic property-based ports unguessed."""
+        try:
+            server = ET.parse(self.server / "conf/server.xml").getroot()
+        except ET.ParseError as exc:
+            raise RunnerError("TOMCAT_SERVER_XML_INVALID", field="server.conf.server_xml") from exc
+        try:
+            offset = int(server.get("portOffset", "0"))
+        except ValueError:
+            return None
+        ports = []
+        for connector in server.iter("Connector"):
+            if "ajp" in connector.get("protocol", "").lower():
+                continue
+            try:
+                port = int(connector.get("port", ""))
+            except ValueError:
+                return None
+            if port <= 0:
+                return None
+            ports.append(port + offset)
+        return sorted(set(ports)) or None
 
     def health(self, database=None):
         deadline = time.monotonic() + self.config.get("health_timeout", 120)
@@ -374,6 +408,9 @@ class HostRunner:
         return sorted(matches, key=lambda path: path.name)
 
     def check(self):
+        ports = self.http_connector_ports()
+        if ports is not None and self.server_port not in ports:
+            raise RunnerError("HOST_CONFIGURATION_INVALID", field="server_port")
         # Parse and validate the actual JDBC selector without writing any file.
         change_jdbc(self.jdbc.read_bytes().decode("utf-8"), self.config["jdbc"], "ct_preflight")
         if self.sql("postgres", "SELECT 1") != "1":
@@ -383,6 +420,7 @@ class HostRunner:
         return {"ok": True, **self.layout, "war_filename": self.filename,
                 "schema_verification": "query" if self.schema_query else "manifest_only",
                 "parallel_deployments": [path.name for path in self.parallel_apps()],
+                "http_connector_ports": ports,
                 "uid": os.getuid() if hasattr(os, "getuid") else 0,
                 "gid": os.getgid() if hasattr(os, "getgid") else 0}
 
@@ -406,6 +444,45 @@ class HostRunner:
                 marker.write(stamp())
             self._execute(directory, recipe, state)
             return {"ok": state["status"] == "READY", "code": (state.get("error") or {}).get("code", "HOST_OPERATION_FAILED")}
+
+    def recover_stop(self):
+        """Local-admin recovery only: archive an uncertain record when no application files changed."""
+        lock = inside(self.root, self.layout["lock"])
+        with file_lock(lock.with_name(lock.name + ".host")), file_lock(lock):
+            self.check()
+            if self.running() or self.port_open():
+                raise RunnerError("RECOVERY_TOMCAT_NOT_STOPPED")
+            current = inside(inside(self.root, self.layout["current"]), "version.yaml")
+            if not current.exists():
+                return {"ok": True, "recovery": "not_required"}
+            try:
+                value = json.loads(current.read_text(encoding="utf-8"))
+                run_id = value.get("attempt_run_id", "")
+                if value.get("status") != "UNKNOWN" or not RUN_ID.fullmatch(run_id):
+                    raise ValueError()
+                directory = inside(inside(self.root, self.layout["runs"]), run_id)
+                state = json.loads((directory / "state.yaml").read_text(encoding="utf-8"))
+                if state.get("operation_mode") != "switch_version" or state.get("status") != "FAILED" or \
+                        state.get("failed_step") != "server_stop" or "war_deploy" in state.get("steps", {}) or \
+                        state.get("deployment_started") is True:
+                    raise ValueError()
+                if self.jdbc.read_bytes() != (directory / "backup/jdbc.original").read_bytes():
+                    raise RunnerError("RECOVERY_JDBC_CHANGED")
+                # The stage must still contain the known candidate; this is not recovery of a partially deployed run.
+                recipe = json.loads((directory / "host-request.json").read_text(encoding="utf-8"))["recipe"]
+                if sha256(directory / "war.staged") != recipe["war_sha256"]:
+                    raise ValueError()
+                if (directory / "backup/exploded").exists() or (directory / "backup/parallel-webapps").exists():
+                    raise ValueError()
+            except RunnerError:
+                raise
+            except (KeyError, TypeError, ValueError, AttributeError, OSError) as exc:
+                raise RunnerError("RECOVERY_NOT_ALLOWED") from exc
+            saved = current.with_name(f"version.failed-stop-{run_id}-{uuid.uuid4().hex[:8]}.yaml.bak")
+            current.rename(saved)
+            # Keep the failed history, candidate DB and all backups. Do not manufacture a RUNNING/READY record.
+            return {"ok": True, "recovery": "unmodified_stop_failure_archived", "run_id": run_id,
+                    "state_backup": saved.relative_to(self.root).as_posix()}
 
     def _execute(self, directory, recipe, state):
         database = state["working_database"]
@@ -571,9 +648,12 @@ class HostRunner:
         except Exception as exc:
             code = exc.code if isinstance(exc, RunnerError) else "HOST_OPERATION_FAILED"
             state["steps"][step] = "FAILED"
-            state.update(status="FAILED", failed_step=step, error={"code": code,
-                         "message": f"Host switch failed at {step}. Inspect host configuration and this run's backups."}, completed_at=stamp())
-            log(step, f"FAILED {code} [{type(exc).__name__}]; candidate database retained")
+            detail = stop_diagnostic(exc)
+            state.update(status="FAILED", failed_step=step, deployment_started=files_changed, error={"code": code,
+                         "message": f"Host switch failed at {step}{detail}. Inspect host configuration and this run's backups."}, completed_at=stamp())
+            log(step, f"FAILED {code} [{type(exc).__name__}]{detail}; candidate database retained")
+            if not files_changed:
+                log(step, "Runtime WAR/JDBC and webapps have not been modified by this run.")
             if touched:
                 try:
                     self.stop()
@@ -607,10 +687,11 @@ class HostRunner:
                         (current / "run-id").unlink(missing_ok=True)
                     state["rollback_status"] = "SUCCESS"
                     log("rollback", "Previous deployment restored; server health checked if it was previously running.")
-                except Exception:
+                except Exception as rollback_exc:
                     state["rollback_status"] = "FAILED"
                     save_json(current / "version.yaml", {"status": "UNKNOWN", "operation_mode": "switch_version", "attempt_run_id": state["run_id"]})
-                    log("rollback", "FAILED; inspect Tomcat and restore backups manually before retrying")
+                    rollback_code = rollback_exc.code if isinstance(rollback_exc, RunnerError) else "HOST_OPERATION_FAILED"
+                    log("rollback", f"FAILED {rollback_code}{stop_diagnostic(rollback_exc)}; inspect Tomcat and restore backups manually before retrying")
             persist()
 
     @staticmethod
@@ -632,7 +713,7 @@ class HostRunner:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("action", choices=("check", "run", "serve"))
+    parser.add_argument("action", choices=("check", "run", "serve", "recover-stop"))
     parser.add_argument("run_id", nargs="?")
     args = parser.parse_args()
     try:
@@ -647,7 +728,12 @@ def main():
                 raise RunnerError("INVALID_HOST_OPERATION")
         config = load_host_config(args.config)
         runner = HostRunner(config)
-        result = runner.check() if action == "check" else runner.run(run_id or "")
+        if action == "check":
+            result = runner.check()
+        elif action == "recover-stop":
+            result = runner.recover_stop()
+        else:
+            result = runner.run(run_id or "")
         print(json.dumps(result))
         return 0 if result["ok"] else 1
     except Exception as exc:
