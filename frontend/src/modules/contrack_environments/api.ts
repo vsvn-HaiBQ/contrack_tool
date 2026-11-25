@@ -16,6 +16,7 @@ export type Recipe = {
   bundle?: string; display_name: string; war: string; schema_version?: string; source_file?: string; destination?: string;
   database_baseline?: string; repository?: string; repository_type?: string; working_database?: string;
   schema_verification?: "query" | "manifest_only";
+  parallel_deployments?: string[];
 };
 export type Environment = Recipe & {
   database: string; run_id: string; status: string; checked_at?: string; updated_at?: string;

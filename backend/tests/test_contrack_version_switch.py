@@ -183,6 +183,76 @@ class VersionSwitchTests(EnvironmentTestCase):
         self.assertEqual(run["error"]["code"], "HOST_CONFIGURATION_CHANGED")
         self.assertNotIn("createdb", self.host.calls)
 
+    def parallel_fixture(self):
+        war = self.server / "webapps/app##5.2.0.20.war"
+        war.write_bytes(b"versioned old WAR")
+        directory = self.server / "webapps/app##5.2.0.20"
+        directory.mkdir()
+        (directory / "old.txt").write_text("versioned old application")
+        other = self.server / "webapps/other##1.war"
+        other.write_bytes(b"other context")
+        return war, directory, other
+
+    def test_parallel_versions_are_previewed_and_archived_only_for_selected_context(self):
+        war, directory, other = self.parallel_fixture()
+        names = [directory.name, war.name]
+        preview = self.service.validate(self.payload)
+        self.assertEqual(preview["recipe"]["parallel_deployments"], names)
+        self.assertTrue(war.exists())  # Validation is read-only.
+        run = self.switch()
+        self.assertEqual(run["status"], "READY", run["log"])
+        self.assertEqual(run["archived_parallel_deployments"], names)
+        self.assertFalse(war.exists())
+        self.assertFalse(directory.exists())
+        saved = self.service.history.directory(run["run_id"]) / "backup/parallel-webapps"
+        self.assertEqual((saved / war.name).read_bytes(), b"versioned old WAR")
+        self.assertTrue((saved / directory.name / "old.txt").is_file())
+        self.assertEqual(other.read_bytes(), b"other context")
+        self.assertEqual((self.server / "webapps/app.war").read_bytes(), b"new app WAR")
+
+    def test_failed_candidate_health_restores_parallel_wars_and_directories(self):
+        war, directory, other = self.parallel_fixture()
+        self.host.failure = "health"
+        run = self.switch()
+        self.assertEqual(run["status"], "FAILED")
+        self.assertEqual(run["rollback_status"], "SUCCESS")
+        self.assertEqual(war.read_bytes(), b"versioned old WAR")
+        self.assertTrue((directory / "old.txt").is_file())
+        self.assertEqual(other.read_bytes(), b"other context")
+        self.assertEqual(self.jdbc.read_text(), self.original_jdbc)
+
+    def test_partial_parallel_archive_failure_restores_already_moved_entries(self):
+        war, directory, _ = self.parallel_fixture()
+        original = Path.rename
+        def rename(path, target):
+            if path == war:
+                raise OSError("Cannot archive versioned WAR")
+            return original(path, target)
+        with patch.object(Path, "rename", rename):
+            run = self.switch()
+        self.assertEqual(run["status"], "FAILED")
+        self.assertEqual(run["rollback_status"], "SUCCESS")
+        self.assertTrue(war.is_file())
+        self.assertTrue((directory / "old.txt").is_file())
+        self.assertEqual(self.jdbc.read_text(), self.original_jdbc)
+
+    def test_parallel_deployment_change_after_queue_is_rejected_before_db_creation(self):
+        state, lock = self.service.begin(self.payload, "demo")
+        self.parallel_fixture()
+        self.service.execute(state, lock)
+        run = self.service.history.get(state["run_id"])
+        self.assertEqual(run["error"]["code"], "PARALLEL_DEPLOYMENTS_CHANGED")
+        self.assertNotIn("createdb", self.host.calls)
+
+    def test_parallel_context_descriptors_require_review_before_switch(self):
+        folder = self.server / "conf/Catalina/localhost"
+        folder.mkdir(parents=True)
+        (folder / "app##5.2.0.20.xml").write_text("<Context/>")
+        with self.assertRaises(RunnerError) as caught:
+            self.host.check()
+        self.assertEqual(caught.exception.code, "PARALLEL_CONTEXT_DESCRIPTOR")
+        self.assertEqual(self.host.calls, [])
+
     def test_restore_or_schema_failure_does_not_stop_tomcat_or_change_current_files(self):
         for failure in ("pg_restore", "schema"):
             with self.subTest(failure=failure):
@@ -304,6 +374,41 @@ class VersionSwitchTests(EnvironmentTestCase):
         for relative in ("catalog/databases/5.2.0/standard-v1/baseline.dump", "runtime/server/webapps/app/old.txt"):
             with self.subTest(relative=relative), self.assertRaises(RunnerError):
                 HostRunner({**self.config, "jdbc": {**self.config["jdbc"], "file": relative}})
+
+    def test_invalid_host_configuration_identifies_field_without_echoing_values(self):
+        cases = [
+            ({"root": str(self.root / "missing")}, "root"),
+            ({"jdbc": {**self.config["jdbc"], "file": "runtime/server/conf/SECRET_VALUE.xml"}}, "jdbc.file"),
+            ({"jdbc": {**self.config["jdbc"], "format": "invalid"}}, "jdbc.format"),
+            ({"jdbc": {**self.config["jdbc"], "resource_name": ""}}, "jdbc.resource_name"),
+            ({"command_cwd": "runtime/server/missing"}, "command_cwd"),
+            ({"start_command": ["/bin/bash", "./missing-start.sh"]}, "start_command"),
+            ({"stop_command": ["/bin/bash", "./missing-stop.sh"]}, "stop_command"),
+            ({"postgres": {"container": "bad container", "user": "postgres"}}, "postgres.container"),
+            ({"postgres": {"container": "pg16", "user": ""}}, "postgres.user"),
+            ({"schema_version_query": "REPLACE_WITH_REAL_SELECT_RETURNING_ONE_SCHEMA_VERSION"}, "schema_version_query"),
+            ({"health_url": "https://user:SECRET_VALUE@example.invalid/app"}, "health_url"),
+            ({"server_port": 99999}, "server_port"),
+        ]
+        for update, field in cases:
+            with self.subTest(field=field), self.assertRaises(RunnerError) as caught:
+                HostRunner({**self.config, **update})
+            self.assertEqual(caught.exception.code, "HOST_CONFIGURATION_INVALID")
+            self.assertEqual(caught.exception.field, field)
+            self.assertNotIn("SECRET_VALUE", str(caught.exception))
+
+    def test_cli_returns_missing_jdbc_field_before_any_database_or_server_command(self):
+        from app.modules.contrack_environments.host_runner import main
+        path = self.root / "host-switch.json"
+        config = {**self.config, "jdbc": {**self.config["jdbc"], "file": "runtime/server/conf/SECRET_VALUE.xml"}}
+        path.write_text(json.dumps(config), encoding="utf-8")
+        output = io.StringIO()
+        with patch("sys.argv", ["runner", "--config", str(path), "check"]), \
+             patch("subprocess.run") as process, redirect_stdout(output):
+            self.assertEqual(main(), 1)
+        self.assertEqual(json.loads(output.getvalue()), {"ok": False, "code": "HOST_CONFIGURATION_INVALID", "field": "jdbc.file"})
+        self.assertNotIn("SECRET_VALUE", output.getvalue())
+        process.assert_not_called()
 
     def test_failure_moving_old_exploded_directory_keeps_original_directory_on_rollback(self):
         original = Path.rename

@@ -29,10 +29,11 @@ DB_NAME = re.compile(r"ct_[a-z0-9_]{1,59}")
 
 
 class RunnerError(Exception):
-    def __init__(self, code, *, line=None, column=None):
+    def __init__(self, code, *, line=None, column=None, field=None):
         self.code = code
         self.line = line
         self.column = column
+        self.field = field
         super().__init__(code)
 
 
@@ -199,6 +200,7 @@ def change_jdbc(text, config, database):
 class HostRunner:
     def __init__(self, config):
         self.config = config
+        field = "root"
         try:
             self.root = Path(config["root"]).resolve(strict=True)
             if not self.root.is_dir():
@@ -208,15 +210,32 @@ class HostRunner:
                 "runs": "runs", "current": "runtime/current", "lock": "runtime/environment.lock"}.items()}}
             for key in self.layout:
                 if key != "root":
+                    field = key
                     inside(self.root, self.layout[key])
+            field = "server"
             self.server = inside(self.root, self.layout["server"])
+            field = "server.webapps"
             self.webapps = inside(self.server, "webapps")
+            if not self.webapps.is_dir():
+                raise ValueError()
+            field = "server.conf.server_xml"
+            if not (self.server / "conf/server.xml").is_file():
+                raise ValueError()
+            field = "jdbc.file"
             self.jdbc = inside(self.root, config["jdbc"]["file"])
             forbidden = [inside(self.root, self.layout[key]).resolve() for key in ("wars", "databases", "runs", "current")]
             if any(self.jdbc.resolve().is_relative_to(path) for path in [*forbidden, self.webapps.resolve()]):
                 raise ValueError()
-            if not self.jdbc.is_file() or not (self.server / "conf/server.xml").is_file() or not self.webapps.is_dir():
+            if not self.jdbc.is_file():
                 raise ValueError()
+            field = "jdbc.format"
+            if config["jdbc"]["format"] not in ("xml_resource", "properties"):
+                raise ValueError()
+            field = "jdbc.resource_name" if config["jdbc"]["format"] == "xml_resource" else "jdbc.property"
+            selector = config["jdbc"].get(field.split(".")[1])
+            if not isinstance(selector, str) or not selector:
+                raise ValueError()
+            field = "war_filename"
             self.filename = config.get("war_filename", "app.war")
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.war", self.filename) or ".." in self.filename:
                 raise ValueError()
@@ -226,10 +245,12 @@ class HostRunner:
             self.exploded = inside(self.webapps, self.filename[:-4])
             if self.exploded.exists() and not self.exploded.is_dir():
                 raise ValueError()
+            field = "command_cwd"
             self.cwd = inside(self.root, config.get("command_cwd", self.layout["server"] + "/bin"))
             if not self.cwd.is_dir():
                 raise ValueError()
             for key in ("stop_command", "start_command", *(["status_command"] if "status_command" in config else [])):
+                field = key
                 command = config[key]
                 if not isinstance(command, list) or not command or not all(isinstance(arg, str) and arg and "\0" not in arg for arg in command):
                     raise ValueError()
@@ -237,9 +258,14 @@ class HostRunner:
                     script = Path(command[1])
                     if not (script if script.is_absolute() else self.cwd / script).is_file():
                         raise ValueError()
+            field = "postgres.container"
             self.pg = config["postgres"]
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", self.pg["container"]) or not self.pg["user"]:
+            if not isinstance(self.pg["container"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", self.pg["container"]):
                 raise ValueError()
+            field = "postgres.user"
+            if not isinstance(self.pg["user"], str) or not self.pg["user"]:
+                raise ValueError()
+            field = "schema_version_query"
             query = config.get("schema_version_query")
             if query is None:
                 query = ""
@@ -251,16 +277,22 @@ class HostRunner:
                 if not query.lower().startswith("select ") or ";" in query:
                     raise ValueError()
             self.schema_query = query
+            field = "health_url"
             health = urlsplit(config["health_url"])
             if health.scheme not in ("http", "https") or not health.hostname or health.username or health.password:
                 raise ValueError()
             self.health_url = config["health_url"]
             self.server_host = config.get("server_host", "127.0.0.1")
+            field = "server_port"
             self.server_port = int(config.get("server_port", 8080))
             if not 1 <= self.server_port <= 65535:
                 raise ValueError()
+        except RunnerError as exc:
+            if exc.field is None:
+                exc.field = field
+            raise
         except (KeyError, TypeError, ValueError, OSError) as exc:
-            raise RunnerError("HOST_CONFIGURATION_INVALID") from exc
+            raise RunnerError("HOST_CONFIGURATION_INVALID", field=field) from exc
 
     def command(self, argv, *, source=None, timeout=None, capture=False):
         result = subprocess.run(argv, cwd=self.cwd, stdin=source, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
@@ -327,6 +359,20 @@ class HostRunner:
                 raise RunnerError("APPLICATION_HEALTH_FAILED")
             time.sleep(2)
 
+    def parallel_apps(self):
+        """Find parallel deployments of this same context; other contexts are not managed."""
+        prefix = self.filename[:-4] + "##"
+        descriptors = self.server / "conf/Catalina/localhost"
+        if any(path.is_file() for path in descriptors.glob(prefix + "*.xml")):
+            raise RunnerError("PARALLEL_CONTEXT_DESCRIPTOR")
+        matches = []
+        for path in self.webapps.iterdir():
+            if path.name.startswith(prefix) and len(path.name) > len(prefix) and (path.is_dir() or path.name.endswith(".war")):
+                if any(ord(char) < 32 for char in path.name):
+                    raise RunnerError("PARALLEL_DEPLOYMENT_UNSAFE")
+                matches.append(inside(self.webapps, path.name))
+        return sorted(matches, key=lambda path: path.name)
+
     def check(self):
         # Parse and validate the actual JDBC selector without writing any file.
         change_jdbc(self.jdbc.read_bytes().decode("utf-8"), self.config["jdbc"], "ct_preflight")
@@ -336,6 +382,7 @@ class HostRunner:
             raise RunnerError("TOMCAT_STATUS_MISMATCH")
         return {"ok": True, **self.layout, "war_filename": self.filename,
                 "schema_verification": "query" if self.schema_query else "manifest_only",
+                "parallel_deployments": [path.name for path in self.parallel_apps()],
                 "uid": os.getuid() if hasattr(os, "getuid") else 0,
                 "gid": os.getgid() if hasattr(os, "getgid") else 0}
 
@@ -371,6 +418,7 @@ class HostRunner:
         moved_exploded = False
         files_changed = False
         candidate_started = False
+        parallel_moved = []
         backup = directory / "backup"
         current = inside(self.root, self.layout["current"])
         current.mkdir(parents=True, exist_ok=True)
@@ -405,6 +453,8 @@ class HostRunner:
                 mode = "query" if self.schema_query else "manifest_only"
                 if recipe.get("schema_verification", mode) != mode:
                     raise RunnerError("HOST_CONFIGURATION_CHANGED")
+                if recipe.get("parallel_deployments", []) != [path.name for path in self.parallel_apps()]:
+                    raise RunnerError("PARALLEL_DEPLOYMENTS_CHANGED")
                 war = inside(inside(self.root, self.layout["wars"]),
                              Path(recipe["war_file"]).relative_to(self.layout["wars"]).as_posix())
                 baseline = inside(inside(self.root, self.layout["databases"]),
@@ -462,6 +512,8 @@ class HostRunner:
                 save_json(current / "version.yaml", {"status": "SWITCHING", "operation_mode": "switch_version", "attempt_run_id": state["run_id"]})
                 touched = True
                 self.stop()
+                if recipe.get("parallel_deployments", []) != [path.name for path in self.parallel_apps()]:
+                    raise RunnerError("PARALLEL_DEPLOYMENTS_CHANGED")
                 if self.jdbc.read_bytes() != (backup / "jdbc.original").read_bytes():
                     raise RunnerError("JDBC_CHANGED_DURING_SWITCH")
                 previous_war = self.target.is_file()
@@ -475,6 +527,15 @@ class HostRunner:
                 nonlocal moved_exploded, files_changed
                 files_changed = True
                 atomic(self.jdbc, (directory / "jdbc.staged").read_bytes(), self.jdbc.stat().st_mode & 0o777)
+                # A versioned app##... would otherwise take precedence over the selected app.war.
+                # Archive matching WARs/directories reversibly, only after Tomcat is stopped.
+                for path in self.parallel_apps():
+                    saved = backup / "parallel-webapps"
+                    saved.mkdir(mode=0o700, exist_ok=True)
+                    path.rename(saved / path.name)
+                    parallel_moved.append(path.name)
+                    log("parallel_archive", "Archived " + path.name)
+                state["archived_parallel_deployments"] = parallel_moved.copy()
                 # Move the exploded application outside webapps so Tomcat rebuilds it from the selected WAR.
                 if self.exploded.exists():
                     self.exploded.rename(backup / "exploded")
@@ -498,6 +559,7 @@ class HostRunner:
                     "display_name": recipe["display_name"], "war": recipe["war"], "database": database,
                     "database_baseline": recipe["database_baseline"], "schema_version": recipe["schema_version"],
                     "schema_verified": state["schema_verified"],
+                    "archived_parallel_deployments": parallel_moved.copy(),
                     "repository": "existing", "run_id": state["run_id"], "checked_at": stamp(),
                     "health": {"http": True, "process": True, "port": True, "database_connection": True,
                                "schema_verified": state["schema_verified"]}})
@@ -525,6 +587,13 @@ class HostRunner:
                             self.exploded.rename(directory / "failed-exploded")
                     if moved_exploded:
                         (backup / "exploded").rename(self.exploded)
+                    for name in reversed(parallel_moved):
+                        original = inside(self.webapps, name)
+                        if original.exists():
+                            failed = directory / "failed-parallel-webapps"
+                            failed.mkdir(mode=0o700, exist_ok=True)
+                            original.rename(failed / name)
+                        (backup / "parallel-webapps" / name).rename(original)
                     if was_running:
                         self.command(self.config["start_command"], timeout=120)
                         self.health()
@@ -585,6 +654,8 @@ def main():
         result = {"ok": False, "code": exc.code if isinstance(exc, RunnerError) else "HOST_OPERATION_FAILED"}
         if isinstance(exc, RunnerError) and exc.line is not None:
             result.update(line=exc.line, column=exc.column)
+        if isinstance(exc, RunnerError) and exc.field is not None:
+            result["field"] = exc.field
         print(json.dumps(result))
         return 1
 

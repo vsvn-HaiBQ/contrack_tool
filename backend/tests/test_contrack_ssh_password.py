@@ -146,6 +146,16 @@ class SSHPasswordTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "HOST_CONFIGURATION_INVALID")
         self.assertNotIn(self.password, str(caught.exception))
 
+    def test_only_known_configuration_field_names_are_forwarded_in_errors(self):
+        for field, expected in (("jdbc.file", "external JDBC"), ("start_command", "startup script"),
+                                ("schema_version_query", "empty string"), (self.password, "Check host configuration")):
+            with self.subTest(field=field), patch("subprocess.run", return_value=SimpleNamespace(returncode=1,
+                    stdout=json.dumps({"ok": False, "code": "HOST_CONFIGURATION_INVALID", "field": field}), stderr=self.password)):
+                with self.assertRaises(EnvironmentError) as caught:
+                    self.runner.call("check")
+                self.assertIn(expected, str(caught.exception))
+                self.assertNotIn(self.password, str(caught.exception))
+
     def test_missing_host_json_is_explained_and_safe_parse_location_is_forwarded(self):
         cases = [
             ({"ok": False, "code": "HOST_CONFIG_NOT_FOUND"}, "separate from environment.yaml"),

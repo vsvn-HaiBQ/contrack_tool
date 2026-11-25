@@ -2,17 +2,17 @@
   "root": "/home/vsvndev/Contrack-Recreate/contrack-env",
   "war_filename": "app.war",
   "postgres": {
-    "container": "REPLACE_WITH_POSTGRES_CONTAINER_NAME",
-    "user": "contrack"
+    "container": "pg16",
+    "user": "postgres"
   },
   "jdbc": {
-    "file": "runtime/server/conf/Catalina/localhost/app.xml",
-    "format": "xml_resource",
-    "resource_name": "jdbc/ConTrack"
+    "file": "runtime/server/conf/universal/application.properties",
+    "format": "properties",
+    "property": "hibernate.connection.url"
   },
   "schema_version_query": "",
   "command_cwd": "runtime/server/bin",
-  "start_command": ["/bin/bash", "./start.sh"],
+  "start_command": ["/bin/bash", "./startup.sh"],
   "stop_command": ["/bin/bash", "./shutdown.sh"],
   "server_host": "127.0.0.1",
   "server_port": 8080,

@@ -142,8 +142,34 @@ class SSHHostRunner:
                 "HOST_CONFIG_READ_FAILED": "Check that host-switch.json is a readable regular file on the Linux host.",
                 "HOST_CONFIG_NOT_OBJECT": "host-switch.json must contain a JSON object with named configuration fields.",
                 "HOST_CONFIG_INVALID_JSON": "Fix JSON syntax in host-switch.json; use double quotes and remove trailing commas.",
+                "PARALLEL_CONTEXT_DESCRIPTOR": "A versioned Context descriptor exists for this application. Review conf/Catalina/localhost before switching.",
+                "PARALLEL_DEPLOYMENTS_CHANGED": "Parallel deployment files changed after validation. Inspect webapps and start a new switch.",
+                "PARALLEL_DEPLOYMENT_UNSAFE": "Inspect the parallel application paths before switching.",
             }
             hint = hints.get(code, "Check host configuration and the run history.")
+            field_hints = {
+                "root": "root must point to the existing contrack-env directory on the Linux host.",
+                "server": "server must point to the existing Tomcat directory under root.",
+                "server.webapps": "The existing Tomcat webapps directory must exist.",
+                "server.conf.server_xml": "The existing Tomcat conf/server.xml must exist.",
+                "jdbc.file": "jdbc.file must point to the existing external JDBC configuration file, outside webapps and the catalog.",
+                "jdbc.format": "Use xml_resource or properties to match the real JDBC configuration file.",
+                "jdbc.resource_name": "Set the XML Resource name used by ConTrack.",
+                "jdbc.property": "Set the JDBC URL property key used by ConTrack.",
+                "war_filename": "Use a .war filename and regular WAR/exploded application destinations.",
+                "command_cwd": "command_cwd must point to an existing directory under root.",
+                "start_command": "Configure an argument list with the real startup script; relative scripts are resolved from command_cwd.",
+                "stop_command": "Configure an argument list with the real shutdown script; relative scripts are resolved from command_cwd.",
+                "status_command": "Configure a nonempty argument list for the actual Tomcat status command.",
+                "postgres.container": "Set the PostgreSQL Docker container name.",
+                "postgres.user": "Set a nonempty PostgreSQL role name.",
+                "schema_version_query": "Remove the placeholder or set an empty string to skip; otherwise supply a read-only SELECT.",
+                "health_url": "Use an http/https application URL without embedded credentials.",
+                "server_port": "server_port must be a port number between 1 and 65535.",
+            }
+            field = value.get("field")
+            if code in ("HOST_CONFIGURATION_INVALID", "INVALID_PATH") and isinstance(field, str) and field in field_hints:
+                hint = f"Invalid field: {field}. {field_hints[field]}"
             line, column = value.get("line"), value.get("column")
             if code == "HOST_CONFIG_INVALID_JSON" and type(line) is int and type(column) is int and 1 <= line <= 1000000 and 1 <= column <= 1000000:
                 hint += f" Line {line}, column {column}."
@@ -207,6 +233,10 @@ class VersionSwitchService:
         if mode not in ("query", "manifest_only"):
             raise EnvironmentError("Host runner returned an invalid schema verification mode.", "HOST_CONFIGURATION_INVALID")
         actual["schema_verification"] = mode
+        parallel = actual.get("parallel_deployments", [])
+        if not isinstance(parallel, list) or any(not isinstance(name, str) or not name or "/" in name or "\\" in name or any(ord(char) < 32 for char in name) for name in parallel):
+            raise EnvironmentError("Host runner returned invalid parallel deployment paths.", "HOST_CONFIGURATION_INVALID")
+        actual["parallel_deployments"] = parallel
         return actual
 
     def validate(self, payload):
@@ -215,6 +245,7 @@ class VersionSwitchService:
         if Path(recipe["war_file"]).name != actual.get("war_filename"):
             raise EnvironmentError("Selected WAR filename must match war_filename in the host runner configuration.", "WAR_FILENAME_MISMATCH")
         recipe["schema_verification"] = actual["schema_verification"]
+        recipe["parallel_deployments"] = actual["parallel_deployments"]
         return {"valid": True, "recipe": recipe}
 
     def _host_access(self, actual, directory):
@@ -246,6 +277,7 @@ class VersionSwitchService:
             if Path(recipe["war_file"]).name != actual.get("war_filename"):
                 raise EnvironmentError("Selected WAR filename must match war_filename in the host runner configuration.", "WAR_FILENAME_MISMATCH")
             recipe["schema_verification"] = actual["schema_verification"]
+            recipe["parallel_deployments"] = actual["parallel_deployments"]
             run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S-") + uuid.uuid4().hex[:12]
             directory = self.history.directory(run_id)
             directory.mkdir(parents=True, mode=0o700)

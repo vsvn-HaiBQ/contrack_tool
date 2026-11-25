@@ -18,7 +18,7 @@ User chọn **ConTrack WAR** và **Database Profile** trên giao diện, nhấn 
       5.2.0/standard-v1/{baseline.dump,manifest.yaml}
       5.2.1/standard-v1/{baseline.dump,manifest.yaml}
   runtime/server/
-    bin/start.sh
+    bin/startup.sh
     bin/shutdown.sh
     conf/
     webapps/
@@ -60,7 +60,7 @@ Chạy trên Linux bằng user quản lý Tomcat, ví dụ `vsvndev`. User này 
 ```bash
 cd /home/vsvndev/contrack_tool
 docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
-ls -l /home/vsvndev/Contrack-Recreate/contrack-env/runtime/server/bin/start.sh
+ls -l /home/vsvndev/Contrack-Recreate/contrack-env/runtime/server/bin/startup.sh
 ls -l /home/vsvndev/Contrack-Recreate/contrack-env/runtime/server/bin/shutdown.sh
 
 # Chỉ liệt kê tên file có nhắc PostgreSQL, không in URL/password.
@@ -99,25 +99,30 @@ nano /home/vsvndev/Contrack-Recreate/config/host-switch.json
 |---|---|
 | `root` | `/home/vsvndev/Contrack-Recreate/contrack-env` |
 | `war_filename` | `app.war`, phải giống basename `artifact.file` của WAR |
-| `postgres.container` | Tên PostgreSQL container thật |
-| `postgres.user` | Role có quyền tạo DB/restore các đối tượng trong baseline |
-| `jdbc.file` | Đường dẫn tương đối của JDBC file thật dưới root |
-| `jdbc.resource_name` | Tên Resource thật trong XML |
+| `postgres.container` | Server hiện tại: `pg16` |
+| `postgres.user` | Server hiện tại: `postgres`, cần quyền tạo DB/restore các đối tượng trong baseline |
+| `jdbc.file` | Server hiện tại: `runtime/server/conf/universal/application.properties` |
+| `jdbc.property` | Server hiện tại: `hibernate.connection.url` khi `format: properties` |
+| `jdbc.resource_name` | Chỉ dùng khi chọn XML Resource, không dùng với cấu hình properties hiện tại |
 | `schema_version_query` | Tùy chọn: SELECT schema thật; bỏ hoặc để `""` để chỉ đối chiếu manifest |
-| `start_command` | Mặc định `['/bin/bash', './start.sh']` trong JSON phải dùng dấu nháy kép |
+| `start_command` | Mặc định `['/bin/bash', './startup.sh']` trong JSON phải dùng dấu nháy kép |
 | `stop_command` | Mặc định `['/bin/bash', './shutdown.sh']` |
 | `server_port` | Cổng HTTP Tomcat thật |
 | `health_url` | URL trả 2xx khi ứng dụng hoạt động, ưu tiên endpoint có truy cập DB |
 
-Runner chạy lệnh trong `runtime/server/bin`. Nếu script của bạn tên `shutdown` hoặc `startup.sh`, sửa đúng tên trong JSON. Script start phải chạy nền Tomcat và trả về.
+Runner chạy lệnh trong `runtime/server/bin`. Server hiện tại dùng `startup.sh` và `shutdown.sh`. Nếu tên script khác, sửa đúng tên trong JSON. Script start phải chạy nền Tomcat và trả về. `jdbc.file` trong mẫu chỉ là ví dụ: thư mục `conf/Catalina/localhost` trống không đồng nghĩa ứng dụng đang dùng `app.xml`; phải tìm cấu hình DB thật thay vì tạo file giả để vượt kiểm tra.
+
+Server đã xác nhận key URL `hibernate.connection.url` nằm tại `runtime/server/conf/universal/application.properties` bên ngoài WAR. Mẫu dùng file này với `format: properties`, `property: hibernate.connection.url`. File `webapps/app##5.2.0.20/WEB-INF/classes/application.properties` là bản bên trong WAR; không sửa trực tiếp bản đó. Các dòng `hibernate.dialect`, `hibernate.connection.driver_class`, `hibernate.hbm2ddl.auto` không phải URL kết nối và được giữ nguyên. URL hiện có cần chứa địa chỉ/port thật trỏ tới PostgreSQL ứng dụng; runner giữ nguyên endpoint và chỉ thay tên DB.
+
+Nếu webapps có bản cùng context như `app##5.2.0.20` hoặc `app##5.2.0.20.war`, runner liệt kê chúng trong preview. Sau khi stop Tomcat, các mục này được rename vào `runs/<run_id>/backup/parallel-webapps` để `app.war` được chọn phục vụ request. Các context khác được giữ nguyên. Rollback khôi phục cả các bản parallel này. Danh sách được kiểm tra lại để phát hiện thay đổi giữa validate/execute. Nếu có descriptor `conf/Catalina/localhost/app##*.xml`, runner dừng trước khi tạo DB để quản trị viên kiểm tra mapping; không tự sửa descriptor.
 
 Nếu dùng properties, thay cả object `jdbc` bằng:
 
 ```json
 {
-  "file": "runtime/server/conf/application.properties",
+  "file": "runtime/server/conf/universal/application.properties",
   "format": "properties",
-  "property": "jdbc.url"
+  "property": "hibernate.connection.url"
 }
 ```
 

@@ -95,7 +95,7 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
 Đối chiếu hai fingerprint trước khi kết nối. Nếu SSH port khác, sửa cả YAML và `ssh-keyscan -p`. Known hosts phải khớp địa chỉ mà backend kết nối.
 
-File `host-switch.json` và quyền chạy Docker/start-stop Tomcat vẫn phải được chuẩn bị theo [bước 2–3 của hướng dẫn chính](contrack-version-switch.md). Đường dẫn JDBC trong mẫu cần thay bằng giá trị thật. `schema_version_query` là tùy chọn: bỏ trường này, đặt `""` hoặc `null` để ghi bước query là SKIPPED và chỉ đối chiếu schema theo manifest. Nếu có query thì phải là SELECT thật; không giữ placeholder. Runner gọi `start.sh`/`shutdown.sh` từ `runtime/server/bin`.
+File `host-switch.json` và quyền chạy Docker/start-stop Tomcat vẫn phải được chuẩn bị theo [bước 2–3 của hướng dẫn chính](contrack-version-switch.md). Đường dẫn JDBC trong mẫu cần thay bằng giá trị thật. `schema_version_query` là tùy chọn: bỏ trường này, đặt `""` hoặc `null` để ghi bước query là SKIPPED và chỉ đối chiếu schema theo manifest. Nếu có query thì phải là SELECT thật; không giữ placeholder. Runner gọi `startup.sh`/`shutdown.sh` từ `runtime/server/bin`.
 
 SSH server cần cho phép password authentication cho user `vsvndev`. Chế độ này dùng một mật khẩu, không tự xử lý OTP/MFA hoặc đổi password khi đăng nhập. Password login gọi trực tiếp script Python từ `runner_path` với `host_config`; không dùng forced command trong `authorized_keys`. Quyền của tài khoản Linux vẫn là quyền đăng nhập bình thường của user đó.
 
@@ -144,6 +144,8 @@ Các lỗi thường gặp:
 | `HOST_CONFIG_PERMISSION_DENIED` | SSH user cần quyền đọc `host-switch.json` và truy cập thư mục cha |
 | `HOST_CONFIG_INVALID_JSON` | Sửa cú pháp JSON tại dòng/cột được báo; file này dùng JSON, không phải YAML |
 | `HOST_CONFIGURATION_INVALID` | Sửa `host-switch.json`, JDBC file, schema query và script thật |
+
+Runner mới thêm tên trường lỗi, ví dụ `"field": "jdbc.file"`, `"field": "start_command"` hoặc `"field": "schema_version_query"`. Chỉ tên trường và hướng dẫn cố định được trả về, không in cấu hình/password. Nếu Docker đã build/start xong nhưng launcher dừng ở bước check, chưa có restore DB hay stop Tomcat. Chạy check trực tiếp trên host như bên dưới để tìm lỗi trước khi build lại. Riêng việc sửa JSON không cần rebuild Docker.
 
 Bản runner cũ có thể gom lỗi thiếu/không đọc được JSON thành `HOST_OPERATION_FAILED`. Chạy trực tiếp trên host để kiểm tra, không cần rebuild Docker cho riêng bước chẩn đoán sau khi cập nhật file runner trên host:
 

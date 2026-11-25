@@ -262,6 +262,7 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
         <div v-if="preview" role="status" class="rounded-lg bg-neutral-50 p-3 text-sm text-neutral-700">
           {{ switchMode ? 'Manifest schema match:' : 'Compatible:' }} {{ preview.war }} + {{ preview.database_baseline }} + {{ preview.repository || 'existing repository' }} (schema {{ preview.schema_version }}).
           <p v-if="preview.schema_verification === 'manifest_only'" class="mt-1">The schema-version query will be skipped. Database compatibility will rely on the catalog manifests.</p>
+          <p v-if="preview.parallel_deployments?.length" class="mt-1">Previous deployments of the same application will be moved to the run backup after Tomcat stops: {{ preview.parallel_deployments.join(', ') }}.</p>
         </div>
         <p v-if="warPreview" role="status" class="rounded-lg bg-neutral-50 p-3 text-sm text-neutral-700">{{ warPreview }}</p>
         <div class="flex flex-wrap gap-3">
