@@ -269,6 +269,24 @@ Nếu health timeout, log của cả candidate và rollback ghi các trạng th�
 
 Nếu rollback đã FAILED, current UNKNOWN được giữ nguyên dù `diagnose-health` thành công. Xác nhận WAR/JDBC/parallel apps đã khôi phục đúng backup và kiểm tra ứng dụng/DB thực tế trước khi quản trị viên khôi phục state; lệnh này không tự đánh dấu READY hoặc cho phép switch tiếp. Không dùng `recover-stop` cho run đã deploy WAR.
 
+### Khôi phục trạng thái sau rollback bị lỗi health check
+
+Sau khi sửa HTTPS/chứng chỉ và `diagnose-health` báo `ok: true`, cập nhật runner có lệnh `recover-rollback` rồi chạy trên Linux host:
+
+```bash
+cd /home/vsvndev/contrack_tool
+python3 backend/app/modules/contrack_environments/host_runner.py \
+  --config /home/vsvndev/Contrack-Recreate/config/host-switch.json recover-rollback
+```
+
+Lệnh quản trị local này giữ cả khóa host và khóa điều phối. Nó chỉ nhận current UNKNOWN trỏ tới run switch_version FAILED ở `health_check`, với các bước stage/stop/deploy/start SUCCESS. Run phải có rollback_status FAILED và log rollback cuối xác nhận lỗi APPLICATION_HEALTH_FAILED: trong runner, vị trí này chỉ xảy ra sau khi đã hoàn tất các thao tác khôi phục file và gọi start lại. Kiểm tra thêm checksum WAR staged theo recipe, JDBC hiện tại bằng backup, WAR hiện tại bằng previous.war (hoặc không có WAR nếu trước đó cũng không có), các bản parallel đã trở lại và backup exploded/parallel không còn chờ khôi phục. Bản exploded do Tomcat tạo từ WAR parallel đã khôi phục được chấp nhận.
+
+Tomcat phải đang chạy, cổng mở và health check xác minh HTTPS/process/cổng thành công. Các file và current state được đối chiếu lại sau health trước khi ghi state. Lệnh không sửa/deploy WAR hoặc JDBC, không start/stop, không restore/drop DB và không tự khôi phục một rollback còn dở dang. Nếu còn lỗi kiểm tra, current UNKNOWN được giữ để xử lý thực tế.
+
+Kết quả thành công có `recovery: rollback_verified`, `current_status: RESTORED`, `database_connection: not_checked`. UNKNOWN cũ được lưu thành `runtime/current/version.failed-rollback-*.yaml.bak`, run FAILED/rollback FAILED và DB ứng viên được giữ nguyên, kèm một bản ghi kiểm chứng khôi phục riêng trong history. Không đánh dấu READY, không khẳng định kết nối DB ứng viên hoặc schema đã đúng. Refresh giao diện rồi Validate selection / Switch Version để tạo run mới; chỉ run mới đạt health với kết nối đúng DB mới được READY. Chạy lại lệnh sau khi khôi phục thành công trả `not_required`.
+
+Các mã từ chối gồm `RECOVERY_JDBC_CHANGED`, `RECOVERY_WAR_CHANGED`, `RECOVERY_WEBAPPS_NOT_RESTORED`, `RECOVERY_TOMCAT_NOT_RUNNING`, `RECOVERY_STATE_CHANGED`, `RECOVERY_NOT_ALLOWED` và `ENVIRONMENT_BUSY`. Không xóa `version.yaml` để bỏ qua các kiểm tra này. `recover-rollback` không được backend API hoặc SSH forced command gọi; chỉ cập nhật runner trên host là đủ, không cần rebuild Docker.
+
 ## 7. Khi lỗi và cách khôi phục
 
 ### Lỗi dừng Tomcat do nhầm port 8080/8282

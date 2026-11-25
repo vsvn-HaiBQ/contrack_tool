@@ -558,6 +558,92 @@ class HostRunner:
             return {"ok": True, "recovery": "unmodified_stop_failure_archived", "run_id": run_id,
                     "state_backup": saved.relative_to(self.root).as_posix()}
 
+    def recover_rollback(self):
+        """Record a verified file rollback after its final health check previously failed."""
+        lock = inside(self.root, self.layout["lock"])
+        with file_lock(lock.with_name(lock.name + ".host")), file_lock(lock):
+            current = inside(inside(self.root, self.layout["current"]), "version.yaml")
+            try:
+                original = current.read_bytes()
+                value = json.loads(original)
+                if value.get("status") == "RESTORED" and value.get("rollback_recovery") is True:
+                    return {"ok": True, "recovery": "not_required", "run_id": value.get("attempt_run_id")}
+                run_id = value.get("attempt_run_id", "")
+                if value.get("status") != "UNKNOWN" or not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
+                    raise ValueError()
+                directory = inside(inside(self.root, self.layout["runs"]), run_id)
+                backup = inside(directory, "backup")
+                state = json.loads((directory / "state.yaml").read_text(encoding="utf-8"))
+                request = json.loads((directory / "host-request.json").read_text(encoding="utf-8"))
+                recipe = request["recipe"]
+                if state.get("run_id") != run_id or request["state"].get("run_id") != run_id or \
+                        state.get("operation_mode") != "switch_version" or state.get("status") != "FAILED" or \
+                        state.get("failed_step") != "health_check" or state.get("rollback_status") != "FAILED" or \
+                        (state.get("error") or {}).get("code") != "APPLICATION_HEALTH_FAILED" or \
+                        any(state.get("steps", {}).get(step) != "SUCCESS" for step in ("stage", "server_stop", "war_deploy", "server_start")) or \
+                        state.get("steps", {}).get("health_check") != "FAILED" or \
+                        Path(recipe["war_file"]).name != self.filename or \
+                        sha256(directory / "war.staged") != recipe["war_sha256"]:
+                    raise ValueError()
+                # Support existing runs: this error is logged only after all file restores and start completed.
+                rollback_lines = [line for line in (directory / "run.log").read_text(encoding="utf-8").splitlines()
+                                  if " [rollback] " in line]
+                if not rollback_lines or not re.search(
+                        r" \[rollback\] FAILED APPLICATION_HEALTH_FAILED(?:[ ;]|$)", rollback_lines[-1]):
+                    raise ValueError()
+                expected_parallel = recipe.get("parallel_deployments", [])
+                if not isinstance(expected_parallel, list) or any(not isinstance(name, str) for name in expected_parallel) or \
+                        state.get("archived_parallel_deployments", []) != expected_parallel:
+                    raise ValueError()
+                original_jdbc = (backup / "jdbc.original").read_bytes()
+                previous_war = backup / "previous.war"
+                old_war_hash = sha256(previous_war) if previous_war.is_file() else None
+            except (KeyError, TypeError, ValueError, AttributeError, OSError) as exc:
+                raise RunnerError("RECOVERY_NOT_ALLOWED") from exc
+
+            def verify_restored_files():
+                if self.jdbc.read_bytes() != original_jdbc:
+                    raise RunnerError("RECOVERY_JDBC_CHANGED")
+                if (old_war_hash is None and self.target.exists()) or \
+                        (old_war_hash is not None and (not self.target.is_file() or sha256(self.target) != old_war_hash)):
+                    raise RunnerError("RECOVERY_WAR_CHANGED")
+                parallel_backup = backup / "parallel-webapps"
+                actual = {path.name for path in self.parallel_apps()}
+                expected = set(expected_parallel)
+                # A restored versioned WAR may have been exploded by Tomcat since restart.
+                allowed = expected | {name[:-4] for name in expected if name.endswith(".war")}
+                if (backup / "exploded").exists() or (parallel_backup.exists() and any(parallel_backup.iterdir())) or \
+                        not expected.issubset(actual) or not actual.issubset(allowed):
+                    raise RunnerError("RECOVERY_WEBAPPS_NOT_RESTORED")
+
+            self.check()
+            verify_restored_files()
+            if not self.running() or not self.port_open():
+                raise RunnerError("RECOVERY_TOMCAT_NOT_RUNNING")
+            self.health()  # Verify HTTPS, process and port; do not claim candidate DB verification.
+            verify_restored_files()
+            if current.read_bytes() != original:
+                raise RunnerError("RECOVERY_STATE_CHANGED")
+            recovered_at = stamp()
+            saved = current.with_name(f"version.failed-rollback-{run_id}-{uuid.uuid4().hex[:8]}.yaml.bak")
+            atomic(saved, original)
+            state["updated_at"] = recovered_at
+            state["rollback_recovery"] = {"status": "VERIFIED", "verified_at": recovered_at,
+                                          "database_connection": "not_checked",
+                                          "state_backup": saved.relative_to(self.root).as_posix()}
+            save_json(directory / "state.yaml", state)
+            with (directory / "run.log").open("a", encoding="utf-8") as output:
+                os.chmod(directory / "run.log", 0o600)
+                output.write(f"{recovered_at} [rollback_recovery] Restored WAR/JDBC/parallel apps and application health verified; "
+                             "recording RESTORED, database connection not checked. Failed run, candidate DB and backups retained.\n")
+            save_json(current, {"status": "RESTORED", "operation_mode": "switch_version",
+                                "display_name": "Restored previous deployment", "attempt_run_id": run_id,
+                                "rollback_recovery": True, "checked_at": recovered_at,
+                                "health": {"http": True, "process": True, "port": True, "database_connection": None}})
+            return {"ok": True, "recovery": "rollback_verified", "run_id": run_id,
+                    "current_status": "RESTORED", "database_connection": "not_checked",
+                    "state_backup": saved.relative_to(self.root).as_posix()}
+
     def _execute(self, directory, recipe, state):
         database = state["working_database"]
         step = "validate"
@@ -787,7 +873,7 @@ class HostRunner:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("action", choices=("check", "run", "serve", "recover-stop", "diagnose-health"))
+    parser.add_argument("action", choices=("check", "run", "serve", "recover-stop", "recover-rollback", "diagnose-health"))
     parser.add_argument("run_id", nargs="?")
     args = parser.parse_args()
     try:
@@ -810,6 +896,8 @@ def main():
                       "custom_ca": runner.health_context is not None}
         elif action == "recover-stop":
             result = runner.recover_stop()
+        elif action == "recover-rollback":
+            result = runner.recover_rollback()
         else:
             result = runner.run(run_id or "")
         print(json.dumps(result))

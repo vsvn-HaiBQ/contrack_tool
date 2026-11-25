@@ -328,7 +328,7 @@ class VersionSwitchTests(EnvironmentTestCase):
 
     def test_restricted_ssh_command_rejects_shell_and_arbitrary_operations(self):
         from app.modules.contrack_environments.host_runner import main
-        for command in ("bash", "run 20261123T100000-aaaaaaaaaaaa; touch /tmp/bad", "check extra", "recover-stop", "diagnose-health", ""):
+        for command in ("bash", "run 20261123T100000-aaaaaaaaaaaa; touch /tmp/bad", "check extra", "recover-stop", "recover-rollback", "diagnose-health", ""):
             with self.subTest(command=command), patch("sys.argv", ["runner", "--config", "unused", "serve"]), \
                  patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": command}):
                 output = io.StringIO()
@@ -641,6 +641,139 @@ class VersionSwitchTests(EnvironmentTestCase):
         status = {"http_error": "SECRET_VALUE", "database_status": "SECRET_VALUE", "process_running": "SECRET_VALUE",
                   "http_status": "SECRET_VALUE", "url": "SECRET_VALUE", "healthy": False}
         self.assertEqual(json.loads(health_diagnostic(RunnerError("TEST", health_status=status))), {"healthy": False})
+
+    def failed_health_rollback(self):
+        with patch.object(self.host, "health", side_effect=RunnerError("APPLICATION_HEALTH_FAILED")):
+            run = self.switch()
+        self.assertEqual(run["rollback_status"], "FAILED")
+        self.assertEqual(self.service.runtime.get_current_environment()["status"], "UNKNOWN")
+        return run
+
+    def test_recover_health_rollback_verifies_files_and_keeps_failed_history_database_and_backups(self):
+        war, parallel, other = self.parallel_fixture()
+        run = self.failed_health_rollback()
+        current = self.settings.path("current") / "version.yaml"
+        uncertain = current.read_bytes()
+        self.host.calls.clear()
+        result = self.host.recover_rollback()
+        self.assertEqual(result["recovery"], "rollback_verified")
+        self.assertEqual(result["database_connection"], "not_checked")
+        restored = self.service.runtime.get_current_environment()
+        self.assertEqual(restored["status"], "RESTORED")
+        self.assertIsNone(restored["health"]["database_connection"])
+        self.assertNotIn("database", restored)
+        self.assertEqual((self.root / result["state_backup"]).read_bytes(), uncertain)
+        self.assertEqual(self.jdbc.read_text(), self.original_jdbc)
+        self.assertEqual((self.server / "webapps/app.war").read_bytes(), b"old WAR")
+        self.assertEqual(war.read_bytes(), b"versioned old WAR")
+        self.assertTrue((parallel / "old.txt").is_file())
+        self.assertEqual(other.read_bytes(), b"other context")
+        self.assertEqual(self.host.calls, ["health"])
+        history = self.service.history.get(run["run_id"])
+        self.assertEqual(history["status"], "FAILED")
+        self.assertEqual(history["rollback_status"], "FAILED")
+        self.assertEqual(history["rollback_recovery"]["status"], "VERIFIED")
+        self.assertIn(run["working_database"], self.host.databases)
+        self.assertTrue((self.service.history.directory(run["run_id"]) / "backup/jdbc.original").is_file())
+        self.assertEqual(self.host.recover_rollback()["recovery"], "not_required")
+        self.assertEqual(self.switch()["status"], "READY")
+
+    def test_rollback_recovery_refuses_jdbc_that_no_longer_matches_backup(self):
+        self.failed_health_rollback()
+        self.jdbc.write_text(self.original_jdbc + "\n<!--external change-->")
+        with self.assertRaises(RunnerError) as caught:
+            self.host.recover_rollback()
+        self.assertEqual(caught.exception.code, "RECOVERY_JDBC_CHANGED")
+        self.assertEqual(self.service.runtime.get_current_environment()["status"], "UNKNOWN")
+
+    def test_rollback_recovery_refuses_war_that_no_longer_matches_backup(self):
+        self.failed_health_rollback()
+        (self.server / "webapps/app.war").write_bytes(b"unverified WAR")
+        with self.assertRaises(RunnerError) as caught:
+            self.host.recover_rollback()
+        self.assertEqual(caught.exception.code, "RECOVERY_WAR_CHANGED")
+        self.assertEqual(self.service.runtime.get_current_environment()["status"], "UNKNOWN")
+
+    def test_rollback_recovery_refuses_missing_parallel_application_or_unrestored_backup(self):
+        war, _, _ = self.parallel_fixture()
+        run = self.failed_health_rollback()
+        war.unlink()
+        with self.assertRaises(RunnerError) as caught:
+            self.host.recover_rollback()
+        self.assertEqual(caught.exception.code, "RECOVERY_WEBAPPS_NOT_RESTORED")
+        war.write_bytes(b"versioned old WAR")
+        (self.service.history.directory(run["run_id"]) / "backup/exploded").mkdir()
+        with self.assertRaises(RunnerError) as caught:
+            self.host.recover_rollback()
+        self.assertEqual(caught.exception.code, "RECOVERY_WEBAPPS_NOT_RESTORED")
+
+    def test_rollback_recovery_refuses_failures_without_completed_file_restoration_evidence(self):
+        run = self.failed_health_rollback()
+        directory = self.service.history.directory(run["run_id"])
+        for change in ({"failed_step": "server_stop"}, {"rollback_status": "SUCCESS"}, {"status": "READY"}):
+            changed = {**run, **change}
+            (directory / "state.yaml").write_text(json.dumps(changed))
+            with self.subTest(change=change), self.assertRaises(RunnerError) as caught:
+                self.host.recover_rollback()
+            self.assertEqual(caught.exception.code, "RECOVERY_NOT_ALLOWED")
+        (directory / "state.yaml").write_text(json.dumps(run))
+        log = directory / "run.log"
+        log.write_text(log.read_text().replace("[rollback] FAILED APPLICATION_HEALTH_FAILED", "[rollback] FAILED TOMCAT_STOP_FAILED"))
+        with self.assertRaises(RunnerError) as caught:
+            self.host.recover_rollback()
+        self.assertEqual(caught.exception.code, "RECOVERY_NOT_ALLOWED")
+        self.assertEqual(self.service.runtime.get_current_environment()["status"], "UNKNOWN")
+
+    def test_rollback_recovery_does_not_write_state_when_health_still_fails(self):
+        run = self.failed_health_rollback()
+        current = self.settings.path("current") / "version.yaml"
+        directory = self.service.history.directory(run["run_id"])
+        before_current = current.read_bytes()
+        before_history = (directory / "state.yaml").read_bytes()
+        with patch.object(self.host, "health", side_effect=RunnerError("APPLICATION_HEALTH_FAILED")), self.assertRaises(RunnerError):
+            self.host.recover_rollback()
+        self.assertEqual(current.read_bytes(), before_current)
+        self.assertEqual((directory / "state.yaml").read_bytes(), before_history)
+        self.assertEqual(list(current.parent.glob("version.failed-rollback-*")), [])
+
+    def test_rollback_recovery_refuses_a_stopped_tomcat_and_respects_both_locks(self):
+        self.failed_health_rollback()
+        self.host.active = False
+        with self.assertRaises(RunnerError) as caught:
+            self.host.recover_rollback()
+        self.assertEqual(caught.exception.code, "RECOVERY_TOMCAT_NOT_RUNNING")
+        self.host.active = True
+        lock = self.settings.path("lock")
+        for path in (lock, lock.with_name(lock.name + ".host")):
+            with file_lock(path), self.assertRaises(RunnerError) as caught:
+                self.host.recover_rollback()
+            self.assertEqual(caught.exception.code, "ENVIRONMENT_BUSY")
+
+    def test_rollback_recovery_handles_a_previous_versioned_app_without_unversioned_war(self):
+        (self.server / "webapps/app.war").unlink()
+        self.parallel_fixture()
+        self.failed_health_rollback()
+        self.assertTrue(self.host.recover_rollback()["ok"])
+        self.assertFalse((self.server / "webapps/app.war").exists())
+
+    def test_rollback_recovery_refuses_runtime_state_changed_during_health_check(self):
+        self.failed_health_rollback()
+        def change_state(database=None):
+            self.service.runtime.save({"status": "UNKNOWN", "attempt_run_id": "20261125T000000-aaaaaaaaaaaa"})
+        with patch.object(self.host, "health", side_effect=change_state), self.assertRaises(RunnerError) as caught:
+            self.host.recover_rollback()
+        self.assertEqual(caught.exception.code, "RECOVERY_STATE_CHANGED")
+        self.assertEqual(self.service.runtime.get_current_environment()["attempt_run_id"], "20261125T000000-aaaaaaaaaaaa")
+
+    def test_local_recover_rollback_cli_uses_guarded_recovery(self):
+        from app.modules.contrack_environments.host_runner import main
+        self.failed_health_rollback()
+        output = io.StringIO()
+        with patch("sys.argv", ["runner", "--config", "unused", "recover-rollback"]), \
+                patch("app.modules.contrack_environments.host_runner.load_host_config", return_value=self.config), \
+                patch("app.modules.contrack_environments.host_runner.HostRunner", return_value=self.host), redirect_stdout(output):
+            self.assertEqual(main(), 0)
+        self.assertEqual(json.loads(output.getvalue())["current_status"], "RESTORED")
 
     def test_switch_api_round_trip_permission_and_rejects_browser_supplied_commands(self):
         from app.modules.contrack_environments.router import get_service, router
