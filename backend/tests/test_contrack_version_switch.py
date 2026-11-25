@@ -1,6 +1,8 @@
 import json
 import io
 import os
+import tempfile
+import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from test_contrack_environments import EnvironmentTestCase
 from app.modules.contrack_environments.config import EnvironmentError
-from app.modules.contrack_environments.host_runner import HostRunner, RunnerError, change_jdbc, file_lock
+from app.modules.contrack_environments.host_runner import HostRunner, RunnerError, change_jdbc, file_lock, load_host_config
 from app.modules.contrack_environments.state import EnvironmentLock, read_yaml, write_yaml
 from app.modules.contrack_environments.version_switch import SSHHostRunner, SwitchVersionRequest, VersionSwitchService
 
@@ -315,6 +317,51 @@ class VersionSwitchTests(EnvironmentTestCase):
             self.assertEqual(run["status"], "READY")
             app.dependency_overrides = {get_service: lambda: service}
             self.assertEqual(client.post(base + "/switch", json=payload).status_code, 401)
+
+
+class HostConfigTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / "host-switch.json"
+
+    def test_missing_config_cli_reports_actionable_error_without_invoking_host_commands(self):
+        from app.modules.contrack_environments.host_runner import main
+        output = io.StringIO()
+        with patch("sys.argv", ["runner", "--config", str(self.path), "check"]), \
+             patch("app.modules.contrack_environments.host_runner.HostRunner") as runner, redirect_stdout(output):
+            self.assertEqual(main(), 1)
+        self.assertEqual(json.loads(output.getvalue()), {"ok": False, "code": "HOST_CONFIG_NOT_FOUND"})
+        runner.assert_not_called()
+        self.assertFalse(self.path.exists())
+
+    def test_json_syntax_errors_report_location_without_config_values(self):
+        self.path.write_text('{\n  "password": "SECRET_VALUE",\n}', encoding="utf-8")
+        with self.assertRaises(RunnerError) as caught:
+            load_host_config(self.path)
+        self.assertEqual(caught.exception.code, "HOST_CONFIG_INVALID_JSON")
+        self.assertEqual(caught.exception.line, 3)
+        self.assertEqual(caught.exception.column, 1)
+        self.assertNotIn("SECRET_VALUE", str(caught.exception))
+
+    def test_permission_and_encoding_errors_have_specific_codes_without_exception_text(self):
+        with patch.object(Path, "read_text", side_effect=PermissionError("SECRET_VALUE")):
+            with self.assertRaises(RunnerError) as caught:
+                load_host_config(self.path)
+        self.assertEqual(caught.exception.code, "HOST_CONFIG_PERMISSION_DENIED")
+        self.assertNotIn("SECRET_VALUE", str(caught.exception))
+        self.path.write_bytes(b"\xff\xfe invalid")
+        with self.assertRaises(RunnerError) as caught:
+            load_host_config(self.path)
+        self.assertEqual(caught.exception.code, "HOST_CONFIG_INVALID_UTF8")
+
+    def test_non_object_is_rejected_and_utf8_bom_object_is_accepted(self):
+        self.path.write_text('["SECRET_VALUE"]', encoding="utf-8")
+        with self.assertRaises(RunnerError) as caught:
+            load_host_config(self.path)
+        self.assertEqual(caught.exception.code, "HOST_CONFIG_NOT_OBJECT")
+        self.path.write_text('{"root":"/demo"}', encoding="utf-8-sig")
+        self.assertEqual(load_host_config(self.path), {"root": "/demo"})
 
 
 class JDBCEditTests(EnvironmentTestCase):

@@ -29,9 +29,32 @@ DB_NAME = re.compile(r"ct_[a-z0-9_]{1,59}")
 
 
 class RunnerError(Exception):
-    def __init__(self, code):
+    def __init__(self, code, *, line=None, column=None):
         self.code = code
+        self.line = line
+        self.column = column
         super().__init__(code)
+
+
+def load_host_config(path):
+    """Report setup errors without exposing config contents, credentials or exception arguments."""
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig")
+    except FileNotFoundError as exc:
+        raise RunnerError("HOST_CONFIG_NOT_FOUND") from exc
+    except PermissionError as exc:
+        raise RunnerError("HOST_CONFIG_PERMISSION_DENIED") from exc
+    except UnicodeError as exc:
+        raise RunnerError("HOST_CONFIG_INVALID_UTF8") from exc
+    except OSError as exc:
+        raise RunnerError("HOST_CONFIG_READ_FAILED") from exc
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RunnerError("HOST_CONFIG_INVALID_JSON", line=exc.lineno, column=exc.colno) from exc
+    if not isinstance(value, dict):
+        raise RunnerError("HOST_CONFIG_NOT_OBJECT")
+    return value
 
 
 def stamp():
@@ -533,13 +556,16 @@ def main():
                 action, run_id = parts
             else:
                 raise RunnerError("INVALID_HOST_OPERATION")
-        config = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
+        config = load_host_config(args.config)
         runner = HostRunner(config)
         result = runner.check() if action == "check" else runner.run(run_id or "")
         print(json.dumps(result))
         return 0 if result["ok"] else 1
     except Exception as exc:
-        print(json.dumps({"ok": False, "code": exc.code if isinstance(exc, RunnerError) else "HOST_OPERATION_FAILED"}))
+        result = {"ok": False, "code": exc.code if isinstance(exc, RunnerError) else "HOST_OPERATION_FAILED"}
+        if isinstance(exc, RunnerError) and exc.line is not None:
+            result.update(line=exc.line, column=exc.column)
+        print(json.dumps(result))
         return 1
 
 

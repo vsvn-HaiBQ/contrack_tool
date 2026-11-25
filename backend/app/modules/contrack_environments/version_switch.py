@@ -135,7 +135,19 @@ class SSHHostRunner:
             code = value.get("code", "HOST_OPERATION_FAILED")
             if not isinstance(code, str) or not re.fullmatch(r"[A-Z_]{1,80}", code):
                 code = "HOST_OPERATION_FAILED"
-            raise EnvironmentError(f"Host runner failed ({code}). Check host configuration and the run history.", code, 503)
+            hints = {
+                "HOST_CONFIG_NOT_FOUND": "Create the Linux host JSON file selected by switch_version.host_config (host-switch.json). This is separate from environment.yaml.",
+                "HOST_CONFIG_PERMISSION_DENIED": "The SSH user needs read permission on host-switch.json and access to its parent directory.",
+                "HOST_CONFIG_INVALID_UTF8": "Save host-switch.json as UTF-8.",
+                "HOST_CONFIG_READ_FAILED": "Check that host-switch.json is a readable regular file on the Linux host.",
+                "HOST_CONFIG_NOT_OBJECT": "host-switch.json must contain a JSON object with named configuration fields.",
+                "HOST_CONFIG_INVALID_JSON": "Fix JSON syntax in host-switch.json; use double quotes and remove trailing commas.",
+            }
+            hint = hints.get(code, "Check host configuration and the run history.")
+            line, column = value.get("line"), value.get("column")
+            if code == "HOST_CONFIG_INVALID_JSON" and type(line) is int and type(column) is int and 1 <= line <= 1000000 and 1 <= column <= 1000000:
+                hint += f" Line {line}, column {column}."
+            raise EnvironmentError(f"Host runner failed ({code}). {hint}", code, 503)
         return value
 
 

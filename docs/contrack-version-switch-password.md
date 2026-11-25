@@ -140,6 +140,19 @@ Các lỗi thường gặp:
 | Thiếu `sshpass` | Chưa build lại bằng Dockerfile/override Switch Version |
 | `SSH_AUTHENTICATION_FAILED` | User/password bị từ chối; kiểm tra thông tin đăng nhập và chính sách SSH |
 | `HOST_CONNECTION_FAILED` | Host key, network, quyền chạy command hoặc runner không trả JSON hợp lệ |
+| `HOST_CONFIG_NOT_FOUND` | Tạo file trên host theo đường dẫn `switch_version.host_config`, thường là `Contrack-Recreate/config/host-switch.json`; khác với `environment.yaml` |
+| `HOST_CONFIG_PERMISSION_DENIED` | SSH user cần quyền đọc `host-switch.json` và truy cập thư mục cha |
+| `HOST_CONFIG_INVALID_JSON` | Sửa cú pháp JSON tại dòng/cột được báo; file này dùng JSON, không phải YAML |
 | `HOST_CONFIGURATION_INVALID` | Sửa `host-switch.json`, JDBC file, schema query và script thật |
+
+Bản runner cũ có thể gom lỗi thiếu/không đọc được JSON thành `HOST_OPERATION_FAILED`. Chạy trực tiếp trên host để kiểm tra, không cần rebuild Docker cho riêng bước chẩn đoán sau khi cập nhật file runner trên host:
+
+```bash
+cd /home/vsvndev/contrack_tool
+python3 backend/app/modules/contrack_environments/host_runner.py \
+  --config /home/vsvndev/Contrack-Recreate/config/host-switch.json check
+```
+
+Nếu thiếu file, copy mẫu bằng `cp -n deploy/contrack-environments/host-switch.example.json /home/vsvndev/Contrack-Recreate/config/host-switch.json`, rồi điền đúng container PostgreSQL, JDBC file/resource, schema query và port/health URL. Không thay `host_config` thành đường dẫn `environment.yaml`.
 
 Kiểm thử local xác nhận cách truyền password qua FD, đóng FD khi lỗi/timeout, che secret và giữ key mode cũ. Chưa kiểm thử đăng nhập SSH hoặc Docker build thật trên server Linux từ workspace Windows.

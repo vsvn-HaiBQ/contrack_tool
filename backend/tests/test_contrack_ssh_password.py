@@ -146,6 +146,20 @@ class SSHPasswordTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "HOST_CONFIGURATION_INVALID")
         self.assertNotIn(self.password, str(caught.exception))
 
+    def test_missing_host_json_is_explained_and_safe_parse_location_is_forwarded(self):
+        cases = [
+            ({"ok": False, "code": "HOST_CONFIG_NOT_FOUND"}, "separate from environment.yaml"),
+            ({"ok": False, "code": "HOST_CONFIG_INVALID_JSON", "line": 3, "column": 1}, "Line 3, column 1"),
+        ]
+        for value, expected in cases:
+            with self.subTest(code=value["code"]), \
+                 patch("subprocess.run", return_value=SimpleNamespace(returncode=1, stdout=json.dumps(value), stderr=self.password)):
+                with self.assertRaises(EnvironmentError) as caught:
+                    self.runner.call("check")
+                self.assertEqual(caught.exception.code, value["code"])
+                self.assertIn(expected, str(caught.exception))
+                self.assertNotIn(self.password, str(caught.exception))
+
     def test_yaml_password_is_masked_excluded_from_dumps_and_environment_override_works(self):
         values = {"root": str(self.root), "enabled": True, "operation_mode": "switch_version",
                   "switch_version": {"auth_method": "password", "ssh_password": self.password}}
