@@ -22,7 +22,7 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: ${CT_SWITCH_SSH_DIR:?Set the directory containing id_ed25519 and known_hosts}
+        source: ${CT_SWITCH_SSH_DIR:?Set the SSH directory containing known_hosts and the selected credential}
         target: /run/contrack-switch
         read_only: true
         bind:

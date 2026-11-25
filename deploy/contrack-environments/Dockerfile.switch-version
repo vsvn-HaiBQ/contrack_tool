@@ -2,5 +2,5 @@ ARG BASE_IMAGE=contrack-tool-backend:switch-base
 FROM ${BASE_IMAGE}
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssh-client \
+    && apt-get install -y --no-install-recommends openssh-client sshpass \
     && rm -rf /var/lib/apt/lists/*

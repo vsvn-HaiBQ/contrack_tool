@@ -136,6 +136,8 @@ Kết quả phải có `"ok": true`. Nếu báo `TOMCAT_STATUS_MISMATCH`, cổng
 
 ## 4. Cấu hình SSH key chỉ được gọi runner
 
+Mặc định dùng `auth_method: key`. Nếu muốn đăng nhập bằng user/password, làm theo [hướng dẫn password](contrack-version-switch-password.md) và bỏ qua bước tạo/đăng ký key bên dưới. Password mode vẫn cần `known_hosts` và `host-switch.json`.
+
 Backend cần SSH đến host bằng một key riêng. Các lệnh sau chạy trên host, không in private key:
 
 ```bash

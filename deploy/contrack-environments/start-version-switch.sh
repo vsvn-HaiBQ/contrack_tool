@@ -8,7 +8,9 @@ CT_ENV_CONFIG="${CT_ENV_CONFIG:-$(dirname -- "$CT_ENV_ROOT")/config/switch-versi
 CT_SWITCH_SSH_DIR="${CT_SWITCH_SSH_DIR:-$(dirname -- "$CT_ENV_ROOT")/secrets/switch-ssh}"
 export CT_ENV_ROOT CT_ENV_CONFIG CT_SWITCH_SSH_DIR
 
-for required in "$CT_ENV_CONFIG" "$CT_SWITCH_SSH_DIR/id_ed25519" "$CT_SWITCH_SSH_DIR/known_hosts"; do
+# Key mode requires id_ed25519; password mode does not. The rebuilt backend validates
+# the selected authentication method and its credential before calling the host.
+for required in "$CT_ENV_CONFIG" "$CT_SWITCH_SSH_DIR/known_hosts"; do
   test -f "$required" || { printf 'Missing required file: %s\nRead docs/contrack-version-switch.md first.\n' "$required" >&2; exit 1; }
 done
 test -d "$CT_ENV_ROOT/runtime/server/webapps"
@@ -35,6 +37,7 @@ service = VersionSwitchService(settings)
 service._check_host()
 catalog = service.catalog()
 print("VERIFIED: switch_version enabled; host runner, JDBC selector, PostgreSQL and shared root checked.")
+print("SSH authentication:", settings.switch_version.auth_method)
 print("WARs:", len(catalog["wars"]), "database baselines:", len(catalog["databases"]))
 PYTHON
 printf '\nReload with Ctrl+F5, choose ConTrack WAR and Database Profile, then Validate selection / Switch Version.\n'

@@ -5,11 +5,12 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import Field
 
@@ -35,9 +36,61 @@ class SSHHostRunner:
             return "Configure switch_version.ssh_host and ssh_user for the Linux host runner."
         if not shutil.which("ssh"):
             return "The backend image needs openssh-client; build with the switch-version Compose override."
-        if not Path(config.private_key).is_file() or not Path(config.known_hosts).is_file():
-            return "Mount the switch-version SSH private key and verified known_hosts file into the backend."
+        if not Path(config.known_hosts).is_file():
+            return "Mount the verified switch-version known_hosts file into the backend."
+        if config.auth_method == "key":
+            if not Path(config.private_key).is_file():
+                return "Mount the switch-version SSH private key into the backend."
+        else:
+            if not shutil.which("sshpass"):
+                return "Password authentication needs sshpass; rebuild with the switch-version Compose override."
+            for path in (config.runner_path, config.host_config):
+                if not PurePosixPath(path).is_absolute() or ".." in PurePosixPath(path).parts or any(ord(char) < 32 for char in path):
+                    return "Password authentication needs absolute runner_path and host_config paths on the Linux host."
+            try:
+                self._password()
+            except EnvironmentError as exc:
+                return str(exc)
         return None
+
+    def _password(self):
+        config = self.settings.switch_version
+        value = config.ssh_password.get_secret_value()
+        if not value:
+            try:
+                secret = Path(config.ssh_password_file)
+                if not secret.is_file():
+                    raise ValueError()
+                with secret.open("rb") as source:
+                    data = source.read(4097)
+                if len(data) > 4096:
+                    raise ValueError()
+                value = data.decode("utf-8").rstrip("\r\n")
+            except (OSError, ValueError, UnicodeError) as exc:
+                raise EnvironmentError("Set ssh_password or mount a readable UTF-8 ssh_password_file.", "SWITCH_CONFIGURATION", 503) from exc
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeError as exc:
+            raise EnvironmentError("SSH password must be valid UTF-8.", "SWITCH_CONFIGURATION", 503) from exc
+        if not value or any(char in value for char in ("\r", "\n", "\0")) or len(encoded) > 2048:
+            raise EnvironmentError("SSH password must be one nonempty line, at most 2048 UTF-8 bytes.", "SWITCH_CONFIGURATION", 503)
+        return value
+
+    @staticmethod
+    def _run_password(command, password, timeout):
+        # Feed the password via an anonymous pipe: it never appears in argv, environment or a temp file.
+        incoming, outgoing = os.pipe()
+        try:
+            try:
+                os.write(outgoing, (password + "\n").encode("utf-8"))
+            finally:
+                os.close(outgoing)
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in ("CONTRACK_ENV_SSH_PASSWORD", "SSHPASS")}
+            return subprocess.run(["sshpass", "-d", str(incoming), *command], pass_fds=(incoming,),
+                                  capture_output=True, text=True, timeout=timeout, check=False, env=environment)
+        finally:
+            os.close(incoming)
 
     def call(self, action, run_id=None):
         error = self.configuration_error()
@@ -46,14 +99,26 @@ class SSHHostRunner:
         if action not in ("check", "run") or (action == "run" and not re.fullmatch(r"\d{8}T\d{6}-[a-f0-9]{12}", run_id or "")):
             raise EnvironmentError("Invalid host operation", "INVALID_HOST_OPERATION")
         config = self.settings.switch_version
-        command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+        command = ["ssh", "-T", "-o", "StrictHostKeyChecking=yes",
                    "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3",
-                   "-p", str(config.ssh_port), "-i", config.private_key,
-                   "-o", f"UserKnownHostsFile={config.known_hosts}",
-                   f"{config.ssh_user}@{config.ssh_host}", action if run_id is None else f"run {run_id}"]
+                   "-p", str(config.ssh_port), "-o", f"UserKnownHostsFile={config.known_hosts}"]
+        operation = [action] if run_id is None else [action, run_id]
+        if config.auth_method == "key":
+            command += ["-o", "BatchMode=yes", "-i", config.private_key]
+            remote = " ".join(operation)  # Existing key mode uses the restricted authorized_keys forced command.
+        else:
+            command += ["-o", "BatchMode=no", "-o", "PreferredAuthentications=password",
+                        "-o", "PubkeyAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
+                        "-o", "NumberOfPasswordPrompts=1"]
+            # Password login has no per-key forced command; invoke the fixed configured helper explicitly.
+            remote = shlex.join(["python3", config.runner_path, "--config", config.host_config, *operation])
+        command += [f"{config.ssh_user}@{config.ssh_host}", remote]
+        timeout = 45 if action == "check" else config.timeout
         try:
-            result = subprocess.run(command, capture_output=True, text=True,
-                                    timeout=45 if action == "check" else config.timeout, check=False)
+            if config.auth_method == "password":
+                result = self._run_password(command, self._password(), timeout)
+            else:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise EnvironmentError("Host runner connection failed or timed out. Inspect the run history before retrying.", "HOST_CONNECTION_FAILED", 503) from exc
         try:
@@ -61,7 +126,10 @@ class SSHHostRunner:
             if not isinstance(value, dict):
                 raise ValueError("Expected an object")
         except (ValueError, TypeError) as exc:
-            raise EnvironmentError("Host runner did not return a valid result. Check SSH, the forced command and host configuration.", "HOST_CONNECTION_FAILED", 503) from exc
+            if config.auth_method == "password" and result.returncode == 5:
+                raise EnvironmentError("SSH username/password was rejected by the Linux host.", "SSH_AUTHENTICATION_FAILED", 503) from exc
+            target = "runner_path and host_config" if config.auth_method == "password" else "the forced command and host configuration"
+            raise EnvironmentError(f"Host runner did not return a valid result. Check SSH, {target}.", "HOST_CONNECTION_FAILED", 503) from exc
         if result.returncode or not value.get("ok"):
             # Only fixed runner error codes cross the trust boundary; never forward stderr or raw commands.
             code = value.get("code", "HOST_OPERATION_FAILED")

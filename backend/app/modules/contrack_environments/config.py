@@ -31,6 +31,11 @@ class HostSwitchSettings(BaseModel):
     ssh_host: str = ""
     ssh_user: str = ""
     ssh_port: int = Field(default=22, ge=1, le=65535)
+    auth_method: Literal["key", "password"] = "key"
+    ssh_password: SecretStr = Field(default=SecretStr(""), exclude=True)
+    ssh_password_file: str = "/run/contrack-switch/ssh_password"
+    runner_path: str = ""
+    host_config: str = ""
     private_key: str = "/run/contrack-switch/id_ed25519"
     known_hosts: str = "/run/contrack-switch/known_hosts"
     timeout: int = Field(default=7200, ge=60, le=14400)
@@ -98,6 +103,10 @@ def load_settings() -> EnvironmentSettings:
             values["root"] = os.environ["CONTRACK_ENV_ROOT"]
         if os.environ.get("CONTRACK_ENV_PG_PASSWORD"):
             values["pg_password"] = os.environ["CONTRACK_ENV_PG_PASSWORD"]
+        if os.environ.get("CONTRACK_ENV_SSH_PASSWORD"):
+            switch = dict(values.get("switch_version") or {})
+            switch["ssh_password"] = os.environ["CONTRACK_ENV_SSH_PASSWORD"]
+            values["switch_version"] = switch
         return EnvironmentSettings.model_validate(values)
     except Exception as exc:
         # Validation errors can contain original configuration values/secrets.
