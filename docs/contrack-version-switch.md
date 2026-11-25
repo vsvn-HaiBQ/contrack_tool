@@ -209,6 +209,7 @@ Không chạy lại `start-war-deploy.sh` hoặc `docker compose up` chỉ với
 
 1. Truy cập `http://IP_SERVER:8888`, Ctrl+F5, mở **ConTrack Environments**.
 2. Phải thấy **Switch version and database**.
+   Trước lần chuyển thành công đầu tiên, Current environment hiển thị **NO RECORDED SWITCH**. Copy baseline/build Docker chưa tạo môi trường và không chứng minh Tomcat đang dừng. Nếu vẫn thấy **NOT PREPARED**, kiểm tra form bên dưới: **Prepare environment** là mode cũ hoặc frontend chưa cập nhật; phải kiểm tra `enabled`, `operation_mode` và root bên trong backend đang chạy, rồi dùng đúng launcher và Ctrl+F5. Không tự tạo `runtime/current/version.yaml` để bỏ qua trạng thái ban đầu.
 3. Chọn WAR 5.2.0. Danh sách **Database Profile** chỉ hiển thị baseline có schema tương ứng.
 4. Chọn `standard — DB-520-STANDARD-V1`, nhấn **Validate selection**. Bước này không tạo DB.
 5. Nhấn **Switch Version** một lần. Theo dõi Run history / View run.

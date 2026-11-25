@@ -37,7 +37,7 @@ const selectWar = computed(() => warOnly.value || switchMode.value);
 const selectedWar = computed(() => catalog.value?.wars?.find(item => item.id === warId.value));
 const currentStatus = computed(() => current.value?.status ?? (!catalog.value
   ? (loading.value ? "LOADING" : "CONFIGURATION UNAVAILABLE")
-  : (warOnly.value ? "NO RECORDED DEPLOYMENT" : "NOT PREPARED")));
+  : (switchMode.value ? "NO RECORDED SWITCH" : warOnly.value ? "NO RECORDED DEPLOYMENT" : "NOT PREPARED")));
 const databases = computed(() => catalog.value?.databases.filter(item => item.schema === (switchMode.value ? selectedWar.value?.schema : bundle.value?.databaseSchema)) ?? []);
 const locked = computed(() => submitting.value || validating.value || busy.value);
 const valid = computed(() => !catalogError.value && !catalog.value?.configuration_error && (switchMode.value
@@ -217,6 +217,7 @@ onBeforeUnmount(() => { disposed = true; ++detailRequest; if (timer) clearTimeou
         </template>
       </dl>
       <p v-else-if="!catalog" class="text-sm text-neutral-500">{{ loading ? 'Loading deployment configuration…' : 'Deployment configuration could not be loaded. Check the catalog error above.' }}</p>
+      <p v-else-if="switchMode" class="text-sm text-neutral-500">No version switch has been recorded by this tool yet. Adding baseline files or rebuilding Docker does not switch the application. Select a ConTrack WAR and Database Profile below, then use Validate selection and Switch Version. Your existing Tomcat may already be running.</p>
       <p v-else class="text-sm text-neutral-500">{{ warOnly ? 'No WAR deployment has been recorded by this tool yet. Your existing Tomcat may already be running. Select a catalog WAR below and use Deploy WAR to record a deployment.' : 'No environment has been prepared yet.' }}</p>
     </section>
 
